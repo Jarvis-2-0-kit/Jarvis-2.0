@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer, type Server } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, unlinkSync, appendFileSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname, cpus, totalmem, freemem, loadavg, networkInterfaces, uptime as osUptime } from 'node:os';
@@ -420,6 +420,10 @@ export class GatewayServer {
       msg.id = msg.id || shortId();
       msg.timestamp = Date.now();
 
+      // Persist message to NAS
+      const sessionId = (msg as Record<string, unknown>).sessionId as string || 'default';
+      this.persistChatMessage(sessionId, msg);
+
       // Route to the appropriate agent via NATS
       if (msg.to === 'all') {
         await this.nats.publish(NatsSubjects.chat('agent-alpha'), msg);
@@ -431,6 +435,28 @@ export class GatewayServer {
       // Broadcast to dashboard for display
       this.protocol.broadcast('chat.message', msg);
       return { messageId: msg.id };
+    });
+
+    this.protocol.registerMethod('chat.history', async (params) => {
+      const { sessionId = 'default', limit = 200 } = params as { sessionId?: string; limit?: number };
+      return { messages: this.getChatHistory(sessionId, limit) };
+    });
+
+    this.protocol.registerMethod('chat.sessions', async () => {
+      return { sessions: this.getChatSessions() };
+    });
+
+    this.protocol.registerMethod('chat.session.delete', async (params) => {
+      const { sessionId } = params as { sessionId: string };
+      return this.deleteChatSession(sessionId);
+    });
+
+    this.protocol.registerMethod('chat.abort', async (params) => {
+      const { sessionId } = params as { sessionId: string };
+      // Broadcast abort to agents
+      await this.nats.publish(NatsSubjects.chat('agent-alpha'), { type: 'abort', sessionId });
+      await this.nats.publish(NatsSubjects.chat('agent-beta'), { type: 'abort', sessionId });
+      return { success: true };
     });
 
     this.protocol.registerMethod('vnc.info', async () => {
@@ -467,13 +493,105 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('metrics.usage', async () => {
-      // Placeholder for metrics
-      return { agents: await this.store.getAllAgentStates() };
+      const agents = await this.store.getAllAgentStates();
+      const sessionsDir = this.nas.resolve('sessions');
+      let totalSessions = 0;
+      let totalMessages = 0;
+
+      // Count sessions and messages from NAS
+      try {
+        if (existsSync(sessionsDir)) {
+          const agentDirs = readdirSync(sessionsDir);
+          for (const dir of agentDirs) {
+            const agentPath = join(sessionsDir, dir);
+            if (statSync(agentPath).isDirectory()) {
+              const files = readdirSync(agentPath).filter((f) => f.endsWith('.jsonl'));
+              totalSessions += files.length;
+              for (const f of files) {
+                try {
+                  const content = readFileSync(join(agentPath, f), 'utf-8');
+                  totalMessages += content.split('\n').filter(Boolean).length;
+                } catch { /* skip corrupt files */ }
+              }
+            }
+          }
+        }
+      } catch { /* non-critical */ }
+
+      // Count chat messages
+      let chatMessages = 0;
+      try {
+        const chatDir = this.nas.resolve('chat');
+        if (existsSync(chatDir)) {
+          const files = readdirSync(chatDir).filter((f) => f.endsWith('.jsonl'));
+          for (const f of files) {
+            try {
+              const content = readFileSync(join(chatDir, f), 'utf-8');
+              chatMessages += content.split('\n').filter(Boolean).length;
+            } catch { /* skip */ }
+          }
+        }
+      } catch { /* non-critical */ }
+
+      return {
+        agents,
+        totalSessions,
+        totalMessages,
+        chatMessages,
+        uptime: process.uptime(),
+        memoryUsage: process.memoryUsage(),
+      };
     });
 
     this.protocol.registerMethod('metrics.costs', async () => {
-      // Placeholder for cost tracking
-      return { totalCost: 0, byAgent: {} };
+      // Aggregate costs from session files (if they contain token/cost info)
+      const sessionsDir = this.nas.resolve('sessions');
+      let totalTokens = 0;
+      let totalCost = 0;
+      const byAgent: Record<string, { tokens: number; cost: number; sessions: number }> = {};
+
+      try {
+        if (existsSync(sessionsDir)) {
+          const agentDirs = readdirSync(sessionsDir);
+          for (const dir of agentDirs) {
+            const agentPath = join(sessionsDir, dir);
+            if (statSync(agentPath).isDirectory()) {
+              const files = readdirSync(agentPath).filter((f) => f.endsWith('.jsonl'));
+              if (!byAgent[dir]) byAgent[dir] = { tokens: 0, cost: 0, sessions: files.length };
+              else byAgent[dir].sessions = files.length;
+
+              for (const f of files) {
+                try {
+                  const content = readFileSync(join(agentPath, f), 'utf-8');
+                  const lines = content.split('\n').filter(Boolean);
+                  for (const line of lines) {
+                    try {
+                      const entry = JSON.parse(line);
+                      if (entry.usage?.totalTokens) {
+                        const tokens = entry.usage.totalTokens as number;
+                        totalTokens += tokens;
+                        byAgent[dir].tokens += tokens;
+                        // Estimate cost: ~$3/M input + $15/M output for Claude Sonnet
+                        const estimatedCost = tokens * 0.000009;
+                        totalCost += estimatedCost;
+                        byAgent[dir].cost += estimatedCost;
+                      }
+                    } catch { /* skip */ }
+                  }
+                } catch { /* skip */ }
+              }
+            }
+          }
+        }
+      } catch { /* non-critical */ }
+
+      return {
+        totalCost: Math.round(totalCost * 100) / 100,
+        totalTokens,
+        byAgent,
+        currency: 'USD',
+        note: 'Estimated based on token counts',
+      };
     });
 
     // --- Sessions ---
@@ -972,6 +1090,11 @@ export class GatewayServer {
 
     // Chat messages from agents (chatBroadcast subject) — OUTSIDE loop to avoid duplicate subscriptions
     this.nats.subscribe(NatsSubjects.chatBroadcast, (data) => {
+      // Persist agent responses to NAS
+      const msg = data as ChatMessage & { sessionId?: string };
+      if (msg.from && msg.content) {
+        this.persistChatMessage(msg.sessionId ?? 'default', msg);
+      }
       this.protocol.broadcast('chat.message', data);
     });
 
@@ -980,11 +1103,14 @@ export class GatewayServer {
       const event = data as { event?: string; payload?: unknown; source?: string };
       if (event.event === 'chat.response' && event.payload) {
         // Forward chat responses from legacy broadcastDashboard path
-        this.protocol.broadcast('chat.message', {
+        const chatResp = {
+          id: shortId(),
           from: event.source,
           content: (event.payload as { content?: string }).content,
           timestamp: Date.now(),
-        });
+        };
+        this.persistChatMessage('default', chatResp as ChatMessage);
+        this.protocol.broadcast('chat.message', chatResp);
       } else {
         // Forward other dashboard events
         this.protocol.broadcast(event.event ?? 'agent.activity', event);
@@ -3161,6 +3287,106 @@ export class GatewayServer {
       return { success: true };
     } catch (err) {
       log.error('Failed to save providers config', { error: String(err) });
+      return { success: false };
+    }
+  }
+
+  // --- Chat Persistence ---
+
+  private persistChatMessage(sessionId: string, msg: ChatMessage): void {
+    try {
+      const chatDir = this.nas.resolve('chat');
+      if (!existsSync(chatDir)) mkdirSync(chatDir, { recursive: true });
+
+      const sessionFile = join(chatDir, `${sessionId}.jsonl`);
+      const line = JSON.stringify({
+        ...msg,
+        sessionId,
+      }) + '\n';
+      appendFileSync(sessionFile, line, 'utf-8');
+    } catch {
+      // Non-critical: log but don't fail
+    }
+  }
+
+  private getChatHistory(sessionId: string, limit: number): ChatMessage[] {
+    try {
+      const sessionFile = this.nas.resolve(`chat/${sessionId}.jsonl`);
+      if (!existsSync(sessionFile)) return [];
+
+      const content = readFileSync(sessionFile, 'utf-8');
+      const lines = content.trim().split('\n').filter(Boolean);
+      const messages = lines
+        .map((line) => { try { return JSON.parse(line); } catch { return null; } })
+        .filter(Boolean) as ChatMessage[];
+
+      // Return last N messages
+      return messages.slice(-limit);
+    } catch {
+      return [];
+    }
+  }
+
+  private getChatSessions(): Array<Record<string, unknown>> {
+    try {
+      const chatDir = this.nas.resolve('chat');
+      if (!existsSync(chatDir)) return [];
+
+      const files = readdirSync(chatDir).filter((f) => f.endsWith('.jsonl'));
+      const sessions: Array<Record<string, unknown>> = [];
+
+      for (const file of files) {
+        try {
+          const filePath = join(chatDir, file);
+          const stat = statSync(filePath);
+          const content = readFileSync(filePath, 'utf-8');
+          const lines = content.trim().split('\n').filter(Boolean);
+          const lastMsg = lines.length > 0
+            ? ((): ChatMessage | null => { try { return JSON.parse(lines[lines.length - 1]); } catch { return null; } })()
+            : null;
+          const firstMsg = lines.length > 0
+            ? ((): ChatMessage | null => { try { return JSON.parse(lines[0]); } catch { return null; } })()
+            : null;
+
+          const sessionId = file.replace('.jsonl', '');
+
+          // Generate title from first user message
+          const firstUserLine = lines.find((l) => {
+            try { const m = JSON.parse(l); return m.from === 'user'; } catch { return false; }
+          });
+          let title = sessionId;
+          if (firstUserLine) {
+            try {
+              const m = JSON.parse(firstUserLine);
+              title = (m.content as string)?.substring(0, 50) || sessionId;
+            } catch { /* keep default */ }
+          }
+
+          sessions.push({
+            id: sessionId,
+            title,
+            createdAt: firstMsg?.timestamp ?? stat.birthtimeMs,
+            updatedAt: lastMsg?.timestamp ?? stat.mtimeMs,
+            messageCount: lines.length,
+            preview: lastMsg?.content?.substring(0, 80) ?? '',
+          });
+        } catch { /* skip corrupt files */ }
+      }
+
+      // Sort newest first
+      sessions.sort((a, b) => (b.updatedAt as number) - (a.updatedAt as number));
+      return sessions;
+    } catch {
+      return [];
+    }
+  }
+
+  private deleteChatSession(sessionId: string): { success: boolean } {
+    try {
+      const sessionFile = this.nas.resolve(`chat/${sessionId}.jsonl`);
+      if (existsSync(sessionFile)) unlinkSync(sessionFile);
+      return { success: true };
+    } catch {
       return { success: false };
     }
   }

@@ -27,10 +27,12 @@ import {
   Cpu,
   Brain,
   ShieldCheck,
+  Server,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
+  { to: '/chat', icon: MessageCircle, label: 'Chat' },
   { to: '/overview', icon: Activity, label: 'Overview' },
   { to: '/voice', icon: AudioWaveform, label: 'Voice' },
   { to: '/agents', icon: Bot, label: 'Agents' },
@@ -54,6 +56,7 @@ const NAV_ITEMS = [
   { to: '/providers', icon: Cpu, label: 'Models' },
   { to: '/plugins', icon: Package, label: 'Plugins' },
   { to: '/files', icon: HardDrive, label: 'Files' },
+  { to: '/instances', icon: Server, label: 'Instances' },
   { to: '/environment', icon: Variable, label: 'Env Vars' },
   { to: '/config', icon: Settings, label: 'Config' },
   { to: '/debug', icon: Bug, label: 'Debug' },

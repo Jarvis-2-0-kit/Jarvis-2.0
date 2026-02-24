@@ -31,6 +31,8 @@ import { SkillsView } from './views/SkillsView.js';
 import { ProvidersView } from './views/ProvidersView.js';
 import { MemoryView } from './views/MemoryView.js';
 import { ApprovalsView } from './views/ApprovalsView.js';
+import { ChatView } from './views/ChatView.js';
+import { InstancesView } from './views/InstancesView.js';
 import { CommandPalette } from './components/command-palette/CommandPalette.js';
 
 export function App() {
@@ -53,6 +55,7 @@ export function App() {
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <Routes>
               <Route path="/" element={<DashboardLayout />} />
+              <Route path="/chat" element={<ChatView />} />
               <Route path="/overview" element={<OverviewView />} />
               <Route path="/agents" element={<AgentsView />} />
               <Route path="/sessions" element={<SessionsView />} />
@@ -77,6 +80,7 @@ export function App() {
               <Route path="/providers" element={<ProvidersView />} />
               <Route path="/memory" element={<MemoryView />} />
               <Route path="/approvals" element={<ApprovalsView />} />
+              <Route path="/instances" element={<InstancesView />} />
               <Route path="/config" element={<ConfigView />} />
               <Route path="/debug" element={<DebugView />} />
             </Routes>

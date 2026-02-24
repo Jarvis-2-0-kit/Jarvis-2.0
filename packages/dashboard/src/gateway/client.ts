@@ -106,6 +106,11 @@ export class GatewayClient {
     };
   }
 
+  /** Unsubscribe from an event */
+  off(event: string, handler: EventHandler): void {
+    this.eventHandlers.get(event)?.delete(handler);
+  }
+
   private handleFrame(frame: Frame): void {
     if (frame.type === 'res') {
       const pending = this.pending.get(frame.id);
