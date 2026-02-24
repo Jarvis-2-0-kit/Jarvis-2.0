@@ -46,6 +46,8 @@ const NAV_ITEMS = [
   { to: '/whatsapp', icon: MessageCircle, label: 'WhatsApp' },
   { to: '/telegram', icon: Send, label: 'Telegram' },
   { to: '/discord', icon: Hash, label: 'Discord' },
+  { to: '/slack', icon: Hash, label: 'Slack' },
+  { to: '/imessage', icon: MessageCircle, label: 'iMessage' },
   { to: '/integrations', icon: Puzzle, label: 'Integrate' },
   { to: '/notifications', icon: Bell, label: 'Notify' },
   { to: '/api-keys', icon: Key, label: 'Keys' },

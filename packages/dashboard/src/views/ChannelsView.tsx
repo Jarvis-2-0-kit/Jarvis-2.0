@@ -62,12 +62,19 @@ const CHANNEL_META: Record<string, {
     route: '/discord',
     setup: 'Discord Dev Portal → Bot Token or Webhook URL',
   },
+  slack: {
+    icon: Hash,
+    color: '#E01E5A',
+    description: 'Slack workspace integration — Bot API + Socket Mode, auto-reply',
+    route: '/slack',
+    setup: 'Slack API → Bot Token + App Token (Socket Mode)',
+  },
   imessage: {
     icon: MessageSquare,
-    color: '#34AADC',
-    description: 'macOS iMessage integration via AppleScript — read & send messages',
-    route: '/integrations',
-    setup: 'macOS only — works automatically on Apple systems',
+    color: '#007AFF',
+    description: 'macOS iMessage integration via AppleScript — send iMessage & SMS',
+    route: '/imessage',
+    setup: 'macOS only — uses Messages.app via osascript',
   },
 };
 

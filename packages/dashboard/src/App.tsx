@@ -34,6 +34,8 @@ import { ApprovalsView } from './views/ApprovalsView.js';
 import { ChatView } from './views/ChatView.js';
 import { InstancesView } from './views/InstancesView.js';
 import { OrchestratorView } from './views/OrchestratorView.js';
+import { SlackView } from './views/SlackView.js';
+import { IMessageView } from './views/IMessageView.js';
 import { CommandPalette } from './components/command-palette/CommandPalette.js';
 
 export function App() {
@@ -77,6 +79,8 @@ export function App() {
               <Route path="/whatsapp" element={<WhatsAppView />} />
               <Route path="/telegram" element={<TelegramView />} />
               <Route path="/discord" element={<DiscordView />} />
+              <Route path="/slack" element={<SlackView />} />
+              <Route path="/imessage" element={<IMessageView />} />
               <Route path="/skills" element={<SkillsView />} />
               <Route path="/providers" element={<ProvidersView />} />
               <Route path="/memory" element={<MemoryView />} />

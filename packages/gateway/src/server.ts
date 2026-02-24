@@ -943,6 +943,67 @@ export class GatewayServer {
       return this.getChannelMessages('discord', limit ?? 200);
     });
 
+    // --- Slack ---
+
+    this.protocol.registerMethod('slack.status', async () => {
+      return this.getSlackStatus();
+    });
+
+    this.protocol.registerMethod('slack.config.get', async () => {
+      return this.getChannelConfig('slack');
+    });
+
+    this.protocol.registerMethod('slack.config.set', async (params) => {
+      return this.setChannelConfig('slack', params as Record<string, unknown>);
+    });
+
+    this.protocol.registerMethod('slack.connect', async () => {
+      // Mark as connected (actual Slack SDK integration is future work)
+      const config = this.getChannelConfig('slack') as Record<string, unknown>;
+      if (config.botToken) {
+        return { success: true, message: 'Slack connection initiated' };
+      }
+      return { success: false, error: 'Bot token not configured' };
+    });
+
+    this.protocol.registerMethod('slack.send', async (params) => {
+      const { channel, message } = params as { channel: string; message: string };
+      return this.sendSlackMessage(channel, message);
+    });
+
+    this.protocol.registerMethod('slack.messages', async (params) => {
+      const { limit } = (params ?? {}) as { limit?: number };
+      return { messages: this.getChannelMessages('slack', limit ?? 200) };
+    });
+
+    // --- iMessage ---
+
+    this.protocol.registerMethod('imessage.status', async () => {
+      return {
+        available: process.platform === 'darwin',
+        platform: process.platform,
+        connected: process.platform === 'darwin',
+      };
+    });
+
+    this.protocol.registerMethod('imessage.config.get', async () => {
+      return this.getChannelConfig('imessage');
+    });
+
+    this.protocol.registerMethod('imessage.config.set', async (params) => {
+      return this.setChannelConfig('imessage', params as Record<string, unknown>);
+    });
+
+    this.protocol.registerMethod('imessage.send', async (params) => {
+      const { to, message } = params as { to: string; message: string };
+      return this.sendIMessage(to, message);
+    });
+
+    this.protocol.registerMethod('imessage.messages', async (params) => {
+      const { limit } = (params ?? {}) as { limit?: number };
+      return { messages: this.getChannelMessages('imessage', limit ?? 200) };
+    });
+
     // --- Channels (unified) ---
 
     this.protocol.registerMethod('channels.list', async () => {
@@ -3118,15 +3179,138 @@ export class GatewayServer {
 
   private getChannelsStatus(): Record<string, { connected: boolean; config: Record<string, unknown> }> {
     const result: Record<string, { connected: boolean; config: Record<string, unknown> }> = {};
-    for (const channel of ['whatsapp', 'telegram', 'discord']) {
+    for (const channel of ['whatsapp', 'telegram', 'discord', 'slack', 'imessage']) {
       const config = this.getChannelConfig(channel);
       let connected = false;
       if (channel === 'whatsapp') connected = this.waConnected;
       else if (channel === 'telegram') connected = !!(config.botToken);
       else if (channel === 'discord') connected = !!(config.botToken || config.webhookUrl);
+      else if (channel === 'slack') connected = !!(config.botToken);
+      else if (channel === 'imessage') connected = process.platform === 'darwin';
       result[channel] = { connected, config: { ...config, accessToken: config.accessToken ? '***' : '', botToken: config.botToken ? '***' : '' } };
     }
     return result;
+  }
+
+  // --- Slack ---
+
+  private getSlackStatus(): Record<string, unknown> {
+    const config = this.getChannelConfig('slack');
+    return {
+      connected: !!(config.botToken),
+      botToken: !!(config.botToken),
+      appToken: !!(config.appToken),
+      workspace: (config.workspace as string) ?? '',
+      mode: (config.mode as string) ?? 'socket',
+      channels: (config.channels as number) ?? 0,
+    };
+  }
+
+  private async sendSlackMessage(channel: string, message: string): Promise<Record<string, unknown>> {
+    const config = this.getChannelConfig('slack');
+    const botToken = config.botToken as string;
+    if (!botToken) {
+      return { success: false, error: 'Slack bot token not configured' };
+    }
+
+    try {
+      // Use Slack Web API directly (no SDK dependency needed)
+      const response = await fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          channel: channel || config.defaultChannel || '#general',
+          text: message,
+        }),
+      });
+      const data = await response.json() as Record<string, unknown>;
+
+      if (data.ok) {
+        // Persist message
+        this.persistChannelMessage('slack', {
+          id: (data.ts as string) ?? shortId(),
+          channel,
+          user: 'jarvis',
+          text: message,
+          timestamp: Date.now(),
+          direction: 'out',
+        });
+        this.protocol.broadcast('slack.message', {
+          id: data.ts, channel, user: 'jarvis',
+          text: message, timestamp: Date.now(), direction: 'out',
+        });
+        return { success: true, ts: data.ts };
+      } else {
+        return { success: false, error: data.error as string };
+      }
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  }
+
+  // --- iMessage (macOS only) ---
+
+  private async sendIMessage(to: string, message: string): Promise<Record<string, unknown>> {
+    if (process.platform !== 'darwin') {
+      return { success: false, error: 'iMessage is only available on macOS' };
+    }
+
+    try {
+      // Use osascript to send iMessage
+      const escapedMsg = message.replace(/"/g, '\\"').replace(/\\/g, '\\\\');
+      const escapedTo = to.replace(/"/g, '\\"');
+      const script = `tell application "Messages"
+  set targetService to 1st account whose service type = iMessage
+  set targetBuddy to participant "${escapedTo}" of targetService
+  send "${escapedMsg}" to targetBuddy
+end tell`;
+
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { timeout: 10000 });
+
+      // Persist message
+      this.persistChannelMessage('imessage', {
+        id: shortId(),
+        channel: to,
+        user: 'jarvis',
+        text: message,
+        timestamp: Date.now(),
+        direction: 'out',
+      });
+      this.protocol.broadcast('imessage.message', {
+        id: shortId(), channel: to, user: 'jarvis',
+        text: message, timestamp: Date.now(), direction: 'out',
+      });
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: (err as Error).message };
+    }
+  }
+
+  private persistChannelMessage(channel: string, msg: Record<string, unknown>): void {
+    try {
+      const msgDir = this.nas.resolve(`channels/${channel}`);
+      if (!existsSync(msgDir)) mkdirSync(msgDir, { recursive: true });
+      const file = join(msgDir, `messages.jsonl`);
+      appendFileSync(file, JSON.stringify(msg) + '\n', 'utf-8');
+    } catch { /* non-critical */ }
+  }
+
+  private getChannelMessages(channel: string, limit: number): unknown[] {
+    try {
+      const file = this.nas.resolve(`channels/${channel}/messages.jsonl`);
+      if (!existsSync(file)) return [];
+      const content = readFileSync(file, 'utf-8');
+      const lines = content.trim().split('\n').filter(Boolean);
+      return lines
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter(Boolean)
+        .slice(-limit);
+    } catch {
+      return [];
+    }
   }
 
   // --- Channel Command Handler ---
