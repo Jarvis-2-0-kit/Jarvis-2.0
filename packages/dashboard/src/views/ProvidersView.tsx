@@ -170,17 +170,44 @@ export function ProvidersView() {
   const loadConfig = useCallback(async () => {
     try {
       const result = await gateway.request('providers.config.get', {}) as {
-        providers: ModelProvider[];
-        chains: FailoverChain[];
+        providers?: Array<Record<string, unknown>>;
+        chains?: FailoverChain[];
+        activeModel?: string;
       };
-      if (result?.providers?.length) setProviders(result.providers);
+
+      // Merge gateway state with local catalog — gateway tracks enabled/apiKey,
+      // catalog provides model definitions (static data)
+      if (result?.providers?.length) {
+        setProviders(prev => prev.map(local => {
+          const remote = result.providers!.find((r: Record<string, unknown>) => r.id === local.id);
+          if (!remote) return local;
+          return {
+            ...local,
+            enabled: (remote.enabled as boolean) ?? local.enabled,
+            apiKey: (remote.apiKey as string) ?? local.apiKey,
+            priority: (remote.priority as number) ?? local.priority,
+            baseUrl: (remote.baseUrl as string) ?? local.baseUrl,
+            // Keep local models catalog (gateway doesn't store model defs)
+            models: (remote as any).models?.length ? (remote as any).models : local.models,
+          };
+        }));
+      }
       if (result?.chains?.length) setChains(result.chains);
     } catch { /* Use defaults */ }
   }, []);
 
   const saveConfig = async () => {
     try {
-      await gateway.request('providers.config.set', { providers, chains });
+      await gateway.request('providers.config.set', {
+        providers: providers.map(p => ({
+          id: p.id, name: p.name, type: p.type,
+          baseUrl: p.baseUrl, apiKey: p.apiKey,
+          enabled: p.enabled, priority: p.priority,
+          models: p.models,
+        })),
+        chains,
+        activeModel: chains.find(c => c.active)?.models[0] ?? 'claude-sonnet-4-20250514',
+      });
     } catch { /* */ }
   };
 
