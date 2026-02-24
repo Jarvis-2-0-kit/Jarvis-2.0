@@ -880,6 +880,34 @@ export class GatewayServer {
       return this.deleteKnowledgeEntry(id);
     });
 
+    // --- Exec Approvals (Human-in-the-loop) ---
+
+    this.protocol.registerMethod('approvals.list', async () => {
+      return { approvals: this.pendingApprovals };
+    });
+
+    this.protocol.registerMethod('approvals.history', async () => {
+      return { history: this.approvalHistory.slice(-100) };
+    });
+
+    this.protocol.registerMethod('approvals.approve', async (params) => {
+      const { approvalId } = params as { approvalId: string };
+      return this.resolveApproval(approvalId, true);
+    });
+
+    this.protocol.registerMethod('approvals.deny', async (params) => {
+      const { approvalId, reason } = params as { approvalId: string; reason?: string };
+      return this.resolveApproval(approvalId, false, reason);
+    });
+
+    this.protocol.registerMethod('approvals.config.get', async () => {
+      return this.getApprovalConfig();
+    });
+
+    this.protocol.registerMethod('approvals.config.set', async (params) => {
+      return this.setApprovalConfig(params as Record<string, unknown>);
+    });
+
   }
 
   // --- NATS Subscriptions ---
@@ -3352,6 +3380,134 @@ export class GatewayServer {
     try {
       if (existsSync(filePath)) { unlinkSync(filePath); return { success: true }; }
       return { success: false };
+    } catch { return { success: false }; }
+  }
+
+  // --- Exec Approvals (Human-in-the-loop) ---
+
+  private pendingApprovals: Array<{
+    id: string;
+    agentId: string;
+    tool: string;
+    params: Record<string, unknown>;
+    reason: string;
+    riskLevel: 'low' | 'medium' | 'high' | 'critical';
+    createdAt: number;
+    expiresAt: number;
+  }> = [];
+
+  private approvalHistory: Array<{
+    id: string;
+    agentId: string;
+    tool: string;
+    reason: string;
+    riskLevel: string;
+    decision: 'approved' | 'denied';
+    decidedAt: number;
+    denyReason?: string;
+  }> = [];
+
+  private approvalResolvers = new Map<string, (approved: boolean, reason?: string) => void>();
+
+  /** Called by agents when they need approval for a risky tool execution */
+  requestApproval(agentId: string, tool: string, params: Record<string, unknown>, reason: string, riskLevel: 'low' | 'medium' | 'high' | 'critical' = 'medium'): Promise<{ approved: boolean; reason?: string }> {
+    const id = `approval-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const approval = {
+      id,
+      agentId,
+      tool,
+      params,
+      reason,
+      riskLevel,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 300_000, // 5 minute timeout
+    };
+
+    this.pendingApprovals.push(approval);
+    this.protocol.broadcast('approval.requested', approval);
+    log.info(`Approval requested: ${id} — ${agentId} wants to run ${tool}`);
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        // Auto-deny on timeout
+        this.resolveApproval(id, false, 'Timed out — no human response within 5 minutes');
+      }, 300_000);
+
+      this.approvalResolvers.set(id, (approved, denyReason) => {
+        clearTimeout(timer);
+        resolve({ approved, reason: denyReason });
+      });
+    });
+  }
+
+  private resolveApproval(approvalId: string, approved: boolean, reason?: string): { success: boolean } {
+    const idx = this.pendingApprovals.findIndex(a => a.id === approvalId);
+    if (idx === -1) return { success: false };
+
+    const approval = this.pendingApprovals[idx];
+    this.pendingApprovals.splice(idx, 1);
+
+    // Save to history
+    this.approvalHistory.push({
+      id: approval.id,
+      agentId: approval.agentId,
+      tool: approval.tool,
+      reason: approval.reason,
+      riskLevel: approval.riskLevel,
+      decision: approved ? 'approved' : 'denied',
+      decidedAt: Date.now(),
+      denyReason: reason,
+    });
+
+    // Persist history to NAS
+    try {
+      const historyPath = this.nas.resolve('config', 'approval-history.json');
+      writeFileSync(historyPath, JSON.stringify(this.approvalHistory.slice(-500), null, 2));
+    } catch { /* ignore */ }
+
+    // Broadcast result
+    this.protocol.broadcast('approval.resolved', {
+      approvalId: approval.id,
+      agentId: approval.agentId,
+      tool: approval.tool,
+      approved,
+      reason,
+    });
+
+    // Resolve the promise for the waiting agent
+    const resolver = this.approvalResolvers.get(approvalId);
+    if (resolver) {
+      resolver(approved, reason);
+      this.approvalResolvers.delete(approvalId);
+    }
+
+    log.info(`Approval ${approved ? 'APPROVED' : 'DENIED'}: ${approvalId} — ${approval.tool}`);
+    return { success: true };
+  }
+
+  private getApprovalConfig(): Record<string, unknown> {
+    const configPath = this.nas.resolve('config', 'approvals.json');
+    try {
+      if (existsSync(configPath)) return JSON.parse(readFileSync(configPath, 'utf-8'));
+    } catch { /* */ }
+    return {
+      enabled: true,
+      autoApprove: ['memory_search', 'memory_save', 'web_search', 'weather'],
+      requireApproval: ['exec_command', 'file_delete', 'ssh_exec', 'browser_navigate', 'send_message'],
+      alwaysDeny: [],
+      timeoutSeconds: 300,
+      soundAlert: true,
+      desktopNotification: true,
+    };
+  }
+
+  private setApprovalConfig(config: Record<string, unknown>): { success: boolean } {
+    const configPath = this.nas.resolve('config', 'approvals.json');
+    try {
+      const configDir = this.nas.resolve('config');
+      if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
+      writeFileSync(configPath, JSON.stringify(config, null, 2));
+      return { success: true };
     } catch { return { success: false }; }
   }
 

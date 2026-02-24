@@ -26,6 +26,7 @@ import {
   Sparkles,
   Cpu,
   Brain,
+  ShieldCheck,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -48,6 +49,7 @@ const NAV_ITEMS = [
   { to: '/api-keys', icon: Key, label: 'Keys' },
   { to: '/scheduler', icon: Clock, label: 'Scheduler' },
   { to: '/memory', icon: Brain, label: 'Memory' },
+  { to: '/approvals', icon: ShieldCheck, label: 'Approvals' },
   { to: '/skills', icon: Sparkles, label: 'Skills' },
   { to: '/providers', icon: Cpu, label: 'Models' },
   { to: '/plugins', icon: Package, label: 'Plugins' },

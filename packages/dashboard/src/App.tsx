@@ -30,6 +30,7 @@ import { ChannelsView } from './views/ChannelsView.js';
 import { SkillsView } from './views/SkillsView.js';
 import { ProvidersView } from './views/ProvidersView.js';
 import { MemoryView } from './views/MemoryView.js';
+import { ApprovalsView } from './views/ApprovalsView.js';
 import { CommandPalette } from './components/command-palette/CommandPalette.js';
 
 export function App() {
@@ -75,6 +76,7 @@ export function App() {
               <Route path="/skills" element={<SkillsView />} />
               <Route path="/providers" element={<ProvidersView />} />
               <Route path="/memory" element={<MemoryView />} />
+              <Route path="/approvals" element={<ApprovalsView />} />
               <Route path="/config" element={<ConfigView />} />
               <Route path="/debug" element={<DebugView />} />
             </Routes>
