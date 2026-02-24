@@ -103,8 +103,41 @@ const ALL_SKILLS: Skill[] = [
   { id: 'gemini', name: 'Gemini', description: 'Use Google Gemini models for specialized tasks', emoji: '♊', category: 'AI', installed: false, enabled: false, requires: { env: ['GOOGLE_API_KEY'] }, source: 'bundled' },
   { id: 'oracle', name: 'Oracle', description: 'Advanced reasoning and decision-making agent', emoji: '🔮', category: 'AI', installed: false, enabled: false, source: 'bundled' },
 
-  // --- 1Password ---
+  // --- Communication (more) ---
+  { id: 'himalaya', name: 'Email (IMAP)', description: 'Read, send, reply, forward, and organize emails via IMAP/SMTP', emoji: '📧', category: 'Communication', installed: false, enabled: false, requires: { bins: ['himalaya'] }, source: 'bundled' },
+  { id: 'wacli', name: 'WhatsApp CLI', description: 'Send WhatsApp messages and search chat history via wacli', emoji: '📱', category: 'Communication', installed: false, enabled: false, requires: { bins: ['wacli'] }, source: 'bundled' },
+  { id: 'xurl-twitter', name: 'X / Twitter', description: 'Post tweets, replies, quotes, search, DMs, and media via X API', emoji: '🐦', category: 'Communication', installed: false, enabled: false, requires: { env: ['X_API_KEY'] }, source: 'bundled' },
+
+  // --- Media (more) ---
+  { id: 'nano-banana-pro', name: 'Gemini Image Gen', description: 'Generate or edit images via Google Gemini 3 Pro Image model', emoji: '🖼️', category: 'Media', installed: false, enabled: false, requires: { env: ['GOOGLE_API_KEY'] }, source: 'bundled' },
+  { id: 'sag', name: 'ElevenLabs TTS', description: 'High-quality text-to-speech via ElevenLabs API', emoji: '🔊', category: 'Media', installed: false, enabled: false, requires: { env: ['ELEVENLABS_API_KEY'] }, source: 'bundled' },
+  { id: 'sherpa-onnx-tts', name: 'Local TTS', description: 'Offline text-to-speech via sherpa-onnx (no cloud needed)', emoji: '🗣️', category: 'Media', installed: false, enabled: false, requires: { bins: ['sherpa-onnx'] }, source: 'bundled' },
+  { id: 'songsee', name: 'Audio Visualizer', description: 'Generate spectrograms and audio feature visualizations', emoji: '🎚️', category: 'Media', installed: false, enabled: false, requires: { bins: ['ffmpeg'] }, source: 'bundled' },
+  { id: 'gifgrep', name: 'GIF Search', description: 'Search GIF providers, download results, extract stills', emoji: '🎞️', category: 'Media', installed: false, enabled: false, source: 'bundled' },
+
+  // --- Smart Home (more) ---
+  { id: 'sonoscli', name: 'Sonos', description: 'Control Sonos speakers — discover, play, volume, grouping', emoji: '🔈', category: 'Smart Home', installed: false, enabled: false, requires: { bins: ['sonoscli'] }, source: 'bundled' },
+  { id: 'blucli', name: 'BluOS', description: 'Control BluOS audio systems — playback, grouping, volume', emoji: '🎶', category: 'Smart Home', installed: false, enabled: false, requires: { bins: ['blu'] }, source: 'bundled' },
+  { id: 'eightctl', name: 'Eight Sleep', description: 'Control Eight Sleep pod — temperature, alarms, schedules', emoji: '🛏️', category: 'Smart Home', installed: false, enabled: false, requires: { bins: ['eightctl'] }, source: 'bundled' },
+
+  // --- Productivity (more) ---
+  { id: 'gog', name: 'Google Workspace', description: 'Gmail, Calendar, Drive, Contacts, Sheets, and Docs via gog CLI', emoji: '📊', category: 'Productivity', installed: false, enabled: false, requires: { bins: ['gog'] }, source: 'bundled' },
+  { id: 'goplaces', name: 'Google Places', description: 'Search places, get details, reviews via Google Places API', emoji: '📍', category: 'Utility', installed: false, enabled: false, requires: { env: ['GOOGLE_PLACES_KEY'] }, source: 'bundled' },
+  { id: 'nano-pdf', name: 'PDF Editor', description: 'Edit PDFs with natural-language instructions', emoji: '📑', category: 'Utility', installed: false, enabled: false, requires: { bins: ['nano-pdf'] }, source: 'bundled' },
+
+  // --- Dev (more) ---
+  { id: 'skill-creator', name: 'Skill Creator', description: 'Create or update agent skills with scripts and assets', emoji: '🔧', category: 'Dev', installed: false, enabled: false, source: 'bundled' },
+  { id: 'mcporter', name: 'MCP Client', description: 'List, configure, and call MCP servers/tools directly', emoji: '🔌', category: 'Dev', installed: false, enabled: false, source: 'bundled' },
+  { id: 'peekaboo', name: 'macOS UI Control', description: 'Capture and automate macOS UI elements with Peekaboo', emoji: '👁️', category: 'Dev', installed: false, enabled: false, requires: { os: ['darwin'], bins: ['peekaboo'] }, source: 'bundled' },
+
+  // --- Knowledge (more) ---
+  { id: 'canvas', name: 'Canvas', description: 'Display rich HTML content on connected Jarvis nodes', emoji: '🎨', category: 'Knowledge', installed: false, enabled: false, source: 'bundled' },
+
+  // --- Security ---
   { id: '1password', name: '1Password', description: 'Secure credential access and management via 1Password CLI', emoji: '🔐', category: 'Security', installed: false, enabled: false, requires: { bins: ['op'] }, source: 'bundled' },
+
+  // --- Food / Orders ---
+  { id: 'ordercli', name: 'Food Orders', description: 'Check past orders and active delivery status (Foodora)', emoji: '🍕', category: 'Utility', installed: false, enabled: false, requires: { bins: ['ordercli'] }, source: 'bundled' },
 ];
 
 const CATEGORIES = ['All', 'Jarvis', 'Dev', 'Productivity', 'Communication', 'Apple', 'Media', 'Smart Home', 'Utility', 'Knowledge', 'System', 'AI', 'Security'];

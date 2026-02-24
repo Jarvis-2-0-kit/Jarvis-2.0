@@ -880,9 +880,6 @@ export class GatewayServer {
       return this.deleteKnowledgeEntry(id);
     });
 
-    // Debug: log all registered methods
-    const registeredMethods = [...(this.protocol as unknown as { methods: Map<string, unknown> }).methods.keys()];
-    log.info(`Registered ${registeredMethods.length} methods: ${registeredMethods.join(', ')}`);
   }
 
   // --- NATS Subscriptions ---
