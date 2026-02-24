@@ -1,0 +1,32 @@
+{
+  "name": "@jarvis/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts --format esm",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@jarvis/shared": "workspace:*",
+    "@jarvis/tools": "workspace:*",
+    "nats": "^2.29.0",
+    "ioredis": "^5.4.0",
+    "dotenv": "^16.4.0",
+    "zod": "^3.24.0",
+    "nanoid": "^5.1.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsx": "^4.19.0",
+    "tsdown": "^0.9.0",
+    "vitest": "^3.0.0"
+  }
+}

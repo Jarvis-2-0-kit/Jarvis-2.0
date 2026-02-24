@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@jarvis/shared": ["packages/shared/src"],
+      "@jarvis/shared/*": ["packages/shared/src/*"],
+      "@jarvis/gateway": ["packages/gateway/src"],
+      "@jarvis/gateway/*": ["packages/gateway/src/*"],
+      "@jarvis/agent-runtime": ["packages/agent-runtime/src"],
+      "@jarvis/agent-runtime/*": ["packages/agent-runtime/src/*"],
+      "@jarvis/tools": ["packages/tools/src"],
+      "@jarvis/tools/*": ["packages/tools/src/*"]
+    }
+  },
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/gateway" },
+    { "path": "packages/agent-runtime" },
+    { "path": "packages/tools" },
+    { "path": "packages/dashboard" }
+  ]
+}

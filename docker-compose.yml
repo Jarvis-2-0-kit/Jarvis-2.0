@@ -1,0 +1,30 @@
+services:
+  nats:
+    image: nats:2.10-alpine
+    container_name: jarvis-nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: >
+      --name jarvis-nats
+      --http_port 8222
+      --max_payload 8MB
+      --max_connections 100
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: jarvis-redis
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  redis-data:

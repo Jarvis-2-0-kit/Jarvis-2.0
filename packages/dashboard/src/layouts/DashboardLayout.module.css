@@ -1,0 +1,76 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ===== MAIN LAYOUT ===== */
+.main {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  gap: 1px;
+  flex: 1;
+  overflow: hidden;
+  background: var(--border-dim);
+}
+
+/* ===== LEFT PANEL ===== */
+.leftPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border-dim);
+  overflow: hidden;
+}
+
+.leftTop {
+  flex: 0 0 auto;
+  max-height: 45%;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.leftBottom {
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+/* ===== CENTER PANEL ===== */
+.centerPanel {
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+/* ===== RIGHT PANEL ===== */
+.rightPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border-dim);
+  overflow: hidden;
+}
+
+.rightChat {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.rightTasks {
+  flex: 0 0 auto;
+  max-height: 30%;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}
+
+.rightMetrics {
+  flex: 0 0 auto;
+  max-height: 25%;
+  overflow: hidden;
+  background: var(--bg-secondary);
+}

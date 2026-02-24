@@ -1,0 +1,37 @@
+{
+  "name": "@jarvis/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts --format esm",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@jarvis/shared": "workspace:*",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
+    "dotenv": "^16.4.0",
+    "express": "^5.1.0",
+    "ioredis": "^5.4.0",
+    "nanoid": "^5.1.0",
+    "nats": "^2.29.0",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/ws": "^8.5.0",
+    "tsdown": "^0.9.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

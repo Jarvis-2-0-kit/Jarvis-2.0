@@ -1,0 +1,36 @@
+{
+  "name": "jarvis-2.0",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "packageManager": "pnpm@10.5.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "pnpm -r --parallel dev",
+    "dev:gateway": "pnpm --filter @jarvis/gateway dev",
+    "dev:dashboard": "pnpm --filter @jarvis/dashboard dev",
+    "dev:agent": "pnpm --filter @jarvis/agent-runtime dev",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "clean": "pnpm -r clean",
+    "infra:up": "docker compose up -d",
+    "infra:down": "docker compose down"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "rolldown"
+    ]
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  },
+  "dependencies": {
+    "@types/qrcode": "^1.5.6",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
+    "qrcode": "^1.5.4"
+  }
+}
