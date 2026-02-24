@@ -16,6 +16,7 @@ import {
   RefreshCw,
   Monitor,
 } from 'lucide-react';
+import { formatUptime, formatUptimeShort, formatBytes, formatBytesRate } from '../utils/formatters.js';
 
 interface DetailedHealth {
   status: string;
@@ -727,34 +728,3 @@ function StatBox({ label, value, color }: { label: string; value: string; color:
   );
 }
 
-/* === Formatters === */
-
-function formatUptime(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  return `${h}h ${m}m`;
-}
-
-function formatUptimeShort(seconds: number): string {
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  if (d > 0) return `${d}d${h}h`;
-  const m = Math.floor((seconds % 3600) / 60);
-  return `${h}h${m}m`;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-function formatBytesRate(bytesPerSec: number): string {
-  if (bytesPerSec < 1024) return `${bytesPerSec.toFixed(0)} B/s`;
-  if (bytesPerSec < 1024 * 1024) return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
-  return `${(bytesPerSec / 1024 / 1024).toFixed(1)} MB/s`;
-}

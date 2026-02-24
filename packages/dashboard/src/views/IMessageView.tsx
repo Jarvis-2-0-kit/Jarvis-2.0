@@ -10,8 +10,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  MessageCircle, Wifi, WifiOff, Send, RefreshCw,
-  Settings, MessageSquare, Apple, AlertTriangle,
+  MessageCircle, Send, RefreshCw,
+  MessageSquare, AlertTriangle,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 import { useGatewayStore } from '../store/gateway-store.js';

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 import { useGatewayStore } from '../store/gateway-store.js';
+import { formatUptime, formatRelative, formatBytes } from '../utils/formatters.js';
 
 interface InstanceInfo {
   id: string;
@@ -409,28 +410,3 @@ function MetricBox({ label, value, sub, icon, color }: {
   );
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────
-
-function formatUptime(s: number): string {
-  const d = Math.floor(s / 86400);
-  const h = Math.floor((s % 86400) / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
-function formatRelative(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 5_000) return 'just now';
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  return `${Math.floor(diff / 3600_000)}h ago`;
-}
-
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b}B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)}KB`;
-  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)}MB`;
-  return `${(b / (1024 * 1024 * 1024)).toFixed(1)}GB`;
-}

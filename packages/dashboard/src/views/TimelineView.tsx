@@ -19,6 +19,7 @@ import {
   Zap,
   Search,
 } from 'lucide-react';
+import { formatDuration, formatTimestamp, formatTimeAgo } from '../utils/formatters.js';
 
 interface TimelineEntry {
   id: string;
@@ -61,25 +62,6 @@ function getActionIcon(action: string) {
   if (action.includes('failed') || action.includes('error')) return XCircle;
   if (action.includes('start') || action.includes('assigned')) return Play;
   return Zap;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
-}
-
-function formatTimestamp(ts: number): string {
-  const d = new Date(ts);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function formatTimeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60000) return `${Math.round(diff / 1000)}s ago`;
-  if (diff < 3600000) return `${Math.round(diff / 60000)}m ago`;
-  if (diff < 86400000) return `${Math.round(diff / 3600000)}h ago`;
-  return `${Math.round(diff / 86400000)}d ago`;
 }
 
 export function TimelineView() {

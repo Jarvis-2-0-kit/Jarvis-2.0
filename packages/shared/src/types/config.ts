@@ -45,11 +45,11 @@ export const JarvisConfig = z.object({
 
   agents: z.object({
     alpha: z.object({
-      defaultModel: z.string().default('anthropic/claude-sonnet-4-20250514'),
+      defaultModel: z.string().default('anthropic/claude-sonnet-4-6'),
       maxConcurrency: z.number().default(3),
     }).default({}),
     beta: z.object({
-      defaultModel: z.string().default('anthropic/claude-sonnet-4-20250514'),
+      defaultModel: z.string().default('anthropic/claude-sonnet-4-6'),
       maxConcurrency: z.number().default(3),
     }).default({}),
   }).default({}),

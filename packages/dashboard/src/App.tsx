@@ -37,6 +37,7 @@ import { OrchestratorView } from './views/OrchestratorView.js';
 import { SlackView } from './views/SlackView.js';
 import { IMessageView } from './views/IMessageView.js';
 import { CommandPalette } from './components/command-palette/CommandPalette.js';
+import { formatUptime } from './utils/formatters.js';
 
 export function App() {
   const init = useGatewayStore((s) => s.init);
@@ -200,8 +201,3 @@ function AppHeader() {
   );
 }
 
-function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return `${h}h ${m}m`;
-}

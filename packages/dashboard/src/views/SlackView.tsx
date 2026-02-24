@@ -10,11 +10,10 @@
  * - Connection status
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Hash, Wifi, WifiOff, Settings, Send, RefreshCw,
-  CheckCircle2, XCircle, MessageSquare, Clock, Users,
-  Loader2, Eye, EyeOff, Zap, Radio, Bell,
+  MessageSquare, Eye, EyeOff,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 import { useGatewayStore } from '../store/gateway-store.js';

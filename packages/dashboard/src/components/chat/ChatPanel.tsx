@@ -15,10 +15,11 @@
 
 import { useState, useRef, useEffect, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
-  Send, Copy, RotateCcw, ChevronDown, Mic, Paperclip,
+  Send, Copy, RotateCcw, ChevronDown,
   Bot, User, Cpu, Terminal,
 } from 'lucide-react';
 import { useGatewayStore } from '../../store/gateway-store.js';
+import { formatTime } from '../../utils/formatters.js';
 
 // --- Types ---
 
@@ -633,20 +634,6 @@ function groupMessages(messages: Array<{ id: string; from: string; to: string; c
   }
 
   return groups;
-}
-
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  const now = new Date();
-  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-
-  if (d.toDateString() === now.toDateString()) return time;
-
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (d.toDateString() === yesterday.toDateString()) return `Yesterday ${time}`;
-
-  return `${d.getDate()}/${d.getMonth() + 1} ${time}`;
 }
 
 /**

@@ -36,7 +36,7 @@ const natsUrlThunderbolt = process.env['NATS_URL_THUNDERBOLT'] ?? undefined;
 const thunderboltEnabled = process.env['THUNDERBOLT_ENABLED'] === 'true';
 const nasMount = process.env['JARVIS_NAS_MOUNT'] ?? '/Volumes/JarvisNAS/jarvis';
 const workspace = process.env['WORKSPACE_PATH'] ?? `${nasMount}/workspace/projects`;
-const defaultModel = process.env['DEFAULT_MODEL'] ?? 'claude-sonnet-4-20250514';
+const defaultModel = process.env['DEFAULT_MODEL'] ?? 'claude-sonnet-4-6';
 
 // SSH host config for remote machine control
 const sshAlphaHost = process.env['SSH_ALPHA_HOST'] ?? process.env['VNC_ALPHA_HOST'];

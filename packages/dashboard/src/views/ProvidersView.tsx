@@ -67,9 +67,9 @@ const DEFAULT_PROVIDERS: ModelProvider[] = [
     enabled: true,
     priority: 1,
     models: [
-      { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', contextWindow: 200000, maxTokens: 64000, inputCost: 3, outputCost: 15, reasoning: true, vision: true },
-      { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', contextWindow: 200000, maxTokens: 32000, inputCost: 15, outputCost: 75, reasoning: true, vision: true },
-      { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', contextWindow: 200000, maxTokens: 8192, inputCost: 0.8, outputCost: 4, reasoning: false, vision: true },
+      { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 200000, maxTokens: 128000, inputCost: 5, outputCost: 25, reasoning: true, vision: true },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200000, maxTokens: 64000, inputCost: 3, outputCost: 15, reasoning: true, vision: true },
+      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', contextWindow: 200000, maxTokens: 64000, inputCost: 1, outputCost: 5, reasoning: true, vision: true },
     ],
   },
   {
@@ -81,10 +81,9 @@ const DEFAULT_PROVIDERS: ModelProvider[] = [
     enabled: false,
     priority: 2,
     models: [
-      { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000, maxTokens: 16384, inputCost: 2.5, outputCost: 10, reasoning: false, vision: true },
-      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextWindow: 128000, maxTokens: 16384, inputCost: 0.15, outputCost: 0.6, reasoning: false, vision: true },
-      { id: 'o1', name: 'o1', contextWindow: 200000, maxTokens: 100000, inputCost: 15, outputCost: 60, reasoning: true, vision: true },
-      { id: 'o3-mini', name: 'o3-mini', contextWindow: 200000, maxTokens: 100000, inputCost: 1.1, outputCost: 4.4, reasoning: true, vision: false },
+      { id: 'gpt-5.2', name: 'GPT-5.2', contextWindow: 400000, maxTokens: 128000, inputCost: 1.75, outputCost: 14, reasoning: true, vision: true },
+      { id: 'gpt-5-mini', name: 'GPT-5 Mini', contextWindow: 400000, maxTokens: 128000, inputCost: 0.25, outputCost: 2, reasoning: false, vision: true },
+      { id: 'o3', name: 'o3', contextWindow: 200000, maxTokens: 100000, inputCost: 2, outputCost: 8, reasoning: true, vision: true },
     ],
   },
   {
@@ -121,21 +120,21 @@ const DEFAULT_CHAINS: FailoverChain[] = [
     id: 'default',
     name: 'Default Chain',
     description: 'Primary model with cost-effective fallback',
-    models: ['claude-sonnet-4-20250514', 'gpt-4o', 'gemini-2.0-flash'],
+    models: ['claude-sonnet-4-6', 'gpt-5.2', 'gemini-2.0-flash'],
     active: true,
   },
   {
     id: 'reasoning',
     name: 'Reasoning Chain',
     description: 'For complex tasks requiring deep thinking',
-    models: ['claude-opus-4-20250514', 'o1', 'gemini-2.5-pro'],
+    models: ['claude-opus-4-6', 'o3', 'gemini-2.5-pro'],
     active: false,
   },
   {
     id: 'fast',
     name: 'Fast & Cheap',
     description: 'Quick responses, minimal cost',
-    models: ['claude-3-5-haiku-20241022', 'gpt-4o-mini', 'gemini-2.0-flash'],
+    models: ['claude-haiku-4-5-20251001', 'gpt-5-mini', 'gemini-2.0-flash'],
     active: false,
   },
   {
@@ -206,7 +205,7 @@ export function ProvidersView() {
           models: p.models,
         })),
         chains,
-        activeModel: chains.find(c => c.active)?.models[0] ?? 'claude-sonnet-4-20250514',
+        activeModel: chains.find(c => c.active)?.models[0] ?? 'claude-sonnet-4-6',
       });
     } catch { /* */ }
   };

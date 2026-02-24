@@ -9,7 +9,6 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Brain,
   Search,
-  FileText,
   Calendar,
   Database,
   Plus,
@@ -17,18 +16,15 @@ import {
   RefreshCw,
   Save,
   BookOpen,
-  Tag,
   ChevronRight,
   Clock,
   HardDrive,
-  Eye,
   Edit3,
   X,
   Check,
-  Download,
-  AlertCircle,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
+import { formatBytes } from '../utils/formatters.js';
 
 /* ─── types ─── */
 
@@ -798,14 +794,6 @@ function StatCard({ icon, label, value, sub, color }: {
 }
 
 /* ─── Helpers ─── */
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
 
 function highlightMatch(text: string, query: string): React.ReactNode {
   if (!query) return text;

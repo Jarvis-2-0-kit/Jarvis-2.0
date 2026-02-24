@@ -11,12 +11,13 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  GitBranch, RefreshCw, Play, CheckCircle2, XCircle, Clock,
+  GitBranch, RefreshCw, CheckCircle2, XCircle, Clock,
   Loader2, ArrowRight, Bot, Zap, AlertTriangle, ChevronDown,
-  ChevronRight, CircleDot, Circle, Target, Flag,
+  ChevronRight,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 import { useGatewayStore } from '../store/gateway-store.js';
+import { formatRelative, formatDuration } from '../utils/formatters.js';
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -680,19 +681,3 @@ function TimelineItem({ node }: { node: TaskNode }) {
   );
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────
-
-function formatRelative(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return 'just now';
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
-  return `${Math.floor(diff / 86400_000)}d ago`;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-  if (ms < 3600_000) return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
-  return `${Math.floor(ms / 3600_000)}h ${Math.floor((ms % 3600_000) / 60_000)}m`;
-}

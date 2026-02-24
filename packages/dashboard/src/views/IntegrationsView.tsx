@@ -7,8 +7,6 @@ import {
   Music,
   Home,
   Clock,
-  CheckCircle,
-  XCircle,
   RefreshCw,
   Play,
   Pause,
@@ -25,6 +23,7 @@ import {
   Wifi,
   WifiOff,
 } from 'lucide-react';
+import { formatTimeAgo } from '../utils/formatters.js';
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -233,16 +232,6 @@ function StatusDot({ available }: { available: boolean }) {
       flexShrink: 0,
     }} />
   );
-}
-
-// ─── Time formatter ─────────────────────────────────────────────────
-
-function formatTimeAgo(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 5000) return 'just now';
-  if (diff < 60000) return `${Math.round(diff / 1000)}s ago`;
-  if (diff < 3600000) return `${Math.round(diff / 60000)}m ago`;
-  return `${Math.round(diff / 3600000)}h ago`;
 }
 
 // ─── iMessage Panel ──────────────────────────────────────────────────

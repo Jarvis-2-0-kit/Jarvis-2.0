@@ -1375,7 +1375,7 @@ export class GatewayServer {
       totalTokens: s.totalTokens,
       inputTokens: s.inputTokens,
       outputTokens: s.outputTokens,
-      model: 'claude-sonnet-4-20250514', // TODO: read from session
+      model: 'claude-sonnet-4-6', // TODO: read from session
     }));
   }
 
@@ -2511,10 +2511,22 @@ export class GatewayServer {
   // --- Channel Messages (shared NAS storage) ---
 
   private getChannelMessages(channel: string, limit: number): { messages: Array<Record<string, unknown>> } {
-    const messagesPath = this.nas.resolve('channels', channel, 'messages.json');
+    const dir = this.nas.resolve('channels', channel);
+    // Try JSONL first (new format), then fall back to JSON (legacy)
+    const jsonlPath = join(dir, 'messages.jsonl');
+    const jsonPath = join(dir, 'messages.json');
     try {
-      if (existsSync(messagesPath)) {
-        const all = JSON.parse(readFileSync(messagesPath, 'utf-8')) as Array<Record<string, unknown>>;
+      if (existsSync(jsonlPath)) {
+        const content = readFileSync(jsonlPath, 'utf-8');
+        const lines = content.trim().split('\n').filter(Boolean);
+        const messages = lines
+          .map((l) => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
+          .filter(Boolean) as Array<Record<string, unknown>>;
+        return { messages: messages.slice(-limit) };
+      }
+      // Legacy: read from messages.json
+      if (existsSync(jsonPath)) {
+        const all = JSON.parse(readFileSync(jsonPath, 'utf-8')) as Array<Record<string, unknown>>;
         return { messages: all.slice(-limit) };
       }
     } catch { /* ignore */ }
@@ -2523,17 +2535,10 @@ export class GatewayServer {
 
   private appendChannelMessage(channel: string, message: Record<string, unknown>): void {
     const dir = this.nas.resolve('channels', channel);
-    const messagesPath = join(dir, 'messages.json');
+    const file = join(dir, 'messages.jsonl');
     try {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      let messages: Array<Record<string, unknown>> = [];
-      if (existsSync(messagesPath)) {
-        messages = JSON.parse(readFileSync(messagesPath, 'utf-8'));
-      }
-      messages.push(message);
-      // Keep last 2000 messages per channel
-      if (messages.length > 2000) messages = messages.slice(-2000);
-      writeFileSync(messagesPath, JSON.stringify(messages, null, 2));
+      appendFileSync(file, JSON.stringify(message) + '\n', 'utf-8');
     } catch (err) {
       log.error(`Failed to save ${channel} message`, { error: String(err) });
     }
@@ -3230,7 +3235,7 @@ export class GatewayServer {
 
       if (data.ok) {
         // Persist message
-        this.persistChannelMessage('slack', {
+        this.appendChannelMessage('slack', {
           id: (data.ts as string) ?? shortId(),
           channel,
           user: 'jarvis',
@@ -3271,7 +3276,7 @@ end tell`;
       execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { timeout: 10000 });
 
       // Persist message
-      this.persistChannelMessage('imessage', {
+      this.appendChannelMessage('imessage', {
         id: shortId(),
         channel: to,
         user: 'jarvis',
@@ -3289,29 +3294,7 @@ end tell`;
     }
   }
 
-  private persistChannelMessage(channel: string, msg: Record<string, unknown>): void {
-    try {
-      const msgDir = this.nas.resolve(`channels/${channel}`);
-      if (!existsSync(msgDir)) mkdirSync(msgDir, { recursive: true });
-      const file = join(msgDir, `messages.jsonl`);
-      appendFileSync(file, JSON.stringify(msg) + '\n', 'utf-8');
-    } catch { /* non-critical */ }
-  }
-
-  private getChannelMessages(channel: string, limit: number): unknown[] {
-    try {
-      const file = this.nas.resolve(`channels/${channel}/messages.jsonl`);
-      if (!existsSync(file)) return [];
-      const content = readFileSync(file, 'utf-8');
-      const lines = content.trim().split('\n').filter(Boolean);
-      return lines
-        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-        .filter(Boolean)
-        .slice(-limit);
-    } catch {
-      return [];
-    }
-  }
+  // persistChannelMessage and getChannelMessages consolidated above (JSONL format)
 
   // --- Channel Command Handler ---
 
@@ -3453,11 +3436,11 @@ end tell`;
         {
           id: 'default', name: 'Default Chain',
           description: 'Primary model with fallback',
-          models: ['claude-sonnet-4-20250514', 'gpt-4o'],
+          models: ['claude-sonnet-4-6', 'gpt-5.2'],
           active: true,
         },
       ],
-      activeModel: process.env['DEFAULT_MODEL'] ?? 'claude-sonnet-4-20250514',
+      activeModel: process.env['DEFAULT_MODEL'] ?? 'claude-sonnet-4-6',
     };
   }
 

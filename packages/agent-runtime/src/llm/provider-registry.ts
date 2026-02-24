@@ -31,7 +31,7 @@ export class ProviderRegistry {
 
   constructor(config: ProviderRegistryConfig) {
     this.defaultProvider = config.defaultProvider ?? 'anthropic';
-    this.defaultModel = config.defaultModel ?? 'claude-sonnet-4-20250514';
+    this.defaultModel = config.defaultModel ?? 'claude-sonnet-4-6';
 
     // Initialize providers based on available keys
     if (config.anthropicApiKey) {
@@ -83,7 +83,7 @@ export class ProviderRegistry {
 
     // Heuristic: guess provider from model name
     if (modelId.startsWith('claude-')) return this.providers.get('anthropic');
-    if (modelId.startsWith('gpt-') || modelId.startsWith('o1') || modelId.startsWith('o3')) return this.providers.get('openai');
+    if (modelId.startsWith('gpt-') || modelId.startsWith('o1') || modelId.startsWith('o3') || modelId.startsWith('o4')) return this.providers.get('openai');
     if (modelId.startsWith('gemini-')) return this.providers.get('google');
     if (modelId.includes('/')) return this.providers.get('openrouter'); // e.g. "meta-llama/llama-3.1-70b"
 

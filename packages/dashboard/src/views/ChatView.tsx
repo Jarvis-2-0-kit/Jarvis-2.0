@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 import { useGatewayStore } from '../store/gateway-store.js';
+import { formatTime, formatRelativeTime } from '../utils/formatters.js';
 
 // ─── Types ─────────────────────────────────────────────────────────
 
@@ -888,24 +889,6 @@ function groupMessages(msgs: ChatMsg[]): MsgGroup[] {
     }
   }
   return groups;
-}
-
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  const now = new Date();
-  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  if (d.toDateString() === now.toDateString()) return time;
-  const y = new Date(now); y.setDate(y.getDate() - 1);
-  if (d.toDateString() === y.toDateString()) return `Yesterday ${time}`;
-  return `${d.getDate()}/${d.getMonth() + 1} ${time}`;
-}
-
-function formatRelativeTime(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return 'now';
-  if (diff < 3600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86400_000) return `${Math.floor(diff / 3600_000)}h ago`;
-  return `${Math.floor(diff / 86400_000)}d ago`;
 }
 
 /**

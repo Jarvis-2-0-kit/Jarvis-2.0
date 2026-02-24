@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   Copy,
 } from 'lucide-react';
+import { formatTimeAgo } from '../utils/formatters.js';
 
 interface ApiKeyEntry {
   id: string;
@@ -512,12 +513,4 @@ function SummaryBox({ label, value, color }: { label: string; value: string; col
 function maskKey(key: string): string {
   if (key.length <= 8) return '••••••••';
   return key.slice(0, 5) + '•'.repeat(Math.max(0, key.length - 11)) + key.slice(-6);
-}
-
-function formatTimeAgo(timestamp: number): string {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  return `${Math.floor(seconds / 86400)}d ago`;
 }

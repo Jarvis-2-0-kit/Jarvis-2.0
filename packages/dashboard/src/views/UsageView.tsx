@@ -33,10 +33,12 @@ interface SessionUsage {
 
 // Pricing per 1M tokens (estimates)
 const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  'claude-sonnet-4-20250514': { input: 3, output: 15 },
-  'claude-3-5-sonnet-20241022': { input: 3, output: 15 },
-  'claude-3-haiku-20240307': { input: 0.25, output: 1.25 },
-  'gpt-4o': { input: 2.5, output: 10 },
+  'claude-opus-4-6': { input: 5, output: 25 },
+  'claude-sonnet-4-6': { input: 3, output: 15 },
+  'claude-haiku-4-5-20251001': { input: 1, output: 5 },
+  'gpt-5.2': { input: 1.75, output: 14 },
+  'gpt-5-mini': { input: 0.25, output: 2 },
+  'o3': { input: 2, output: 8 },
   'default': { input: 3, output: 15 },
 };
 

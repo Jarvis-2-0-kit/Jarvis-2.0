@@ -10,9 +10,9 @@ const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 
 const MODELS: ModelInfo[] = [
-  { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', provider: 'anthropic', contextWindow: 200000, maxOutputTokens: 32000, supportsTools: true, supportsVision: true, costPerInputToken: 15 / 1e6, costPerOutputToken: 75 / 1e6 },
-  { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', provider: 'anthropic', contextWindow: 200000, maxOutputTokens: 16000, supportsTools: true, supportsVision: true, costPerInputToken: 3 / 1e6, costPerOutputToken: 15 / 1e6 },
-  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', contextWindow: 200000, maxOutputTokens: 8192, supportsTools: true, supportsVision: true, costPerInputToken: 0.8 / 1e6, costPerOutputToken: 4 / 1e6 },
+  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'anthropic', contextWindow: 200000, maxOutputTokens: 128000, supportsTools: true, supportsVision: true, costPerInputToken: 5 / 1e6, costPerOutputToken: 25 / 1e6 },
+  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic', contextWindow: 200000, maxOutputTokens: 64000, supportsTools: true, supportsVision: true, costPerInputToken: 3 / 1e6, costPerOutputToken: 15 / 1e6 },
+  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', contextWindow: 200000, maxOutputTokens: 64000, supportsTools: true, supportsVision: true, costPerInputToken: 1 / 1e6, costPerOutputToken: 5 / 1e6 },
 ];
 
 export class AnthropicProvider implements LLMProvider {

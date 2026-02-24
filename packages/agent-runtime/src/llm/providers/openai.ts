@@ -9,10 +9,9 @@ const log = createLogger('llm:openai');
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 
 const MODELS: ModelInfo[] = [
-  { id: 'gpt-4o', name: 'GPT-4o', provider: 'openai', contextWindow: 128000, maxOutputTokens: 16384, supportsTools: true, supportsVision: true, costPerInputToken: 2.5 / 1e6, costPerOutputToken: 10 / 1e6 },
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'openai', contextWindow: 128000, maxOutputTokens: 16384, supportsTools: true, supportsVision: true, costPerInputToken: 0.15 / 1e6, costPerOutputToken: 0.6 / 1e6 },
-  { id: 'o3', name: 'o3', provider: 'openai', contextWindow: 200000, maxOutputTokens: 100000, supportsTools: true, supportsVision: true, costPerInputToken: 10 / 1e6, costPerOutputToken: 40 / 1e6 },
-  { id: 'o3-mini', name: 'o3-mini', provider: 'openai', contextWindow: 200000, maxOutputTokens: 65536, supportsTools: true, supportsVision: false, costPerInputToken: 1.1 / 1e6, costPerOutputToken: 4.4 / 1e6 },
+  { id: 'gpt-5.2', name: 'GPT-5.2', provider: 'openai', contextWindow: 400000, maxOutputTokens: 128000, supportsTools: true, supportsVision: true, costPerInputToken: 1.75 / 1e6, costPerOutputToken: 14 / 1e6 },
+  { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai', contextWindow: 400000, maxOutputTokens: 128000, supportsTools: true, supportsVision: true, costPerInputToken: 0.25 / 1e6, costPerOutputToken: 2 / 1e6 },
+  { id: 'o3', name: 'o3', provider: 'openai', contextWindow: 200000, maxOutputTokens: 100000, supportsTools: true, supportsVision: true, costPerInputToken: 2 / 1e6, costPerOutputToken: 8 / 1e6 },
 ];
 
 export class OpenAIProvider implements LLMProvider {

@@ -45,6 +45,7 @@ import {
   GitBranch,
   MessageSquare,
 } from 'lucide-react';
+import { formatTimeAgo } from '../utils/formatters.js';
 
 // --- Types ---
 
@@ -131,15 +132,6 @@ const SKILL_CATALOG: { id: string; name: string; emoji: string; category: string
   { id: 'google-drive', name: 'Google Drive', emoji: '📁', category: 'Productivity', description: 'Manage Google Drive files' },
 ];
 
-function formatTimeAgo(ts: number): string {
-  if (!ts) return 'never';
-  const diff = Date.now() - ts;
-  if (diff < 5000) return 'just now';
-  if (diff < 60000) return `${Math.round(diff / 1000)}s ago`;
-  if (diff < 3600000) return `${Math.round(diff / 60000)}m ago`;
-  return `${Math.round(diff / 3600000)}h ago`;
-}
-
 // --- Main Component ---
 
 export function AgentsView() {
@@ -214,8 +206,8 @@ export function AgentsView() {
         setAgentConfigs((prev) => ({
           ...prev,
           [selectedAgentId]: {
-            model: capabilities[selectedAgentId]?.model || 'claude-sonnet-4-20250514',
-            fallbackModels: 'gpt-4o, gemini-pro',
+            model: capabilities[selectedAgentId]?.model || 'claude-sonnet-4-6',
+            fallbackModels: 'gpt-5.2, gemini-2.5-pro',
             maxTokens: '8192',
             temperature: '0.7',
             systemPrompt: `You are ${selectedAgentId}, a Jarvis AI agent with role: ${agent.identity.role}.`,
@@ -597,7 +589,7 @@ export function AgentsView() {
                   <div style={{
                     display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20,
                   }}>
-                    <KVCard label="Model" value={selectedCaps?.model || 'claude-sonnet-4-20250514'} icon={Brain} color="var(--purple)" />
+                    <KVCard label="Model" value={selectedCaps?.model || 'claude-sonnet-4-6'} icon={Brain} color="var(--purple)" />
                     <KVCard label="Role" value={selectedAgent.identity.role} icon={Shield} color={ROLE_COLORS[selectedAgent.identity.role] || ROLE_COLORS.default} />
                     <KVCard label="Machine" value={selectedAgent.identity.machineId} icon={Layers} color="var(--text-secondary)" />
                     <KVCard label="Hostname" value={selectedAgent.identity.hostname || 'localhost'} icon={Radio} color="var(--text-secondary)" />
@@ -994,13 +986,13 @@ export function AgentsView() {
                       onChange={(v) => handleConfigChange('model', v)}
                       type="select"
                       options={[
-                        'claude-sonnet-4-20250514',
-                        'claude-opus-4-20250514',
-                        'gpt-4o',
-                        'gpt-4o-mini',
-                        'gemini-2.0-flash',
+                        'claude-sonnet-4-6',
+                        'claude-opus-4-6',
+                        'claude-haiku-4-5-20251001',
+                        'gpt-5.2',
+                        'gpt-5-mini',
+                        'o3',
                         'gemini-2.5-pro',
-                        'llama-3.1-70b',
                       ]}
                     />
 
