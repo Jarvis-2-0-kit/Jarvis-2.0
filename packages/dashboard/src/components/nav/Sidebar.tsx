@@ -57,6 +57,7 @@ const NAV_ITEMS = [
   { to: '/plugins', icon: Package, label: 'Plugins' },
   { to: '/files', icon: HardDrive, label: 'Files' },
   { to: '/instances', icon: Server, label: 'Instances' },
+  { to: '/orchestrator', icon: GitBranch, label: 'Orchestr.' },
   { to: '/environment', icon: Variable, label: 'Env Vars' },
   { to: '/config', icon: Settings, label: 'Config' },
   { to: '/debug', icon: Bug, label: 'Debug' },

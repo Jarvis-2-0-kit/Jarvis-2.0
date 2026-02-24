@@ -33,6 +33,7 @@ import { MemoryView } from './views/MemoryView.js';
 import { ApprovalsView } from './views/ApprovalsView.js';
 import { ChatView } from './views/ChatView.js';
 import { InstancesView } from './views/InstancesView.js';
+import { OrchestratorView } from './views/OrchestratorView.js';
 import { CommandPalette } from './components/command-palette/CommandPalette.js';
 
 export function App() {
@@ -81,6 +82,7 @@ export function App() {
               <Route path="/memory" element={<MemoryView />} />
               <Route path="/approvals" element={<ApprovalsView />} />
               <Route path="/instances" element={<InstancesView />} />
+              <Route path="/orchestrator" element={<OrchestratorView />} />
               <Route path="/config" element={<ConfigView />} />
               <Route path="/debug" element={<DebugView />} />
             </Routes>
