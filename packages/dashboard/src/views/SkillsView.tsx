@@ -311,15 +311,15 @@ export function SkillsView() {
 
       {/* Skills grid */}
       <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 14 }}>
           {filtered.map((skill) => (
             <div
               key={skill.id}
               onClick={() => setSelectedSkill(skill)}
               style={{
-                padding: 14, borderRadius: 8, cursor: 'pointer',
+                padding: 16, borderRadius: 10, cursor: 'pointer',
                 background: 'linear-gradient(135deg, var(--bg-secondary), var(--bg-tertiary))',
-                border: `1px solid ${skill.enabled ? 'var(--amber)33' : 'var(--border-dim)'}`,
+                border: `1px solid ${skill.enabled ? 'var(--amber)44' : 'var(--border-dim)'}`,
                 transition: 'all 0.15s',
                 position: 'relative', overflow: 'hidden',
               }}
@@ -338,10 +338,10 @@ export function SkillsView() {
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                 {/* Emoji */}
                 <div style={{
-                  width: 36, height: 36, borderRadius: 8, flexShrink: 0,
+                  width: 40, height: 40, borderRadius: 10, flexShrink: 0,
                   background: 'var(--bg-tertiary)', border: '1px solid var(--border-dim)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 18,
+                  fontSize: 20,
                 }}>
                   {skill.emoji}
                 </div>
@@ -349,26 +349,26 @@ export function SkillsView() {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
                     <span style={{
-                      fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-ui)',
-                      color: 'var(--text-primary)',
+                      fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-ui)',
+                      color: 'var(--text-white)',
                     }}>
                       {skill.name}
                     </span>
                     {skill.installed && (
                       <span style={{
-                        fontSize: 7, padding: '1px 4px', borderRadius: 3,
-                        background: skill.enabled ? 'rgba(0,255,65,0.15)' : 'var(--bg-tertiary)',
-                        color: skill.enabled ? 'var(--green-bright)' : 'var(--text-muted)',
-                        border: `1px solid ${skill.enabled ? 'var(--green-primary)33' : 'var(--border-dim)'}`,
-                        fontFamily: 'var(--font-display)', letterSpacing: 0.5,
+                        fontSize: 8, padding: '2px 6px', borderRadius: 4,
+                        background: skill.enabled ? 'rgba(0,255,65,0.1)' : 'var(--bg-tertiary)',
+                        color: skill.enabled ? 'var(--green-bright)' : 'var(--text-secondary)',
+                        border: `1px solid ${skill.enabled ? 'rgba(0,255,65,0.2)' : 'var(--border-dim)'}`,
+                        fontFamily: 'var(--font-display)', letterSpacing: 0.5, fontWeight: 600,
                       }}>
                         {skill.enabled ? 'ACTIVE' : 'INSTALLED'}
                       </span>
                     )}
                   </div>
                   <div style={{
-                    fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)',
-                    lineHeight: 1.4, display: '-webkit-box', WebkitLineClamp: 2,
+                    fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-ui)',
+                    lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2,
                     WebkitBoxOrient: 'vertical', overflow: 'hidden',
                   }}>
                     {skill.description}
@@ -376,29 +376,31 @@ export function SkillsView() {
 
                   {/* Requirements */}
                   {skill.requires && (
-                    <div style={{ display: 'flex', gap: 4, marginTop: 6, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
                       {skill.requires.bins?.map((bin) => (
                         <span key={bin} style={{
-                          fontSize: 8, padding: '1px 5px', borderRadius: 3,
-                          background: 'var(--bg-tertiary)', border: '1px solid var(--border-dim)',
+                          fontSize: 9, padding: '2px 7px', borderRadius: 4,
+                          background: 'rgba(0,255,255,0.06)', border: '1px solid rgba(0,255,255,0.15)',
                           color: 'var(--cyan-bright)', fontFamily: 'var(--font-mono)',
+                          display: 'inline-flex', alignItems: 'center', gap: 3,
                         }}>
-                          <Terminal size={7} style={{ marginRight: 2 }} />{bin}
+                          <Terminal size={8} />{bin}
                         </span>
                       ))}
                       {skill.requires.env?.map((env) => (
                         <span key={env} style={{
-                          fontSize: 8, padding: '1px 5px', borderRadius: 3,
-                          background: 'var(--bg-tertiary)', border: '1px solid var(--border-dim)',
+                          fontSize: 9, padding: '2px 7px', borderRadius: 4,
+                          background: 'rgba(255,170,0,0.06)', border: '1px solid rgba(255,170,0,0.15)',
                           color: 'var(--amber)', fontFamily: 'var(--font-mono)',
+                          display: 'inline-flex', alignItems: 'center', gap: 3,
                         }}>
-                          <Lock size={7} style={{ marginRight: 2 }} />{env}
+                          <Lock size={8} />{env}
                         </span>
                       ))}
                       {skill.requires.os?.map((os) => (
                         <span key={os} style={{
-                          fontSize: 8, padding: '1px 5px', borderRadius: 3,
-                          background: 'var(--bg-tertiary)', border: '1px solid var(--border-dim)',
+                          fontSize: 9, padding: '2px 7px', borderRadius: 4,
+                          background: 'rgba(191,90,242,0.06)', border: '1px solid rgba(191,90,242,0.15)',
                           color: 'var(--purple)', fontFamily: 'var(--font-mono)',
                         }}>
                           {os}

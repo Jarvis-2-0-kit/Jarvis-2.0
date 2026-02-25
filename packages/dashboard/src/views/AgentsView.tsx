@@ -151,6 +151,8 @@ export function AgentsView() {
   const [toolSearch, setToolSearch] = useState('');
   const [skillSearch, setSkillSearch] = useState('');
   const [skillCategory, setSkillCategory] = useState('All');
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const agentList = Array.from(agents.values());
 
@@ -198,26 +200,42 @@ export function AgentsView() {
     }
   }, [selectedAgentId, skillStates]);
 
-  // Initialize config for agent
+  // Load saved config from NAS when agent is selected
   useEffect(() => {
-    if (selectedAgentId && !agentConfigs[selectedAgentId]) {
-      const agent = agentList.find((a) => a.identity.agentId === selectedAgentId);
-      if (agent) {
-        setAgentConfigs((prev) => ({
-          ...prev,
-          [selectedAgentId]: {
-            model: capabilities[selectedAgentId]?.model || 'claude-sonnet-4-6',
-            fallbackModels: 'gpt-5.2, gemini-2.5-pro',
-            maxTokens: '8192',
-            temperature: '0.7',
-            systemPrompt: `You are ${selectedAgentId}, a Jarvis AI agent with role: ${agent.identity.role}.`,
-            memoryEnabled: 'true',
-            toolTimeout: '30',
-          },
-        }));
-      }
-    }
-  }, [selectedAgentId, agentConfigs, agentList, capabilities]);
+    if (!selectedAgentId || !connected) return;
+    const agent = agentList.find((a) => a.identity.agentId === selectedAgentId);
+    if (!agent) return;
+
+    const defaults = {
+      model: capabilities[selectedAgentId]?.model || 'claude-opus-4-6',
+      fallbackModels: 'gpt-5.2, gemini-2.5-pro',
+      maxTokens: '8192',
+      temperature: '0.7',
+      systemPrompt: `You are ${selectedAgentId}, a Jarvis AI agent with role: ${agent.identity.role}.`,
+      memoryEnabled: 'true',
+      toolTimeout: '30',
+    };
+
+    gateway.request<{ config?: Record<string, string>; tools?: Record<string, boolean>; skills?: Record<string, boolean> }>('config.agent.get', { agentId: selectedAgentId })
+      .then((saved) => {
+        if (saved?.config) {
+          setAgentConfigs((prev) => ({ ...prev, [selectedAgentId]: { ...defaults, ...saved.config } }));
+        } else if (!agentConfigs[selectedAgentId]) {
+          setAgentConfigs((prev) => ({ ...prev, [selectedAgentId]: defaults }));
+        }
+        if (saved?.tools) {
+          setToolStates((prev) => ({ ...prev, [selectedAgentId]: { ...(prev[selectedAgentId] || {}), ...saved.tools } }));
+        }
+        if (saved?.skills) {
+          setSkillStates((prev) => ({ ...prev, [selectedAgentId]: { ...(prev[selectedAgentId] || {}), ...saved.skills } }));
+        }
+      })
+      .catch(() => {
+        if (!agentConfigs[selectedAgentId]) {
+          setAgentConfigs((prev) => ({ ...prev, [selectedAgentId]: defaults }));
+        }
+      });
+  }, [selectedAgentId, connected]);
 
   const selectedAgent = agentList.find((a) => a.identity.agentId === selectedAgentId);
   const selectedCaps = selectedAgentId ? capabilities[selectedAgentId] : null;
@@ -264,15 +282,27 @@ export function AgentsView() {
 
   const handleSaveConfig = async () => {
     if (!selectedAgentId) return;
+    setSaveStatus('saving');
+    setSaveError(null);
     try {
-      await gateway.request('config.set', {
+      const result = await gateway.request<{ success: boolean; message?: string }>('config.set', {
         agentId: selectedAgentId,
         tools: toolStates[selectedAgentId],
         skills: skillStates[selectedAgentId],
         config: agentConfigs[selectedAgentId],
       });
-      setConfigDirty(false);
-    } catch { /* ignore */ }
+      if (result?.success) {
+        setConfigDirty(false);
+        setSaveStatus('saved');
+        setTimeout(() => setSaveStatus('idle'), 2000);
+      } else {
+        setSaveStatus('error');
+        setSaveError(result?.message || 'Save failed');
+      }
+    } catch (err) {
+      setSaveStatus('error');
+      setSaveError((err as Error).message);
+    }
   };
 
   // Filtered tools
@@ -506,18 +536,25 @@ export function AgentsView() {
               </div>
 
               {/* Save button */}
-              {configDirty && (
+              {(configDirty || saveStatus !== 'idle') && (
                 <button
                   onClick={handleSaveConfig}
+                  disabled={saveStatus === 'saving'}
+                  title={saveError || undefined}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 4,
                     padding: '6px 14px', borderRadius: 4,
-                    background: 'rgba(0,255,65,0.1)', border: '1px solid var(--green-dim)',
-                    color: 'var(--green-bright)', cursor: 'pointer',
+                    background: saveStatus === 'saved' ? 'rgba(0,255,65,0.15)' : saveStatus === 'error' ? 'rgba(255,60,60,0.1)' : 'rgba(0,255,65,0.1)',
+                    border: `1px solid ${saveStatus === 'error' ? 'rgba(255,60,60,0.3)' : 'var(--green-dim)'}`,
+                    color: saveStatus === 'error' ? '#ff6060' : 'var(--green-bright)',
+                    cursor: saveStatus === 'saving' ? 'wait' : 'pointer',
                     fontFamily: 'var(--font-display)', fontSize: 9, letterSpacing: 1,
                   }}
                 >
-                  <Save size={10} /> SAVE
+                  {saveStatus === 'saving' ? <><RefreshCw size={10} /> SAVING...</> :
+                   saveStatus === 'saved' ? <><CheckCircle2 size={10} /> SAVED</> :
+                   saveStatus === 'error' ? <><XCircle size={10} /> ERROR</> :
+                   <><Save size={10} /> SAVE</>}
                 </button>
               )}
             </div>
@@ -589,7 +626,7 @@ export function AgentsView() {
                   <div style={{
                     display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20,
                   }}>
-                    <KVCard label="Model" value={selectedCaps?.model || 'claude-sonnet-4-6'} icon={Brain} color="var(--purple)" />
+                    <KVCard label="Model" value={selectedCaps?.model || 'claude-opus-4-6'} icon={Brain} color="var(--purple)" />
                     <KVCard label="Role" value={selectedAgent.identity.role} icon={Shield} color={ROLE_COLORS[selectedAgent.identity.role] || ROLE_COLORS.default} />
                     <KVCard label="Machine" value={selectedAgent.identity.machineId} icon={Layers} color="var(--text-secondary)" />
                     <KVCard label="Hostname" value={selectedAgent.identity.hostname || 'localhost'} icon={Radio} color="var(--text-secondary)" />
@@ -986,8 +1023,8 @@ export function AgentsView() {
                       onChange={(v) => handleConfigChange('model', v)}
                       type="select"
                       options={[
-                        'claude-sonnet-4-6',
                         'claude-opus-4-6',
+                        'claude-sonnet-4-6',
                         'claude-haiku-4-5-20251001',
                         'gpt-5.2',
                         'gpt-5-mini',

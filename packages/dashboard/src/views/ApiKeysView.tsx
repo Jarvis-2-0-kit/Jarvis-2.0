@@ -58,6 +58,7 @@ export function ApiKeysView() {
   const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
   const [newKey, setNewKey] = useState({ name: '', provider: 'anthropic', key: '' });
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const fetchKeys = useCallback(async () => {
@@ -99,6 +100,7 @@ export function ApiKeysView() {
 
   const handleAddKey = async () => {
     if (!newKey.name || !newKey.key) return;
+    setError(null);
     try {
       await gateway.request('apikeys.add', {
         name: newKey.name,
@@ -110,19 +112,20 @@ export function ApiKeysView() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
       void fetchKeys();
-    } catch {
-      // Save locally to NAS config
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setError(`Failed to save key: ${(err as Error).message}`);
+      setTimeout(() => setError(null), 5000);
     }
   };
 
   const handleDeleteKey = async (keyId: string) => {
+    setError(null);
     try {
       await gateway.request('apikeys.delete', { id: keyId });
       void fetchKeys();
-    } catch {
-      setKeys(prev => prev.filter(k => k.id !== keyId));
+    } catch (err) {
+      setError(`Failed to delete key: ${(err as Error).message}`);
+      setTimeout(() => setError(null), 5000);
     }
   };
 
@@ -196,6 +199,26 @@ export function ApiKeysView() {
           </button>
         </div>
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '8px 14px',
+          background: 'rgba(255,60,60,0.06)',
+          border: '1px solid rgba(255,60,60,0.3)',
+          borderRadius: 6,
+          marginBottom: 10,
+          fontSize: 10,
+          fontFamily: 'var(--font-mono)',
+          color: 'var(--red-bright)',
+        }}>
+          <XCircle size={14} />
+          {error}
+        </div>
+      )}
 
       {/* Security notice */}
       <div style={{
