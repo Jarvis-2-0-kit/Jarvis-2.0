@@ -112,7 +112,7 @@ export class AgentRunner {
     this.sessions = new SessionManager(config.nasMountPath, config.agentId);
     this.nats = new NatsHandler({
       agentId: config.agentId,
-      role: config.role as 'dev' | 'marketing',
+      role: config.role as 'orchestrator' | 'dev' | 'marketing',
       natsUrl: config.natsUrl,
       natsUrlThunderbolt: config.natsUrlThunderbolt,
       capabilities: config.capabilities,

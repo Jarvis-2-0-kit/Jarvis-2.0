@@ -611,6 +611,12 @@ function MetricCard({ icon, title, color, mainValue, mainLabel, bar, items }: {
   );
 }
 
+const AGENT_DISPLAY_NAMES: Record<string, string> = {
+  jarvis: 'JARVIS',
+  'agent-alpha': 'SMITH',
+  'agent-beta': 'JOHNY',
+};
+
 function AgentCard({ agent, storeAgent }: {
   agent: { id: string; role: string; status: string; alive: boolean; activeTask: string | null; lastHeartbeat?: number };
   storeAgent?: { identity: { agentId: string; role: string; machineId: string; hostname: string }; status: string; completedTasks: number; failedTasks: number; lastHeartbeat: number };
@@ -640,7 +646,7 @@ function AgentCard({ agent, storeAgent }: {
           letterSpacing: 2,
           color: 'var(--text-white)',
         }}>
-          {agent.id.toUpperCase()}
+          {AGENT_DISPLAY_NAMES[agent.id] ?? agent.id.toUpperCase()}
         </span>
         <span style={{
           fontSize: 9,

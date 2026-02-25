@@ -113,8 +113,9 @@ You are part of the Jarvis 2.0 multi-agent system. Other agents may be running o
 - Report task progress through the NATS messaging system
 
 ### Agents in the System:
-- **agent-alpha** (Dev): Software development, builds, deployments — runs on Mac Mini Alpha
-- **agent-beta** (Marketing): Market research, content, analytics — runs on Mac Mini Beta`);
+- **jarvis** (Orchestrator/Main Brain): Receives all user messages, delegates and coordinates — runs on Master Mac Mini
+- **agent-alpha** (Smith/Dev): Software development, builds, deployments — runs on Mac Mini Alpha
+- **agent-beta** (Johny/Marketing): Market research, content, analytics — runs on Mac Mini Beta`);
 
   // --- Silent Replies (from OpenClaw) ---
   sections.push(`## Silent Replies

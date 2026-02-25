@@ -1,8 +1,9 @@
+import { buildOrchestratorPrompt } from './templates/orchestrator.js';
 import { buildDevAgentPrompt } from './templates/dev-agent.js';
 import { buildMarketingAgentPrompt } from './templates/marketing-agent.js';
 import { buildCoreSections } from './templates/core-sections.js';
 
-export type AgentRole = 'dev' | 'marketing';
+export type AgentRole = 'orchestrator' | 'dev' | 'marketing';
 export type ThinkLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high';
 
 export interface PromptContext {
@@ -18,6 +19,7 @@ export interface PromptContext {
 }
 
 const TEMPLATE_MAP: Record<AgentRole, (ctx: PromptContext) => string> = {
+  orchestrator: buildOrchestratorPrompt,
   dev: buildDevAgentPrompt,
   marketing: buildMarketingAgentPrompt,
 };
@@ -37,6 +39,7 @@ export function buildSystemPrompt(context: PromptContext): string {
   return `${rolePrompt}\n\n${coreSections}`;
 }
 
+export { buildOrchestratorPrompt } from './templates/orchestrator.js';
 export { buildDevAgentPrompt } from './templates/dev-agent.js';
 export { buildMarketingAgentPrompt } from './templates/marketing-agent.js';
 export { buildCoreSections } from './templates/core-sections.js';

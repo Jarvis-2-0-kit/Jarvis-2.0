@@ -59,11 +59,18 @@ interface AgentCapabilities {
 type AgentTab = 'overview' | 'tools' | 'skills' | 'activity' | 'config';
 
 const ROLE_COLORS: Record<string, string> = {
+  orchestrator: 'var(--amber)',
   dev: 'var(--cyan-bright)',
   marketing: 'var(--purple)',
   ops: 'var(--amber)',
   research: 'var(--green-bright)',
   default: 'var(--text-secondary)',
+};
+
+const AGENT_NAMES: Record<string, string> = {
+  jarvis: 'JARVIS',
+  'agent-alpha': 'SMITH',
+  'agent-beta': 'JOHNY',
 };
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string; Icon: typeof Play }> = {
@@ -438,7 +445,7 @@ export function AgentsView() {
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
                     }}>
-                      {agentId.replace('agent-', '').toUpperCase()}
+                      {AGENT_NAMES[agentId] ?? agentId.toUpperCase()}
                     </div>
                     <div style={{
                       fontSize: 8,
@@ -502,7 +509,7 @@ export function AgentsView() {
                     letterSpacing: 2,
                     color: selectedStatus.color,
                   }}>
-                    {selectedAgentId!.replace('agent-', '').toUpperCase()}
+                    {AGENT_NAMES[selectedAgentId!] ?? selectedAgentId!.toUpperCase()}
                   </span>
                   <span style={{
                     fontSize: 8, padding: '2px 8px', borderRadius: 3,

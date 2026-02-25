@@ -92,6 +92,7 @@ const spotifyClientSecret = process.env['SPOTIFY_CLIENT_SECRET'];
 
 // Capability sets per role
 const CAPABILITIES: Record<string, string[]> = {
+  orchestrator: ['code', 'build', 'deploy', 'browser', 'exec', 'file', 'web', 'app-store', 'research', 'social-media', 'content', 'analytics', 'computer-use', 'ssh', 'imessage', 'spotify', 'home-assistant', 'cron'],
   dev: ['code', 'build', 'deploy', 'browser', 'exec', 'file', 'web', 'app-store', 'computer-use', 'ssh', 'imessage', 'spotify', 'home-assistant', 'cron'],
   marketing: ['research', 'social-media', 'content', 'analytics', 'browser', 'web', 'file', 'computer-use', 'ssh', 'imessage', 'spotify', 'home-assistant', 'cron'],
 };

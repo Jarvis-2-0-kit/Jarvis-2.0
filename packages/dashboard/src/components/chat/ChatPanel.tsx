@@ -36,8 +36,9 @@ interface MessageGroup {
 
 const SENDER_CONFIG: Record<string, { label: string; color: string; icon: typeof Bot; bg: string }> = {
   'user': { label: 'YOU', color: 'var(--cyan-bright)', icon: User, bg: 'rgba(0,200,255,0.06)' },
-  'agent-alpha': { label: 'ALPHA', color: 'var(--green-bright)', icon: Bot, bg: 'rgba(0,255,65,0.04)' },
-  'agent-beta': { label: 'BETA', color: '#c084fc', icon: Bot, bg: 'rgba(192,132,252,0.04)' },
+  'jarvis': { label: 'JARVIS', color: 'var(--amber)', icon: Bot, bg: 'rgba(251,191,36,0.06)' },
+  'agent-alpha': { label: 'SMITH', color: 'var(--green-bright)', icon: Bot, bg: 'rgba(0,255,65,0.04)' },
+  'agent-beta': { label: 'JOHNY', color: '#c084fc', icon: Bot, bg: 'rgba(192,132,252,0.04)' },
   'system': { label: 'SYSTEM', color: '#fbbf24', icon: Cpu, bg: 'rgba(251,191,36,0.04)' },
   'gateway': { label: 'GATEWAY', color: '#60a5fa', icon: Terminal, bg: 'rgba(96,165,250,0.04)' },
 };
@@ -77,7 +78,7 @@ export function ChatPanel() {
   const sendChat = useGatewayStore((s) => s.sendChat);
   const agents = useGatewayStore((s) => s.agents);
   const [input, setInput] = useState('');
-  const [target, setTarget] = useState<'all' | 'agent-alpha' | 'agent-beta'>('all');
+  const [target, setTarget] = useState<'all' | 'jarvis' | 'agent-alpha' | 'agent-beta'>('jarvis');
   const [showCommands, setShowCommands] = useState(false);
   const [isTyping, setIsTyping] = useState<Record<string, boolean>>({});
   const [showScrollDown, setShowScrollDown] = useState(false);
@@ -119,7 +120,7 @@ export function ChatPanel() {
     const lastMsg = chatMessages[chatMessages.length - 1];
     if (lastMsg?.from === 'user') {
       // Show typing for the target agent
-      const typingAgent = target === 'all' ? 'agent-alpha' : target;
+      const typingAgent = target === 'all' ? 'jarvis' : target;
       setIsTyping((prev) => ({ ...prev, [typingAgent]: true }));
       const timer = setTimeout(() => {
         setIsTyping((prev) => ({ ...prev, [typingAgent]: false }));
@@ -214,7 +215,7 @@ export function ChatPanel() {
         </div>
 
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
-          {(['all', 'agent-alpha', 'agent-beta'] as const).map((t) => (
+          {(['all', 'jarvis', 'agent-alpha', 'agent-beta'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTarget(t)}
@@ -230,7 +231,7 @@ export function ChatPanel() {
                 transition: 'all 0.15s ease',
               }}
             >
-              {t === 'all' ? 'ALL' : t === 'agent-alpha' ? 'α' : 'β'}
+              {t === 'all' ? 'ALL' : t === 'jarvis' ? 'J' : t === 'agent-alpha' ? 'S' : 'JH'}
             </button>
           ))}
         </span>
@@ -361,7 +362,7 @@ export function ChatPanel() {
           value={input}
           onChange={(e) => handleInputChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={`Message ${target === 'all' ? 'all agents' : target === 'agent-alpha' ? 'Alpha' : 'Beta'}... (/ for commands)`}
+          placeholder={`Message ${target === 'all' ? 'all agents' : target === 'jarvis' ? 'Jarvis' : target === 'agent-alpha' ? 'Smith' : 'Johny'}... (/ for commands)`}
           rows={1}
           style={{
             flex: 1,

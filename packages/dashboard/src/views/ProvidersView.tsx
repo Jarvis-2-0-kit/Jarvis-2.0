@@ -186,15 +186,13 @@ export function ProvidersView() {
     setAuthSaving(true);
     setAuthSaved(false);
     try {
-      await gateway.request('config.set', {
-        agentId: 'agent-alpha',
-        config: { authMode: mode },
-      });
-      // Also save for agent-beta
-      await gateway.request('config.set', {
-        agentId: 'agent-beta',
-        config: { authMode: mode },
-      });
+      // Save for all agents
+      for (const agentId of ['jarvis', 'agent-alpha', 'agent-beta']) {
+        await gateway.request('config.set', {
+          agentId,
+          config: { authMode: mode },
+        });
+      }
       setAuthSaved(true);
       setTimeout(() => setAuthSaved(false), 3000);
     } catch (err) {

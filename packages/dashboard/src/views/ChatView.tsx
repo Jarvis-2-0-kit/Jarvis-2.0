@@ -57,8 +57,9 @@ interface MsgGroup {
 
 const SENDER_CFG: Record<string, { label: string; color: string; icon: typeof Bot; bg: string }> = {
   user:          { label: 'YOU',     color: 'var(--cyan-bright)',  icon: User,     bg: 'rgba(0,200,255,0.06)' },
-  'agent-alpha': { label: 'ALPHA',   color: 'var(--green-bright)', icon: Bot,      bg: 'rgba(0,255,65,0.04)' },
-  'agent-beta':  { label: 'BETA',    color: '#c084fc',             icon: Bot,      bg: 'rgba(192,132,252,0.04)' },
+  jarvis:        { label: 'JARVIS',  color: 'var(--amber)',        icon: Bot,      bg: 'rgba(251,191,36,0.06)' },
+  'agent-alpha': { label: 'SMITH',   color: 'var(--green-bright)', icon: Bot,      bg: 'rgba(0,255,65,0.04)' },
+  'agent-beta':  { label: 'JOHNY',   color: '#c084fc',             icon: Bot,      bg: 'rgba(192,132,252,0.04)' },
   system:        { label: 'SYSTEM',  color: '#fbbf24',             icon: Cpu,      bg: 'rgba(251,191,36,0.04)' },
   gateway:       { label: 'GATEWAY', color: '#60a5fa',             icon: Terminal, bg: 'rgba(96,165,250,0.04)' },
 };
@@ -98,12 +99,12 @@ export function ChatView() {
 
   // Streaming
   const [streamText, setStreamText] = useState<string | null>(null);
-  const [streamFrom, setStreamFrom] = useState<string>('agent-alpha');
+  const [streamFrom, setStreamFrom] = useState<string>('jarvis');
   const [isAgentRunning, setIsAgentRunning] = useState(false);
 
   // Input
   const [input, setInput] = useState('');
-  const [target, setTarget] = useState<'all' | 'agent-alpha' | 'agent-beta'>('agent-alpha');
+  const [target, setTarget] = useState<'all' | 'jarvis' | 'agent-alpha' | 'agent-beta'>('jarvis');
   const [showCmds, setShowCmds] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -286,7 +287,7 @@ export function ChatView() {
         setIsAgentRunning(false);
       } else {
         setStreamText(data.text);
-        setStreamFrom(data.from ?? 'agent-alpha');
+        setStreamFrom(data.from ?? 'jarvis');
         setIsAgentRunning(true);
       }
     };
@@ -643,7 +644,7 @@ export function ChatView() {
 
             <div style={{ width: 1, height: 16, background: 'var(--border-dim)' }} />
 
-            {(['all', 'agent-alpha', 'agent-beta'] as const).map((t) => (
+            {(['all', 'jarvis', 'agent-alpha', 'agent-beta'] as const).map((t) => (
               <button
                 key={t}
                 onClick={() => setTarget(t)}
@@ -656,7 +657,7 @@ export function ChatView() {
                   fontFamily: 'var(--font-ui)', fontWeight: 600, letterSpacing: 1,
                 }}
               >
-                {t === 'all' ? 'ALL' : t === 'agent-alpha' ? 'ALPHA' : 'BETA'}
+                {t === 'all' ? 'ALL' : t === 'jarvis' ? 'JARVIS' : t === 'agent-alpha' ? 'SMITH' : 'JOHNY'}
               </button>
             ))}
           </div>
@@ -824,7 +825,7 @@ export function ChatView() {
             placeholder={
               !connected
                 ? 'Disconnected...'
-                : `Message ${target === 'all' ? 'all agents' : target === 'agent-alpha' ? 'Alpha' : 'Beta'}... (/ for commands)`
+                : `Message ${target === 'all' ? 'all agents' : target === 'jarvis' ? 'Jarvis' : target === 'agent-alpha' ? 'Smith' : 'Johny'}... (/ for commands)`
             }
             disabled={!connected}
             rows={1}

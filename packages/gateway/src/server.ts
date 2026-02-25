@@ -33,6 +33,8 @@ import { DependencyOrchestrator } from './orchestration/dependency-orchestrator.
 
 const log = createLogger('gateway:server');
 
+const ALL_AGENTS = ['jarvis', 'agent-alpha', 'agent-beta'] as const;
+
 export interface GatewayConfig {
   port: number;
   host: string;
@@ -429,8 +431,8 @@ export class GatewayServer {
       this.persistChatMessage(sessionId, msg);
 
       // Route to the appropriate agent via NATS
-      // Default to agent-alpha if no specific target or 'all' - avoids duplicate processing
-      const target = (!msg.to || msg.to === 'all') ? 'agent-alpha' : msg.to;
+      // Default to jarvis (orchestrator) if no specific target or 'all'
+      const target = (!msg.to || msg.to === 'all') ? 'jarvis' : msg.to;
       await this.nats.publish(NatsSubjects.chat(target), msg);
 
       // Broadcast to dashboard for display
@@ -454,9 +456,10 @@ export class GatewayServer {
 
     this.protocol.registerMethod('chat.abort', async (params) => {
       const { sessionId } = params as { sessionId: string };
-      // Broadcast abort to agents
-      await this.nats.publish(NatsSubjects.chat('agent-alpha'), { type: 'abort', sessionId });
-      await this.nats.publish(NatsSubjects.chat('agent-beta'), { type: 'abort', sessionId });
+      // Broadcast abort to all agents
+      for (const id of ALL_AGENTS) {
+        await this.nats.publish(NatsSubjects.chat(id), { type: 'abort', sessionId });
+      }
       return { success: true };
     });
 
@@ -1154,7 +1157,7 @@ export class GatewayServer {
 
   private setupNatsSubscriptions(): void {
     // Agent status updates
-    for (const agentId of ['agent-alpha', 'agent-beta']) {
+    for (const agentId of ALL_AGENTS) {
       this.nats.subscribe(NatsSubjects.agentStatus(agentId), (data) => {
         const raw = data as Record<string, unknown>;
         let state: AgentState;
@@ -1290,7 +1293,7 @@ export class GatewayServer {
     });
 
     // Direct messages between agents (subscribe for both known agents)
-    for (const agentId of ['agent-alpha', 'agent-beta']) {
+    for (const agentId of ALL_AGENTS) {
       this.nats.subscribe(NatsSubjects.agentDM(agentId), (data) => {
         const msg = data as { from?: string; to?: string; content?: string; timestamp?: number };
         log.info(`Agent DM: ${msg.from ?? 'unknown'} → ${agentId}: ${(msg.content ?? '').slice(0, 80)}`);
@@ -1322,7 +1325,7 @@ export class GatewayServer {
       outputTokens: number;
     }> = [];
 
-    for (const agentId of ['agent-alpha', 'agent-beta']) {
+    for (const agentId of ALL_AGENTS) {
       try {
         const sessDir = this.nas.sessionsDir(agentId);
         if (!existsSync(sessDir)) continue;
@@ -1385,7 +1388,7 @@ export class GatewayServer {
     messages: Array<{ role: string; content: string; timestamp: number }>;
     usage: { totalTokens: number; inputTokens: number; outputTokens: number };
   } | null {
-    for (const agentId of ['agent-alpha', 'agent-beta']) {
+    for (const agentId of ALL_AGENTS) {
       try {
         const filePath = join(this.nas.sessionsDir(agentId), `${sessionId}.jsonl`);
         if (!existsSync(filePath)) continue;
@@ -2890,16 +2893,16 @@ export class GatewayServer {
               const chatMsg: ChatMessage = {
                 id: shortId(),
                 from: 'user',
-                to: 'agent-alpha',
+                to: 'jarvis',
                 content: `[WhatsApp from ${pushName}]: ${text}`,
                 timestamp: Date.now(),
                 metadata: { source: 'whatsapp', whatsappJid: from, sessionId, language: lang },
               };
 
               this.persistChatMessage(sessionId, chatMsg);
-              await this.nats.publish(NatsSubjects.chat('agent-alpha'), { ...chatMsg, sessionId });
+              await this.nats.publish(NatsSubjects.chat('jarvis'), { ...chatMsg, sessionId });
               this.protocol.broadcast('chat.message', chatMsg);
-              log.info(`WhatsApp → agent-alpha: "${text.substring(0, 80)}" (session: ${sessionId})`);
+              log.info(`WhatsApp → jarvis: "${text.substring(0, 80)}" (session: ${sessionId})`);
             }
           }
         }

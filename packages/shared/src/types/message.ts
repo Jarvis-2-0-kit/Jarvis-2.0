@@ -27,8 +27,8 @@ export type AgentMessage = z.infer<typeof AgentMessage>;
 
 export const ChatMessage = z.object({
   id: z.string(),
-  from: z.enum(['user', 'agent-alpha', 'agent-beta', 'system']),
-  to: z.enum(['user', 'agent-alpha', 'agent-beta', 'all']),
+  from: z.enum(['user', 'jarvis', 'agent-alpha', 'agent-beta', 'system']),
+  to: z.enum(['user', 'jarvis', 'agent-alpha', 'agent-beta', 'all']),
   content: z.string(),
   timestamp: z.number(),
   metadata: z.record(z.unknown()).optional(),

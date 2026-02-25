@@ -1,8 +1,15 @@
 import { useGatewayStore } from '../../store/gateway-store.js';
 
 const ROLE_LABELS: Record<string, string> = {
+  orchestrator: 'ORCHESTRATOR',
   dev: 'DEVELOPER',
   marketing: 'MARKETING',
+};
+
+const AGENT_NAMES: Record<string, string> = {
+  jarvis: 'JARVIS',
+  'agent-alpha': 'SMITH',
+  'agent-beta': 'JOHNY',
 };
 
 const STATUS_LABELS: Record<string, { label: string; class: string }> = {
@@ -61,7 +68,7 @@ export function AgentPanel() {
                     letterSpacing: 1,
                     color: 'var(--green-bright)',
                   }}>
-                    {agent.identity.agentId === 'agent-alpha' ? 'ALPHA' : 'BETA'}
+                    {AGENT_NAMES[agent.identity.agentId] ?? agent.identity.agentId.toUpperCase()}
                   </span>
                   <span style={{
                     fontSize: 10,
