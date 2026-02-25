@@ -319,19 +319,35 @@ ok "Storage lokalny"
 # ═══════════════════════════════════════════════════════════════════
 step "8/8  Uruchamianie"
 
-# Websockify (VNC proxy: 6080 -> 5900)
-if command -v websockify &>/dev/null; then
-  pkill -f "websockify.*6080" 2>/dev/null || true
+# Websockify port per agent: 6080 alpha, 6081 beta
+if [[ "$AGENT_ID" == "agent-beta" ]]; then
+  WSOCK_PORT=6081
+else
+  WSOCK_PORT=6080
+fi
+
+# Websockify (VNC proxy: $WSOCK_PORT -> 5900)
+# Szukaj websockify binarki (pip3 moze zainstalowac poza PATH)
+_find_wsock() {
+  command -v websockify 2>/dev/null && return
+  python3 -c "import shutil; p=shutil.which('websockify'); p and print(p)" 2>/dev/null && return
+  for _p in "$HOME"/Library/Python/*/bin/websockify; do [[ -x "$_p" ]] && echo "$_p" && return; done
+  echo ""
+}
+WSOCK_BIN=$(_find_wsock)
+
+if [[ -n "$WSOCK_BIN" ]]; then
+  pkill -f "websockify.*${WSOCK_PORT}" 2>/dev/null || true
   sleep 1
-  nohup websockify 6080 localhost:5900 >> /tmp/jarvis-websockify.log 2>&1 &
+  nohup "$WSOCK_BIN" "$WSOCK_PORT" localhost:5900 >> /tmp/jarvis-websockify.log 2>&1 &
   sleep 1
-  if lsof -i :6080 -P -n 2>/dev/null | grep -q LISTEN; then
-    ok "Websockify (port 6080 -> VNC 5900)"
+  if lsof -i ":${WSOCK_PORT}" -P -n 2>/dev/null | grep -q LISTEN; then
+    ok "Websockify (port ${WSOCK_PORT} -> VNC 5900)"
   else
-    warn "Websockify nie startowal. Uruchom: websockify 6080 localhost:5900"
+    warn "Websockify nie startowal. Uruchom: $WSOCK_BIN ${WSOCK_PORT} localhost:5900"
   fi
 else
-  warn "Brak websockify - zainstaluj i uruchom recznie"
+  warn "Brak websockify - zainstaluj: pip3 install websockify"
 fi
 
 # Agent Runtime
@@ -372,7 +388,7 @@ echo -e "${GREEN}║${RESET}  WiFi:     ${MY_WIFI_IP:-brak}                     
 echo -e "${GREEN}║${RESET}  USB-C:    ${MY_USB_IP:-brak}                                  ${GREEN}║${RESET}"
 echo -e "${GREEN}║${RESET}  Master:   ${MASTER_IP}                                   ${GREEN}║${RESET}"
 echo -e "${GREEN}║${RESET}  NATS:     ${NATS_PRIMARY}                      ${GREEN}║${RESET}"
-echo -e "${GREEN}║${RESET}  VNC:      port 6080                                     ${GREEN}║${RESET}"
+echo -e "${GREEN}║${RESET}  VNC:      port ${WSOCK_PORT}                                     ${GREEN}║${RESET}"
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${RESET}"
 echo ""
 echo -e "  ${YELLOW}CO DALEJ:${RESET}"

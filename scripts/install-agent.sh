@@ -22,7 +22,7 @@ BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
 JARVIS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 AGENT_ID=""; ROLE=""; MASTER_HOST=""
 NAS_MOUNT="/Volumes/JarvisNAS/jarvis"
-AUTH_TOKEN=""; VNC_PORT=5900; WSOCK_PORT=6080
+AUTH_TOKEN=""; VNC_PORT=5900; WSOCK_PORT=6080  # Updated after role selection
 
 # ─── Parsowanie argumentow (opcjonalne) ─────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -167,6 +167,9 @@ fi
 [[ -z "$ROLE" && "$AGENT_ID" == "agent-alpha" ]] && ROLE="dev"
 [[ -z "$ROLE" && "$AGENT_ID" == "agent-beta" ]] && ROLE="marketing"
 
+# Websockify port per agent: 6080 alpha, 6081 beta
+[[ "$AGENT_ID" == "agent-beta" ]] && WSOCK_PORT=6081 || WSOCK_PORT=6080
+
 ROLE_LABEL=""; [[ "$ROLE" == "dev" ]] && ROLE_LABEL="DEVELOPER" || ROLE_LABEL="MARKETING"
 
 echo ""
@@ -245,10 +248,31 @@ elif [[ "$ROLE" == "marketing" ]]; then
 fi
 
 # --- Websockify ---
-if check_command websockify; then ok "websockify"; else
+WSOCK_BIN=""
+# Szukaj websockify w roznych lokalizacjach
+_find_websockify() {
+  command -v websockify 2>/dev/null && return
+  python3 -c "import shutil; p=shutil.which('websockify'); p and print(p)" 2>/dev/null && return
+  for _p in "$HOME"/Library/Python/*/bin/websockify; do
+    [[ -x "$_p" ]] && echo "$_p" && return
+  done
+  [[ -x /opt/homebrew/bin/websockify ]] && echo /opt/homebrew/bin/websockify && return
+  echo ""
+}
+
+WSOCK_BIN=$(_find_websockify)
+if [[ -n "$WSOCK_BIN" ]]; then
+  ok "websockify ($WSOCK_BIN)"
+else
   echo -e "  ${DIM}Instalowanie websockify...${RESET}"
   pip3 install websockify 2>/dev/null || brew install websockify 2>/dev/null || warn "Zainstaluj websockify recznie"
-  check_command websockify && ok "websockify"
+  # Znajdz binarkę po instalacji
+  WSOCK_BIN=$(_find_websockify)
+  if [[ -n "$WSOCK_BIN" ]]; then
+    ok "websockify zainstalowany ($WSOCK_BIN)"
+  else
+    warn "websockify zainstalowany ale nie znaleziony w PATH"
+  fi
 fi
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -501,8 +525,8 @@ PEOF
 ok "Agent launchd service"
 
 # --- LaunchAgent: Websockify ---
-if check_command websockify; then
-  WSOCK_BIN="$(which websockify)"
+[[ -z "${WSOCK_BIN:-}" ]] && WSOCK_BIN=$(_find_websockify)
+if [[ -n "$WSOCK_BIN" ]]; then
   WSOCK_PLIST="$LAUNCH_DIR/com.jarvis.websockify.plist"
   cat > "$WSOCK_PLIST" << PEOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -537,7 +561,10 @@ else
 
   # Probuj wlaczyc automatycznie
   echo -e "  ${DIM}Probuje wlaczyc automatycznie...${RESET}"
-  sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null && ok "Screen Sharing wlaczony automatycznie" || true
+  sudo launchctl load -w /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null && ok "Screen Sharing wlaczony automatycznie" || {
+    # Fallback: bootstrap system (nowsze macOS)
+    sudo launchctl bootstrap system /System/Library/LaunchDaemons/com.apple.screensharing.plist 2>/dev/null && ok "Screen Sharing wlaczony (bootstrap)" || true
+  }
 fi
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -546,15 +573,16 @@ fi
 step "6/6  Uruchamianie agenta"
 
 # Websockify
-if check_command websockify; then
+[[ -z "${WSOCK_BIN:-}" ]] && WSOCK_BIN=$(_find_websockify)
+if [[ -n "$WSOCK_BIN" ]]; then
   pkill -f "websockify.*${WSOCK_PORT}" 2>/dev/null || true
   sleep 1
-  nohup websockify "$WSOCK_PORT" "localhost:${VNC_PORT}" >> "$NAS_MOUNT/logs/websockify.log" 2>&1 &
+  nohup "$WSOCK_BIN" "$WSOCK_PORT" "localhost:${VNC_PORT}" >> "$NAS_MOUNT/logs/websockify.log" 2>&1 &
   sleep 1
   if lsof -i ":${WSOCK_PORT}" -P -n 2>/dev/null | grep -q LISTEN; then
     ok "Websockify dziala (port ${WSOCK_PORT})"
   else
-    warn "Websockify nie startowal - uruchom recznie: websockify ${WSOCK_PORT} localhost:${VNC_PORT}"
+    warn "Websockify nie startowal - uruchom recznie: $WSOCK_BIN ${WSOCK_PORT} localhost:${VNC_PORT}"
   fi
 fi
 
