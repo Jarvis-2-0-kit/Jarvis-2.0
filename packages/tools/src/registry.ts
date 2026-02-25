@@ -14,6 +14,8 @@ import { SpotifyTool, type SpotifyConfig } from './integrations/spotify.js';
 import { HomeAssistantTool, type HomeAssistantConfig } from './integrations/homeassistant.js';
 import { CronSchedulerTool, type CronSchedulerConfig } from './integrations/cron-scheduler.js';
 import { AppleCalendarTool, type AppleCalendarConfig } from './integrations/apple-calendar.js';
+import { SocialTool, SocialAnalyticsTool, type SocialToolConfig } from './social/social-tool.js';
+import { SocialSchedulerTool } from './social/scheduler.js';
 
 const log = createLogger('tools:registry');
 
@@ -32,6 +34,8 @@ export interface ToolRegistryConfig {
   enableHomeAssistant?: boolean;
   enableCron?: boolean;
   enableCalendar?: boolean;
+  /** Social media */
+  enableSocial?: boolean;
   braveApiKey?: string;
   perplexityApiKey?: string;
   natsPublishFn?: (subject: string, data: string) => Promise<void>;
@@ -45,6 +49,7 @@ export interface ToolRegistryConfig {
   homeAssistantConfig?: HomeAssistantConfig;
   cronConfig?: CronSchedulerConfig;
   calendarConfig?: AppleCalendarConfig;
+  socialConfig?: SocialToolConfig;
 }
 
 /**
@@ -114,6 +119,13 @@ export class ToolRegistry {
 
     if (config.enableCalendar && process.platform === 'darwin') {
       this.register(new AppleCalendarTool(config.calendarConfig));
+    }
+
+    // ── Social Media ──
+    if (config.enableSocial && config.socialConfig) {
+      this.register(new SocialTool(config.socialConfig));
+      this.register(new SocialAnalyticsTool(config.socialConfig));
+      this.register(new SocialSchedulerTool());
     }
 
     log.info(`Initialized with ${this.tools.size} tools: ${Array.from(this.tools.keys()).join(', ')}`);

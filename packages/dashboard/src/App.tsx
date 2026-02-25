@@ -40,6 +40,7 @@ const InstancesView = lazy(() => import('./views/InstancesView.js').then((m) => 
 const OrchestratorView = lazy(() => import('./views/OrchestratorView.js').then((m) => ({ default: m.OrchestratorView })));
 const ConfigView = lazy(() => import('./views/ConfigView.js').then((m) => ({ default: m.ConfigView })));
 const DebugView = lazy(() => import('./views/DebugView.js').then((m) => ({ default: m.DebugView })));
+const SocialMediaView = lazy(() => import('./views/SocialMediaView.js').then((m) => ({ default: m.SocialMediaView })));
 
 export function App() {
   const init = useGatewayStore((s) => s.init);
@@ -92,6 +93,7 @@ export function App() {
                 <Route path="/instances" element={<InstancesView />} />
                 <Route path="/orchestrator" element={<OrchestratorView />} />
                 <Route path="/config" element={<ConfigView />} />
+                <Route path="/social" element={<SocialMediaView />} />
                 <Route path="/debug" element={<DebugView />} />
               </Routes>
             </Suspense>

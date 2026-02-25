@@ -36,6 +36,7 @@ import {
   Network,
   Grid3X3,
   X,
+  Share2,
 } from 'lucide-react';
 
 // ─── Types ──────────────────────────────────────────
@@ -90,6 +91,13 @@ const MENU_GROUPS: NavGroup[] = [
       { to: '/discord', icon: Hash, label: 'Discord' },
       { to: '/slack', icon: MessagesSquare, label: 'Slack' },
       { to: '/imessage', icon: Monitor, label: 'iMessage' },
+    ],
+  },
+  {
+    label: 'Social Media',
+    color: '#f472b6',
+    items: [
+      { to: '/social', icon: Share2, label: 'Social Media' },
     ],
   },
   {

@@ -90,6 +90,13 @@ const spotifyRefresh = process.env['SPOTIFY_REFRESH_TOKEN'];
 const spotifyClientId = process.env['SPOTIFY_CLIENT_ID'];
 const spotifyClientSecret = process.env['SPOTIFY_CLIENT_SECRET'];
 
+// Social media API config from env
+const twitterBearerToken = process.env['TWITTER_BEARER_TOKEN'];
+const instagramAccessToken = process.env['INSTAGRAM_ACCESS_TOKEN'];
+const facebookAccessToken = process.env['FACEBOOK_ACCESS_TOKEN'];
+const linkedinAccessToken = process.env['LINKEDIN_ACCESS_TOKEN'];
+const tiktokAccessToken = process.env['TIKTOK_ACCESS_TOKEN'];
+
 // Capability sets per role
 const CAPABILITIES: Record<string, string[]> = {
   orchestrator: ['code', 'build', 'deploy', 'browser', 'exec', 'file', 'web', 'app-store', 'research', 'social-media', 'content', 'analytics', 'computer-use', 'ssh', 'imessage', 'spotify', 'home-assistant', 'cron'],
@@ -122,12 +129,50 @@ async function main(): Promise<void> {
   const enableCron = true; // Always available
   const enableCalendar = process.platform === 'darwin';
 
+  // Social media config — only enable platforms that have credentials
+  const socialConfig = (twitterBearerToken || instagramAccessToken || facebookAccessToken || linkedinAccessToken || tiktokAccessToken) ? {
+    twitter: twitterBearerToken ? {
+      apiKey: process.env['TWITTER_API_KEY'] ?? '',
+      apiSecret: process.env['TWITTER_API_SECRET'] ?? '',
+      accessToken: process.env['TWITTER_ACCESS_TOKEN'] ?? '',
+      accessTokenSecret: process.env['TWITTER_ACCESS_TOKEN_SECRET'] ?? '',
+      bearerToken: twitterBearerToken,
+    } : undefined,
+    instagram: instagramAccessToken ? {
+      accessToken: instagramAccessToken,
+      businessAccountId: process.env['INSTAGRAM_BUSINESS_ACCOUNT_ID'] ?? '',
+    } : undefined,
+    facebook: facebookAccessToken ? {
+      accessToken: facebookAccessToken,
+      pageId: process.env['FACEBOOK_PAGE_ID'] ?? '',
+    } : undefined,
+    linkedin: linkedinAccessToken ? {
+      accessToken: linkedinAccessToken,
+      organizationId: process.env['LINKEDIN_ORGANIZATION_ID'],
+      personUrn: process.env['LINKEDIN_PERSON_URN'],
+    } : undefined,
+    tiktok: tiktokAccessToken ? {
+      accessToken: tiktokAccessToken,
+      openId: process.env['TIKTOK_OPEN_ID'],
+    } : undefined,
+  } : undefined;
+  const enableSocial = !!socialConfig;
+
   const integrations: string[] = [];
   if (enableIMessage) integrations.push('iMessage');
   if (enableSpotify) integrations.push('Spotify' + (spotifyToken ? '(API)' : '(local)'));
   if (enableHomeAssistant) integrations.push('HomeAssistant');
   if (enableCron) integrations.push('Cron');
   if (enableCalendar) integrations.push('Calendar');
+  if (enableSocial) {
+    const platforms: string[] = [];
+    if (socialConfig?.twitter) platforms.push('Twitter');
+    if (socialConfig?.instagram) platforms.push('Instagram');
+    if (socialConfig?.facebook) platforms.push('Facebook');
+    if (socialConfig?.linkedin) platforms.push('LinkedIn');
+    if (socialConfig?.tiktok) platforms.push('TikTok');
+    integrations.push(`Social(${platforms.join(',')})`);
+  }
   log.info(`Integrations: ${integrations.length > 0 ? integrations.join(', ') : 'none'}`);
 
   const tools = new ToolRegistry({
@@ -161,6 +206,8 @@ async function main(): Promise<void> {
     cronConfig: {
       jobsDir: `${nasMount}/cron-jobs`,
     },
+    enableSocial,
+    socialConfig,
   });
 
   // Load model override from NAS config (saved via dashboard)
