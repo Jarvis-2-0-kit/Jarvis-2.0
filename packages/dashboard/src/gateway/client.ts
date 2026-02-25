@@ -33,6 +33,29 @@ export class GatewayClient {
       this.ws.close();
       this.ws = null;
     }
+
+    // If no token yet, try to auto-fetch from localhost /auth/token endpoint
+    if (!this.token) {
+      fetch('/auth/token')
+        .then(r => r.ok ? r.json() : null)
+        .then((data: { token?: string } | null) => {
+          if (data?.token) {
+            this.token = data.token;
+            localStorage.setItem('jarvis_gateway_token', data.token);
+          }
+          this.openWebSocket();
+        })
+        .catch(() => {
+          // Fallback: connect without token (will fail on hardened gateway)
+          this.openWebSocket();
+        });
+      return;
+    }
+
+    this.openWebSocket();
+  }
+
+  private openWebSocket(): void {
     const wsUrl = this.token ? `${this.url}?token=${this.token}` : this.url;
     this.ws = new WebSocket(wsUrl);
 
@@ -160,5 +183,52 @@ export class GatewayClient {
   }
 }
 
-// Singleton instance
-export const gateway = new GatewayClient();
+// Resolve auth token: URL param > localStorage > env var > empty (will fail on hardened gateway)
+function resolveToken(): string {
+  try {
+    // 1. Check URL query param (?token=xxx)
+    const url = new URL(window.location.href);
+    const urlToken = url.searchParams.get('token');
+    if (urlToken) {
+      // Store for reconnections and remove from URL bar
+      localStorage.setItem('jarvis_gateway_token', urlToken);
+      url.searchParams.delete('token');
+      window.history.replaceState({}, '', url.toString());
+      return urlToken;
+    }
+
+    // 2. Check localStorage
+    const storedToken = localStorage.getItem('jarvis_gateway_token');
+    if (storedToken) return storedToken;
+
+    // 3. Check Vite env var (build-time injection)
+    if (typeof import.meta !== 'undefined' && (import.meta as unknown as Record<string, Record<string, string>>).env?.VITE_GATEWAY_TOKEN) {
+      return (import.meta as unknown as Record<string, Record<string, string>>).env.VITE_GATEWAY_TOKEN;
+    }
+  } catch {
+    // Ignore errors in token resolution
+  }
+  return '';
+}
+
+// Singleton instance with auto-resolved token
+export const gateway = new GatewayClient(undefined, resolveToken());
+
+/** Update the auth token (e.g., from a login prompt) and reconnect */
+export function setGatewayToken(token: string): void {
+  localStorage.setItem('jarvis_gateway_token', token);
+  gateway.disconnect();
+  // Re-create connection with new token
+  (gateway as unknown as { token: string }).token = token;
+  gateway.connect();
+}
+
+/** Authenticated fetch wrapper — adds Bearer token to requests to /api/* */
+export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const token = localStorage.getItem('jarvis_gateway_token') || '';
+  const headers = new Headers(init?.headers);
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+  return fetch(input, { ...init, headers });
+}

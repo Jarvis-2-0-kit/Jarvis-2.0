@@ -12,7 +12,13 @@ export type ContentBlock =
   | TextBlock
   | ImageBlock
   | ToolUseBlock
-  | ToolResultBlock;
+  | ToolResultBlock
+  | ThinkingBlock;
+
+export interface ThinkingBlock {
+  type: 'thinking';
+  thinking: string;
+}
 
 export interface TextBlock {
   type: 'text';
@@ -57,8 +63,9 @@ export interface ChatRequest {
 }
 
 export interface ChatChunk {
-  type: 'text_delta' | 'tool_use_start' | 'tool_use_delta' | 'tool_use_end' | 'message_end' | 'error';
+  type: 'text_delta' | 'tool_use_start' | 'tool_use_delta' | 'tool_use_end' | 'message_end' | 'error' | 'thinking_start' | 'thinking_delta' | 'thinking_end';
   text?: string;
+  thinking?: string;
   toolCall?: {
     id: string;
     name: string;

@@ -1,5 +1,5 @@
 import { connect, StringCodec, type NatsConnection, type Subscription } from 'nats';
-import { createLogger, NatsSubjects, HEARTBEAT_INTERVAL, type AgentId, type AgentState, type AgentRole } from '@jarvis/shared';
+import { createLogger, NatsSubjects, HEARTBEAT_INTERVAL, type AgentId, type AgentState, type AgentRole, type ChatStreamDelta } from '@jarvis/shared';
 
 const log = createLogger('agent:nats');
 const sc = StringCodec();
@@ -82,13 +82,23 @@ export class NatsHandler {
     const MAX_RETRIES = 30;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        this.nc = await connect({
+        const natsOpts: Record<string, unknown> = {
           servers,
           name: this.config.agentId,
           reconnect: true,
           maxReconnectAttempts: -1,
           reconnectTimeWait: 2000,
-        });
+        };
+
+        // NATS authentication via env vars
+        if (process.env['NATS_USER'] && process.env['NATS_PASS']) {
+          natsOpts.user = process.env['NATS_USER'];
+          natsOpts.pass = process.env['NATS_PASS'];
+        } else if (process.env['NATS_TOKEN']) {
+          natsOpts.token = process.env['NATS_TOKEN'];
+        }
+
+        this.nc = await connect(natsOpts as Parameters<typeof connect>[0]);
         break;
       } catch (err) {
         if (attempt === MAX_RETRIES) throw err;
@@ -485,11 +495,22 @@ export class NatsHandler {
 
   async sendChatResponse(content: string, metadata?: Record<string, unknown>): Promise<void> {
     await this.publish(NatsSubjects.chatBroadcast, {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       from: this.config.agentId,
+      to: 'user',
       role: this.config.role,
       content,
       timestamp: Date.now(),
       ...metadata,
+    });
+  }
+
+  /** Publish an ephemeral streaming delta (thinking/text/tool_start/done) — not persisted */
+  async sendChatStream(delta: Omit<ChatStreamDelta, 'from' | 'timestamp'>): Promise<void> {
+    await this.publish(NatsSubjects.chatStream, {
+      from: this.config.agentId,
+      ...delta,
+      timestamp: Date.now(),
     });
   }
 

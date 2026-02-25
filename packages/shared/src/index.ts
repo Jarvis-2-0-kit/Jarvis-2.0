@@ -10,5 +10,8 @@ export * from './utils/logger.js';
 export * from './utils/crypto.js';
 export * from './utils/validation.js';
 
+// Security
+export * from './security/index.js';
+
 // Constants
 export * from './constants.js';

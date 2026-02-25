@@ -11,6 +11,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AgentTool, ToolContext, ToolResult } from '../base.js';
 import { createToolResult, createErrorResult } from '../base.js';
+import { getAuditLogger } from '@jarvis/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +22,12 @@ export interface IMessageConfig {
   maxMessages?: number;
   /** Whether to allow sending (default: true) */
   allowSend?: boolean;
+  /** Phone numbers that don't require confirmation */
+  trustedNumbers?: string[];
+  /** Whether to require confirmation for sending (default: true) */
+  requireConfirmation?: boolean;
+  /** Confirmation callback - must return true to allow sending */
+  confirmSend?: (to: string, message: string) => Promise<boolean>;
 }
 
 type IMessageAction = 'send' | 'read' | 'search' | 'unread' | 'conversations';
@@ -30,6 +37,15 @@ type IMessageAction = 'send' | 'read' | 'search' | 'unread' | 'conversations';
 function escapeAppleScript(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
+
+function escapeSqlLike(str: string): string {
+  return str.replace(/'/g, "''").replace(/%/g, '\\%').replace(/_/g, '\\_');
+}
+
+// ─── Input validation ─────────────────────────────────────────────────
+
+const PHONE_NUMBER_PATTERN = /^\+?[\d\s\-\(\)]{7,20}$/;
+const MAX_MESSAGE_LENGTH = 10000;
 
 async function runAppleScript(script: string): Promise<string> {
   try {
@@ -75,7 +91,7 @@ async function readConversation(contact: string, limit: number = 20): Promise<st
     FROM message m
     JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
     JOIN chat c ON cmj.chat_id = c.ROWID
-    WHERE c.chat_identifier LIKE '%${escapeAppleScript(contact)}%'
+    WHERE c.chat_identifier LIKE '%${escapeSqlLike(contact)}%' ESCAPE '\\'
     ORDER BY m.date DESC
     LIMIT ${limit}
   `;
@@ -127,7 +143,6 @@ async function readConversation(contact: string, limit: number = 20): Promise<st
 }
 
 async function searchMessages(query: string, limit: number = 20): Promise<string> {
-  const escapedQuery = escapeAppleScript(query);
   const sqlQuery = `
     SELECT
       m.text,
@@ -136,7 +151,7 @@ async function searchMessages(query: string, limit: number = 20): Promise<string
       datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') as msg_date
     FROM message m
     LEFT JOIN handle h ON m.handle_id = h.ROWID
-    WHERE m.text LIKE '%${escapedQuery}%'
+    WHERE m.text LIKE '%${escapeSqlLike(query)}%' ESCAPE '\\'
     ORDER BY m.date DESC
     LIMIT ${limit}
   `;
@@ -311,6 +326,45 @@ export class IMessageTool implements AgentTool {
         if (!to || !message) {
           return createErrorResult('send action requires "to" and "message" parameters.');
         }
+
+        // Input validation: phone number format
+        if (!PHONE_NUMBER_PATTERN.test(to) && !to.includes('@')) {
+          return createErrorResult(
+            `Invalid recipient "${to}". Must be a phone number (7-20 digits, optional +) or email address.`
+          );
+        }
+
+        // Input validation: message length
+        if (message.length > MAX_MESSAGE_LENGTH) {
+          return createErrorResult(
+            `Message too long (${message.length} chars). Maximum allowed: ${MAX_MESSAGE_LENGTH} characters.`
+          );
+        }
+
+        // Confirmation gate
+        const isTrusted = this.config.trustedNumbers?.includes(to) ?? false;
+        if (this.config.requireConfirmation !== false && !isTrusted) {
+          if (this.config.confirmSend) {
+            const confirmed = await this.config.confirmSend(to, message);
+            if (!confirmed) {
+              return createErrorResult('Message send was rejected by confirmation callback.');
+            }
+          } else {
+            // No callback available — log a warning but proceed
+            getAuditLogger().logEvent('imessage.send.unconfirmed', 'imessage-tool', {
+              to,
+              messageLength: message.length,
+              warning: 'No confirmation callback configured; sending without explicit confirmation.',
+            });
+          }
+        }
+
+        // Audit log the send attempt
+        getAuditLogger().logEvent('imessage.send', 'imessage-tool', {
+          to,
+          messageLength: message.length,
+        });
+
         const service = (params['service'] as 'iMessage' | 'SMS') || 'iMessage';
         const result = await sendMessage(to, message, service);
         return createToolResult(result);

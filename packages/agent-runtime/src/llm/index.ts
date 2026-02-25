@@ -1,6 +1,6 @@
 export type {
   LLMProvider, ChatRequest, ChatResponse, ChatChunk,
-  Message, ContentBlock, TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock,
+  Message, ContentBlock, TextBlock, ImageBlock, ToolUseBlock, ToolResultBlock, ThinkingBlock,
   ToolDefinition, TokenUsage, ModelInfo, UsageAccumulator,
 } from './types.js';
 export { createUsageAccumulator, mergeUsage } from './types.js';

@@ -9,7 +9,7 @@
  */
 
 import { spawn, execSync } from 'node:child_process';
-import { createLogger } from '@jarvis/shared';
+import { createLogger, getAuditLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
 
@@ -39,20 +39,87 @@ export interface ExecSecurityConfig {
 }
 
 const DEFAULT_BLOCKED_PATTERNS = [
-  /\brm\s+-rf\s+\/\s*$/,
-  /\bmkfs\b/,
-  /\bdd\s+if=.*of=\/dev\//,
-  /\b:(){ :|:& };:/,
-  /\bshutdown\b/,
-  /\breboot\b/,
-  /\bsystemctl\s+(stop|disable|mask)\s+/,
-  /\blaunchctl\s+unload\b/,
+  // Destructive file operations (with escape/alias bypass prevention)
+  /(?:^|[;&|`$\(])\s*(?:\\)?r(?:\\)?m\s+.*-[a-z]*r[a-z]*f/i,
+  /(?:^|[;&|`$\(])\s*(?:\\)?r(?:\\)?m\s+-rf\s+\//,
+  /\bmkfs\b/i,
+  /\bdd\s+if=.*of=\/dev\//i,
+  /:()\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;?\s*:/,
+  /\bshutdown\b/i,
+  /\breboot\b/i,
+  /\bsystemctl\s+(stop|disable|mask)\s+/i,
+  /\blaunchctl\s+(unload|bootout)\b/i,
+  // Pipe to shell (curl/wget download & execute)
+  /\b(?:curl|wget)\b.*\|\s*(?:ba)?sh\b/i,
+  /\b(?:curl|wget)\b.*\|\s*(?:z|k|c|fi|da|tc)?sh\b/i,
+  // Dangerous eval/exec
+  /\beval\s+/,
+  /\bexec\s+[^-]/,
+  // Inline code execution in scripting languages
+  /\bpython[23]?\s+-c\b/i,
+  /\bnode\s+-e\b/i,
+  /\bruby\s+-e\b/i,
+  /\bperl\s+-e\b/i,
+  // Fork bombs and resource exhaustion
+  /\bfork\s*\(\s*\)/,
+  /while\s+true.*do.*done/i,
+  // Reverse shells
+  /\/dev\/(tcp|udp)\//i,
+  /\bmkfifo\b/i,
+  /\bnc\s+.*-[a-z]*e\b/i,
+  // Privilege escalation
+  /\bchmod\s+[0-7]*s/i,
+  /\bchmod\s+4755\b/,
+  // History/credential theft
+  /\.bash_history/,
+  /\.ssh\/id_/,
+  /\.gnupg\//,
+  /\/etc\/shadow/,
 ];
 
 const DEFAULT_SAFE_BINS = [
   'cat', 'head', 'tail', 'wc', 'sort', 'uniq', 'grep', 'awk', 'sed',
   'cut', 'tr', 'tee', 'xargs', 'jq', 'yq', 'less', 'more',
 ];
+
+const SAFE_ENV_KEYS = new Set([
+  'PATH', 'HOME', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TERM', 'USER', 'SHELL',
+  'LOGNAME', 'TMPDIR', 'XDG_RUNTIME_DIR', 'DISPLAY', 'COLORTERM',
+  'EDITOR', 'VISUAL', 'PAGER', 'LESS', 'HOSTNAME',
+]);
+
+const BLOCKED_ENV_PATTERNS = [
+  /_API_KEY$/i, /_SECRET$/i, /_TOKEN$/i, /_PASSWORD$/i,
+  /^NATS_/i, /^REDIS_/i, /^ANTHROPIC_/i, /^OPENAI_/i,
+  /^GOOGLE_/i, /^SLACK_/i, /^DISCORD_/i, /^SPOTIFY_/i,
+  /^HASS_/i, /^AWS_/i, /^AZURE_/i, /^GCP_/i,
+];
+
+function filterEnvVars(): Record<string, string> {
+  const env: Record<string, string> = {};
+
+  // Add all safe env vars first
+  for (const key of SAFE_ENV_KEYS) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key] as string;
+    }
+  }
+
+  // Add remaining env vars that don't match blocked patterns
+  for (const [key, value] of Object.entries(process.env)) {
+    if (SAFE_ENV_KEYS.has(key)) continue; // Already added
+    if (value === undefined) continue;
+    const isBlocked = BLOCKED_ENV_PATTERNS.some(pattern => pattern.test(key));
+    if (!isBlocked) {
+      env[key] = value;
+    }
+  }
+
+  // Always force TERM to dumb
+  env['TERM'] = 'dumb';
+
+  return env;
+}
 
 // ─── Background Sessions ─────────────────────────────────────────────
 
@@ -75,7 +142,7 @@ export class ExecTool implements AgentTool {
 
   constructor(securityConfig?: Partial<ExecSecurityConfig>) {
     this.security = {
-      mode: securityConfig?.mode ?? 'full',
+      mode: securityConfig?.mode ?? 'allowlist',
       allowlist: securityConfig?.allowlist ?? [],
       safeBins: securityConfig?.safeBins ?? DEFAULT_SAFE_BINS,
       safeBinTrustedDirs: securityConfig?.safeBinTrustedDirs ?? ['/usr/bin', '/usr/local/bin', '/opt/homebrew/bin'],
@@ -154,6 +221,11 @@ export class ExecTool implements AgentTool {
     for (const pattern of this.security.blockedPatterns ?? []) {
       if (pattern.test(command)) {
         log.warn(`Blocked dangerous command: ${command.slice(0, 100)}`);
+        getAuditLogger().logEvent('security.blocked_command', 'exec-tool', {
+          command: command.slice(0, 500),
+          pattern: pattern.toString(),
+          agentId: context.agentId,
+        });
         return createErrorResult(`Blocked dangerous command pattern. This command is not allowed for safety reasons.`);
       }
     }
@@ -175,8 +247,15 @@ export class ExecTool implements AgentTool {
     }
     // mode === 'full' — allow everything (still blocked patterns checked)
 
+    getAuditLogger().logEvent('exec.command', 'exec-tool', {
+      command: command.slice(0, 500),
+      mode: this.security.mode,
+      cwd,
+      agentId: context.agentId,
+    });
+
     // ─── Build environment ───
-    const env: Record<string, string> = { ...process.env as Record<string, string>, TERM: 'dumb' };
+    const env: Record<string, string> = filterEnvVars();
 
     // PATH prepend
     if (this.security.pathPrepend && this.security.pathPrepend.length > 0) {

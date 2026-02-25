@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useGatewayStore } from '../../store/gateway-store.js';
 import { formatTime } from '../../utils/formatters.js';
+import { gateway } from '../../gateway/client.js';
 
 // --- Types ---
 
@@ -115,19 +116,38 @@ export function ChatPanel() {
     prevMessageCount.current = chatMessages.length;
   }, [chatMessages.length]);
 
-  // Simulate typing indicator
+  // Listen to real stream events for typing state
   useEffect(() => {
-    const lastMsg = chatMessages[chatMessages.length - 1];
-    if (lastMsg?.from === 'user') {
-      // Show typing for the target agent
-      const typingAgent = target === 'all' ? 'jarvis' : target;
-      setIsTyping((prev) => ({ ...prev, [typingAgent]: true }));
-      const timer = setTimeout(() => {
-        setIsTyping((prev) => ({ ...prev, [typingAgent]: false }));
-      }, 2000 + Math.random() * 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [chatMessages.length, target]);
+    const streamHandler = (payload: unknown) => {
+      const data = payload as {
+        from?: string;
+        phase?: 'thinking' | 'text' | 'tool_start' | 'done';
+        done?: boolean;
+      };
+      const agentId = data.from ?? 'jarvis';
+      const phase = data.phase ?? (data.done ? 'done' : 'text');
+      if (phase === 'done') {
+        setIsTyping((prev) => ({ ...prev, [agentId]: false }));
+      } else {
+        setIsTyping((prev) => ({ ...prev, [agentId]: true }));
+      }
+    };
+
+    // Also clear typing when a final message arrives
+    const msgHandler = (payload: unknown) => {
+      const msg = payload as { from?: string };
+      if (msg.from && msg.from !== 'user') {
+        setIsTyping((prev) => ({ ...prev, [msg.from!]: false }));
+      }
+    };
+
+    gateway.on('chat.stream', streamHandler);
+    gateway.on('chat.message', msgHandler);
+    return () => {
+      gateway.off('chat.stream', streamHandler);
+      gateway.off('chat.message', msgHandler);
+    };
+  }, []);
 
   // Scroll detection
   const handleScroll = useCallback(() => {

@@ -7,11 +7,17 @@
  */
 
 import { config as dotenvConfig } from 'dotenv';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Load .env from monorepo root (works whether started from root or packages/agent-runtime)
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const envPath = process.env['DOTENV_CONFIG_PATH'] ?? resolve(__dirname, '..', '..', '..', '.env');
 
 // Load .env but only fill in values that are MISSING or empty.
 // This prevents .env from overriding per-agent CLI env vars like AGENT_ID/AGENT_ROLE
 // while still picking up API keys that may not be set in the shell environment.
-const parsed = dotenvConfig().parsed ?? {};
+const parsed = dotenvConfig({ path: envPath }).parsed ?? {};
 for (const [key, value] of Object.entries(parsed)) {
   if (!process.env[key] || process.env[key] === '') {
     process.env[key] = value;

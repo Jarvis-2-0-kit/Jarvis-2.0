@@ -2,37 +2,50 @@
 <html>
 <head><title>VNC Test</title></head>
 <body style="margin:0; background:#000; color:#0f0; font-family:monospace;">
-<h3 style="padding:10px;">VNC Direct Test — ws://192.168.1.37:6080</h3>
+<h3 style="padding:10px;">VNC Direct Test</h3>
+<div style="padding:10px;">
+  <label>Host: <input id="host" value="192.168.1.37" style="background:#111;color:#0f0;border:1px solid #0f0;"></label>
+  <label>Port: <input id="port" value="6080" style="background:#111;color:#0f0;border:1px solid #0f0;" size="5"></label>
+  <label>Password: <input id="pass" type="password" style="background:#111;color:#0f0;border:1px solid #0f0;"></label>
+  <button onclick="startVNC()" style="background:#0f0;color:#000;border:none;padding:5px 10px;cursor:pointer;">Connect</button>
+</div>
 <div id="log" style="padding:10px; font-size:12px;"></div>
 <div id="vnc" style="width:800px; height:600px; border:1px solid #0f0; margin:10px;"></div>
 <script type="module">
   const log = (msg) => { document.getElementById('log').innerHTML += msg + '<br>'; console.log(msg); };
-  
-  log('Loading noVNC...');
-  try {
-    const { default: RFB } = await import('/node_modules/@novnc/novnc/lib/rfb.js');
-    log('noVNC loaded. Connecting to ws://192.168.1.37:6080 ...');
-    
-    const rfb = new RFB(document.getElementById('vnc'), 'ws://192.168.1.37:6080', {
-      credentials: { password: '137009' },
-      wsProtocols: ['binary'],
-    });
-    
-    rfb.scaleViewport = true;
-    rfb.resizeSession = false;
-    rfb.qualityLevel = 6;
-    rfb.compressionLevel = 2;
-    
-    rfb.addEventListener('connect', () => log('✅ CONNECTED!'));
-    rfb.addEventListener('disconnect', (e) => log('❌ DISCONNECTED: clean=' + e.detail?.clean));
-    rfb.addEventListener('securityfailure', (e) => log('🔒 AUTH FAILED: ' + (e.detail?.reason || 'unknown')));
-    rfb.addEventListener('credentialsrequired', (e) => log('🔑 CREDENTIALS REQUIRED: ' + JSON.stringify(e.detail)));
-    
-    log('RFB instance created. Waiting for events...');
-  } catch (err) {
-    log('ERROR: ' + err.message);
-    log(err.stack);
-  }
+
+  window.startVNC = async function() {
+    const host = document.getElementById('host').value;
+    const port = document.getElementById('port').value;
+    const pass = document.getElementById('pass').value;
+
+    log('Loading noVNC...');
+    try {
+      const { default: RFB } = await import('/node_modules/@novnc/novnc/lib/rfb.js');
+      const wsUrl = `ws://${host}:${port}`;
+      log(`noVNC loaded. Connecting to ${wsUrl} ...`);
+
+      const rfb = new RFB(document.getElementById('vnc'), wsUrl, {
+        credentials: { password: pass },
+        wsProtocols: ['binary'],
+      });
+
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false;
+      rfb.qualityLevel = 6;
+      rfb.compressionLevel = 2;
+
+      rfb.addEventListener('connect', () => log('CONNECTED!'));
+      rfb.addEventListener('disconnect', (e) => log('DISCONNECTED: clean=' + e.detail?.clean));
+      rfb.addEventListener('securityfailure', (e) => log('AUTH FAILED: ' + (e.detail?.reason || 'unknown')));
+      rfb.addEventListener('credentialsrequired', (e) => log('CREDENTIALS REQUIRED: ' + JSON.stringify(e.detail)));
+
+      log('RFB instance created. Waiting for events...');
+    } catch (err) {
+      log('ERROR: ' + err.message);
+      log(err.stack);
+    }
+  };
 </script>
 </body>
 </html>

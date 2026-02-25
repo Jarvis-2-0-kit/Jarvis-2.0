@@ -2,8 +2,8 @@ import { createLogger, type AgentId, HEARTBEAT_INTERVAL } from '@jarvis/shared';
 import {
   ProviderRegistry, type ProviderRegistryConfig,
   type ChatRequest, type ChatResponse, type ChatChunk,
-  type Message, type ContentBlock, type ToolUseBlock, type ToolResultBlock,
-  createUsageAccumulator, mergeUsage, type UsageAccumulator,
+  type Message, type ContentBlock, type ToolUseBlock, type ToolResultBlock, type ThinkingBlock, type TextBlock,
+  createUsageAccumulator, mergeUsage, type UsageAccumulator, type TokenUsage,
 } from '../llm/index.js';
 import { type ToolRegistry } from '@jarvis/tools';
 import { NatsHandler, type NatsHandlerConfig, type TaskAssignment, type InterAgentMsg } from '../communication/nats-handler.js';
@@ -368,20 +368,31 @@ export class AgentRunner {
         );
       }
 
-      const result = await this.runAgentLoop(this.currentSessionId, systemPrompt, msg.content);
+      const result = await this.runAgentLoop(this.currentSessionId, systemPrompt, msg.content, externalSessionId);
 
       const responseMeta: Record<string, unknown> = {};
       if (externalSessionId) responseMeta.sessionId = externalSessionId;
       if (msg.metadata?.source) responseMeta.source = msg.metadata.source;
+      if (result.thinking) responseMeta.thinking = result.thinking;
 
       await this.nats.sendChatResponse(result.output, Object.keys(responseMeta).length > 0 ? responseMeta : undefined);
       log.info(`Chat response sent (${result.output.length} chars)`);
+
+      // Fire session_end hook for chat session
+      if (this.hooks && this.currentSessionId) {
+        await this.hooks.runSessionEnd(
+          { sessionId: this.currentSessionId, agentId: this.config.agentId, tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } },
+          { agentId: this.config.agentId, sessionId: this.currentSessionId },
+        );
+      }
     } catch (err) {
       log.error(`Chat error: ${(err as Error).message}`);
       const errorMeta: Record<string, unknown> = {};
       if (externalSessionId) errorMeta.sessionId = externalSessionId;
       await this.nats.sendChatResponse(`Error: ${(err as Error).message}`, Object.keys(errorMeta).length > 0 ? errorMeta : undefined);
     } finally {
+      // Reset session so next chat gets a fresh context
+      this.currentSessionId = null;
       if (!this.currentTask) {
         await this.nats.updateStatus('idle');
       }
@@ -552,6 +563,134 @@ export class AgentRunner {
   }
 
   /**
+   * Consume a streaming response from chatStream, accumulating into a ChatResponse.
+   * Publishes throttled deltas via NATS for real-time dashboard updates.
+   */
+  private async consumeStream(
+    stream: AsyncIterable<ChatChunk>,
+    sessionId: string,
+    round: number,
+  ): Promise<ChatResponse> {
+    const content: ContentBlock[] = [];
+    let currentText = '';
+    let currentThinking = '';
+    let currentToolId = '';
+    let currentToolName = '';
+    let currentToolInput = '';
+    let stopReason: ChatResponse['stopReason'] = 'end_turn';
+    const usage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+
+    // Throttle: send at most one delta per 100ms per phase
+    let lastStreamTime = 0;
+    const THROTTLE_MS = 100;
+
+    const sendThrottled = async (phase: 'thinking' | 'text' | 'tool_start', text?: string, toolName?: string) => {
+      const now = Date.now();
+      if (now - lastStreamTime < THROTTLE_MS) return;
+      lastStreamTime = now;
+      try {
+        await this.nats.sendChatStream({ phase, text, toolName, sessionId, round });
+      } catch { /* non-critical */ }
+    };
+
+    for await (const chunk of stream) {
+      switch (chunk.type) {
+        case 'thinking_start':
+          currentThinking = '';
+          break;
+
+        case 'thinking_delta':
+          currentThinking += chunk.thinking ?? '';
+          await sendThrottled('thinking', currentThinking);
+          break;
+
+        case 'thinking_end':
+          if (currentThinking) {
+            content.push({ type: 'thinking', thinking: currentThinking });
+          }
+          break;
+
+        case 'text_delta':
+          currentText += chunk.text ?? '';
+          await sendThrottled('text', currentText);
+          break;
+
+        case 'tool_use_start':
+          // Flush accumulated text (strip any <tool_call> XML from CLI provider)
+          if (currentText) {
+            const cleaned = currentText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+            if (cleaned) content.push({ type: 'text', text: cleaned });
+            currentText = '';
+          }
+          currentToolId = chunk.toolCall?.id ?? '';
+          currentToolName = chunk.toolCall?.name ?? '';
+          currentToolInput = '';
+          await sendThrottled('tool_start', undefined, currentToolName);
+          break;
+
+        case 'tool_use_delta':
+          currentToolInput = chunk.toolCall?.input ?? currentToolInput;
+          break;
+
+        case 'tool_use_end': {
+          let parsedInput: Record<string, unknown> = {};
+          try { parsedInput = JSON.parse(currentToolInput || '{}'); } catch { /* empty */ }
+          content.push({
+            type: 'tool_use',
+            id: currentToolId,
+            name: currentToolName,
+            input: parsedInput,
+          });
+          currentToolId = '';
+          currentToolName = '';
+          currentToolInput = '';
+          break;
+        }
+
+        case 'message_end':
+          // Flush remaining text (strip any <tool_call> XML from CLI provider)
+          if (currentText) {
+            const cleanedEnd = currentText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+            if (cleanedEnd) content.push({ type: 'text', text: cleanedEnd });
+            currentText = '';
+          }
+          if (chunk.stopReason) stopReason = chunk.stopReason;
+          if (chunk.usage) {
+            usage.inputTokens += chunk.usage.inputTokens;
+            usage.outputTokens += chunk.usage.outputTokens;
+            usage.totalTokens += chunk.usage.totalTokens;
+            if (chunk.usage.cacheReadTokens) usage.cacheReadTokens = (usage.cacheReadTokens ?? 0) + chunk.usage.cacheReadTokens;
+            if (chunk.usage.cacheWriteTokens) usage.cacheWriteTokens = (usage.cacheWriteTokens ?? 0) + chunk.usage.cacheWriteTokens;
+          }
+          break;
+
+        case 'error':
+          throw new Error(`Stream error: ${chunk.error}`);
+      }
+    }
+
+    // Flush any remaining text that wasn't flushed (strip any <tool_call> XML)
+    if (currentText) {
+      const cleanedFinal = currentText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+      if (cleanedFinal) content.push({ type: 'text', text: cleanedFinal });
+    }
+
+    // Send done delta — important for dashboard to know streaming ended
+    try {
+      await this.nats.sendChatStream({ phase: 'done', sessionId, round });
+    } catch (err) {
+      log.warn(`Failed to send stream done marker: ${(err as Error).message}`);
+    }
+
+    return {
+      content,
+      stopReason,
+      usage,
+      model: '',
+    };
+  }
+
+  /**
    * Core agent loop: LLM -> parse -> tools -> LLM -> repeat
    *
    * This is the heart of the agent execution engine.
@@ -561,10 +700,12 @@ export class AgentRunner {
     sessionId: string,
     systemPrompt: string,
     userMessage: string,
-  ): Promise<{ output: string; artifacts: string[] }> {
+    streamSessionId?: string,
+  ): Promise<{ output: string; artifacts: string[]; thinking?: string }> {
     const messages: Message[] = [];
     const usage = createUsageAccumulator();
     const artifacts: string[] = [];
+    let allThinking = '';
     let consecutiveErrors = 0;
     let activeModel = this.config.defaultModel;
 
@@ -601,7 +742,7 @@ export class AgentRunner {
         system: systemPrompt,
         tools: toolDefs,
         max_tokens: 8192,
-        stream: false,
+        stream: true,
       };
 
       // ─── Hook: llm_input ───
@@ -620,10 +761,12 @@ export class AgentRunner {
         }
       }
 
-      // Call LLM
+      // Call LLM via streaming
       let response: ChatResponse;
       try {
-        response = await this.providers.chat(request);
+        const stream = this.providers.chatStream(request);
+        response = await this.consumeStream(stream, streamSessionId ?? sessionId, round + 1);
+        response.model = activeModel;
         consecutiveErrors = 0;
       } catch (err) {
         consecutiveErrors++;
@@ -656,26 +799,43 @@ export class AgentRunner {
       messages.push({ role: 'assistant', content: response.content });
       await this.sessions.appendMessage(sessionId, 'assistant', response.content);
 
+      // Collect thinking from this round
+      const roundThinking = response.content
+        .filter((b): b is ThinkingBlock => b.type === 'thinking')
+        .map((b) => b.thinking)
+        .join('\n');
+      if (roundThinking) {
+        allThinking += (allThinking ? '\n\n' : '') + roundThinking;
+      }
+
       // Log progress
       this.logRound(round, response, usage);
 
       // Check if assistant is done (no tool calls)
       if (response.stopReason !== 'tool_use') {
         const textContent = response.content
-          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+          .filter((b): b is TextBlock => b.type === 'text')
           .map((b) => b.text)
           .join('\n');
-        return { output: textContent || '(Task completed with no text output)', artifacts };
+        return {
+          output: textContent || '(Task completed with no text output)',
+          artifacts,
+          thinking: allThinking || undefined,
+        };
       }
 
       // Execute tool calls
       const toolUses = response.content.filter((b): b is ToolUseBlock => b.type === 'tool_use');
       if (toolUses.length === 0) {
         const textContent = response.content
-          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+          .filter((b): b is TextBlock => b.type === 'text')
           .map((b) => b.text)
           .join('\n');
-        return { output: textContent || '(Task completed)', artifacts };
+        return {
+          output: textContent || '(Task completed)',
+          artifacts,
+          thinking: allThinking || undefined,
+        };
       }
 
       const toolResults: ContentBlock[] = [];
@@ -789,6 +949,7 @@ export class AgentRunner {
     return {
       output: lastText ?? `(Task ended after ${MAX_TOOL_ROUNDS} rounds)`,
       artifacts,
+      thinking: allThinking || undefined,
     };
   }
 

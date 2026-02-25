@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useGatewayStore } from '../store/gateway-store.js';
-import { gateway } from '../gateway/client.js';
+import { gateway, authFetch } from '../gateway/client.js';
 import { Settings, Save, RotateCcw, Code, Eye } from 'lucide-react';
 
 interface ConfigData {
@@ -53,7 +53,7 @@ export function ConfigView() {
       try {
         data = await gateway.request<ConfigData>('config.get');
       } catch {
-        const res = await fetch('/api/config');
+        const res = await authFetch('/api/config');
         data = await res.json() as ConfigData;
       }
       setConfig(data);

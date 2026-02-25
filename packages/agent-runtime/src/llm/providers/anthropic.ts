@@ -161,6 +161,7 @@ export class AnthropicProvider implements LLMProvider {
     let currentToolId = '';
     let currentToolName = '';
     let currentToolInput = '';
+    let currentBlockType = '';
 
     try {
       while (true) {
@@ -181,16 +182,21 @@ export class AnthropicProvider implements LLMProvider {
 
             switch (event.type) {
               case 'content_block_start':
+                currentBlockType = event.content_block?.type ?? '';
                 if (event.content_block?.type === 'tool_use') {
                   currentToolId = event.content_block.id ?? '';
                   currentToolName = event.content_block.name ?? '';
                   currentToolInput = '';
                   yield { type: 'tool_use_start', toolCall: { id: currentToolId, name: currentToolName, input: '' } };
+                } else if (event.content_block?.type === 'thinking') {
+                  yield { type: 'thinking_start', thinking: '' };
                 }
                 break;
 
               case 'content_block_delta':
-                if (event.delta?.type === 'text_delta' && event.delta.text) {
+                if (event.delta?.type === 'thinking_delta' && event.delta.thinking) {
+                  yield { type: 'thinking_delta', thinking: event.delta.thinking };
+                } else if (event.delta?.type === 'text_delta' && event.delta.text) {
                   yield { type: 'text_delta', text: event.delta.text };
                 } else if (event.delta?.type === 'input_json_delta' && event.delta.partial_json) {
                   currentToolInput += event.delta.partial_json;
@@ -199,12 +205,15 @@ export class AnthropicProvider implements LLMProvider {
                 break;
 
               case 'content_block_stop':
-                if (currentToolId) {
+                if (currentBlockType === 'thinking') {
+                  yield { type: 'thinking_end' };
+                } else if (currentToolId) {
                   yield { type: 'tool_use_end', toolCall: { id: currentToolId, name: currentToolName, input: currentToolInput } };
                   currentToolId = '';
                   currentToolName = '';
                   currentToolInput = '';
                 }
+                currentBlockType = '';
                 break;
 
               case 'message_delta':
@@ -357,6 +366,7 @@ export class AnthropicProvider implements LLMProvider {
 
   private parseResponse(data: AnthropicResponse): ChatResponse {
     const content: ContentBlock[] = (data.content ?? []).map((block) => {
+      if (block.type === 'thinking') return { type: 'thinking' as const, thinking: block.thinking ?? '' };
       if (block.type === 'text') return { type: 'text', text: block.text ?? '' };
       if (block.type === 'tool_use') return {
         type: 'tool_use',
@@ -394,7 +404,7 @@ function mapStopReason(reason?: string): ChatResponse['stopReason'] {
 
 // Anthropic API types (internal)
 interface AnthropicResponse {
-  content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
+  content?: Array<{ type: string; text?: string; thinking?: string; id?: string; name?: string; input?: unknown }>;
   stop_reason?: string;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   model?: string;
@@ -402,8 +412,8 @@ interface AnthropicResponse {
 
 interface AnthropicStreamEvent {
   type: string;
-  content_block?: { type: string; id?: string; name?: string; text?: string };
-  delta?: { type: string; text?: string; partial_json?: string; stop_reason?: string };
+  content_block?: { type: string; id?: string; name?: string; text?: string; thinking?: string };
+  delta?: { type: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
   usage?: { output_tokens?: number };
   message?: { usage?: { input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
 }

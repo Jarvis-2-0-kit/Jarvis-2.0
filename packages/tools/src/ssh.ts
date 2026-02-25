@@ -1,4 +1,7 @@
 import { Client } from 'ssh2';
+import { readFileSync, appendFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
@@ -7,6 +10,101 @@ const log = createLogger('tool:ssh');
 
 const MAX_OUTPUT_SIZE = 200_000; // 200KB max output
 const DEFAULT_TIMEOUT = 120_000; // 2 minutes
+
+const KNOWN_HOSTS_PATH = join(process.env['HOME'] || '~', '.ssh', 'known_hosts');
+
+/**
+ * Parse ~/.ssh/known_hosts into a Map of hostname -> Set<fingerprint>.
+ * Each fingerprint is the SHA-256 hex digest of the raw key data stored in known_hosts.
+ */
+function parseKnownHosts(): Map<string, Set<string>> {
+  const hostsMap = new Map<string, Set<string>>();
+
+  if (!existsSync(KNOWN_HOSTS_PATH)) {
+    return hostsMap;
+  }
+
+  try {
+    const content = readFileSync(KNOWN_HOSTS_PATH, 'utf-8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+
+      // Format: hostname key-type base64-key [comment]
+      const parts = trimmed.split(/\s+/);
+      if (parts.length < 3) continue;
+
+      const hostnames = parts[0]!.split(',');
+      const keyBase64 = parts[2]!;
+
+      try {
+        const keyBuffer = Buffer.from(keyBase64, 'base64');
+        const fingerprint = createHash('sha256').update(keyBuffer).digest('hex');
+
+        for (const hostname of hostnames) {
+          const clean = hostname.replace(/^\[|\]:\d+$/g, '').trim();
+          if (!clean) continue;
+
+          if (!hostsMap.has(clean)) {
+            hostsMap.set(clean, new Set());
+          }
+          hostsMap.get(clean)!.add(fingerprint);
+        }
+      } catch {
+        // Skip malformed entries
+        continue;
+      }
+    }
+  } catch (err) {
+    log.warn(`Failed to read known_hosts: ${(err as Error).message}`);
+  }
+
+  return hostsMap;
+}
+
+/**
+ * Create a host key verifier that checks against ~/.ssh/known_hosts.
+ * Implements TOFU (Trust On First Use): unknown hosts are added automatically
+ * with a logged warning. Known hosts are verified against stored fingerprints.
+ */
+function createHostVerifier(hostname: string): (key: Buffer) => boolean {
+  return (key: Buffer): boolean => {
+    const fingerprint = createHash('sha256').update(key).digest('hex');
+    const knownHosts = parseKnownHosts();
+    const knownFingerprints = knownHosts.get(hostname);
+
+    if (knownFingerprints) {
+      // Host is in known_hosts - verify the fingerprint matches
+      if (knownFingerprints.has(fingerprint)) {
+        return true;
+      }
+      log.error(
+        `HOST KEY VERIFICATION FAILED for ${hostname}! ` +
+        `Key fingerprint SHA-256:${fingerprint} does not match known_hosts. ` +
+        `Possible MITM attack. Connection rejected.`
+      );
+      return false;
+    }
+
+    // TOFU: Host not in known_hosts - trust on first use and record the key
+    log.warn(
+      `TOFU: Host ${hostname} not found in known_hosts. ` +
+      `Adding key with fingerprint SHA-256:${fingerprint}. ` +
+      `Verify this is the correct host.`
+    );
+
+    try {
+      const keyBase64 = key.toString('base64');
+      const entry = `${hostname} ssh-key ${keyBase64}\n`;
+      appendFileSync(KNOWN_HOSTS_PATH, entry, { mode: 0o600 });
+      log.info(`Added ${hostname} to ${KNOWN_HOSTS_PATH}`);
+    } catch (err) {
+      log.warn(`Failed to append to known_hosts: ${(err as Error).message}`);
+    }
+
+    return true;
+  };
+}
 
 export interface SshHostConfig {
   host: string;
@@ -143,14 +241,21 @@ export class SshTool implements AgentTool {
         }
       });
 
+      // Warn if password auth is used when key auth is available
+      if (host.password && host.privateKeyPath) {
+        log.warn(
+          `SSH to ${host.host}: password auth is being used, but a private key is also configured ` +
+          `at "${host.privateKeyPath}". Prefer key-based auth for better security.`
+        );
+      }
+
       // Connect
       conn.connect({
         host: host.host,
         port: host.port || 22,
         username: host.username,
         password: host.password,
-        // Accept all host keys (trusted local network)
-        hostVerifier: () => true,
+        hostVerifier: createHostVerifier(host.host),
         readyTimeout: 10000,
       } as unknown as Record<string, unknown>);
     });
@@ -222,7 +327,7 @@ export async function sshExecSimple(
       port: host.port || 22,
       username: host.username,
       password: host.password,
-      hostVerifier: () => true,
+      hostVerifier: createHostVerifier(host.host),
       readyTimeout: 10000,
     } as unknown as Record<string, unknown>);
   });
@@ -296,7 +401,7 @@ export async function sshExecBinary(
       port: host.port || 22,
       username: host.username,
       password: host.password,
-      hostVerifier: () => true,
+      hostVerifier: createHostVerifier(host.host),
       readyTimeout: 10000,
     } as unknown as Record<string, unknown>);
   });

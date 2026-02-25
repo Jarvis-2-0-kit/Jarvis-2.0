@@ -7,10 +7,20 @@
     #log { padding: 10px; max-height: 200px; overflow-y: auto; border-bottom: 1px solid #0f0; }
     #log div { margin: 2px 0; }
     .ok { color: #0f0; } .err { color: #f55; } .warn { color: #fa0; } .info { color: #0ff; }
-    #vnc-container { width: 100%; height: calc(100vh - 220px); }
+    #controls { padding: 10px; border-bottom: 1px solid #333; }
+    #controls input { background: #111; color: #0f0; border: 1px solid #0f0; padding: 3px 6px; margin: 0 4px; }
+    #controls button { background: #0f0; color: #000; border: none; padding: 5px 12px; cursor: pointer; }
+    #vnc-container { width: 100%; height: calc(100vh - 280px); }
   </style>
 </head>
 <body>
+  <div id="controls">
+    <label>Host: <input id="host" value="192.168.1.37"></label>
+    <label>Port: <input id="port" value="6080" size="5"></label>
+    <label>Username: <input id="user" placeholder="optional"></label>
+    <label>Password: <input id="pass" type="password"></label>
+    <button onclick="window.startDiag()">Connect</button>
+  </div>
   <div id="log"></div>
   <div id="vnc-container"></div>
 
@@ -25,94 +35,85 @@
       console.log('[VNC-DIAG]', msg);
     }
 
-    log('Starting VNC diagnostic...');
-    log('Target: ws://192.168.1.37:6080');
-    log('Credentials: username=agent_smith, password=137009');
+    log('VNC diagnostic ready. Enter credentials and click Connect.');
 
-    try {
-      const mod = await import('@novnc/novnc/lib/rfb.js');
-      log('Module keys: ' + Object.keys(mod).join(', '));
+    window.startDiag = async function() {
+      const host = document.getElementById('host').value;
+      const port = document.getElementById('port').value;
+      const user = document.getElementById('user').value;
+      const pass = document.getElementById('pass').value;
+      const wsUrl = `ws://${host}:${port}`;
 
-      // Try different ways to get the constructor
-      const RFB = mod.default || mod.RFB || mod;
-      log('RFB type: ' + typeof RFB + ', isFunction: ' + (typeof RFB === 'function'));
+      log(`Target: ${wsUrl}`);
 
-      if (typeof RFB !== 'function') {
-        log('RFB is not a function! Checking nested...', 'err');
-        log('mod.default type: ' + typeof mod.default);
-        if (mod.default && typeof mod.default === 'object') {
-          log('mod.default keys: ' + Object.keys(mod.default).join(', '));
-          if (mod.default.default) {
-            log('Trying mod.default.default...', 'warn');
-            const RFB2 = mod.default.default;
-            if (typeof RFB2 === 'function') {
-              log('Found RFB at mod.default.default!', 'ok');
-              startVNC(RFB2);
-              throw new Error('stop');
-            }
+      try {
+        const mod = await import('@novnc/novnc/lib/rfb.js');
+        log('Module keys: ' + Object.keys(mod).join(', '));
+
+        const RFB = mod.default || mod.RFB || mod;
+        log('RFB type: ' + typeof RFB + ', isFunction: ' + (typeof RFB === 'function'));
+
+        if (typeof RFB !== 'function') {
+          log('RFB is not a function! Checking nested...', 'err');
+          if (mod.default && typeof mod.default === 'object' && typeof mod.default.default === 'function') {
+            log('Found RFB at mod.default.default', 'ok');
+            startVNC(mod.default.default);
+            return;
           }
+          log('Could not find RFB constructor. Falling back to WS test.', 'err');
+          testWebSocket();
+        } else {
+          startVNC(RFB);
         }
-        log('Could not find RFB constructor. Falling back to WS test.', 'err');
-        testWebSocket();
-      } else {
-        startVNC(RFB);
-      }
-    } catch (err) {
-      if (err.message !== 'stop') {
+      } catch (err) {
         log('FATAL ERROR: ' + err.message, 'err');
         log(err.stack, 'err');
       }
-    }
 
-    function startVNC(RFB) {
-      log('Creating RFB instance...', 'info');
-      const container = document.getElementById('vnc-container');
+      function startVNC(RFB) {
+        log('Creating RFB instance...', 'info');
+        const container = document.getElementById('vnc-container');
+        const creds = {};
+        if (user) creds.username = user;
+        if (pass) creds.password = pass;
 
-      const rfb = new RFB(container, 'ws://192.168.1.37:6080/', {
-        credentials: { username: 'agent_smith', password: '137009' },
-        wsProtocols: ['binary'],
-      });
+        const rfb = new RFB(container, wsUrl + '/', {
+          credentials: creds,
+          wsProtocols: ['binary'],
+        });
 
-      rfb.scaleViewport = true;
-      rfb.resizeSession = false;
-      rfb.qualityLevel = 6;
-      rfb.compressionLevel = 2;
+        rfb.scaleViewport = true;
+        rfb.resizeSession = false;
+        rfb.qualityLevel = 6;
+        rfb.compressionLevel = 2;
 
-      rfb.addEventListener('connect', () => {
-        log('VNC CONNECTED! Desktop should be visible below.', 'ok');
-      });
-      rfb.addEventListener('disconnect', (e) => {
-        log('VNC DISCONNECTED: clean=' + e.detail?.clean, e.detail?.clean ? 'warn' : 'err');
-      });
-      rfb.addEventListener('securityfailure', (e) => {
-        log('AUTH FAILED: ' + (e.detail?.reason || 'unknown reason'), 'err');
-        log('Status: ' + e.detail?.status, 'err');
-      });
-      rfb.addEventListener('credentialsrequired', (e) => {
-        log('CREDENTIALS REQUIRED: types=' + JSON.stringify(e.detail?.types), 'warn');
-        rfb.sendCredentials({ username: 'agent_smith', password: '137009' });
-        log('Sent credentials via sendCredentials()', 'info');
-      });
-      rfb.addEventListener('desktopname', (e) => {
-        log('Desktop name: ' + e.detail?.name, 'ok');
-      });
+        rfb.addEventListener('connect', () => log('VNC CONNECTED!', 'ok'));
+        rfb.addEventListener('disconnect', (e) => log('VNC DISCONNECTED: clean=' + e.detail?.clean, e.detail?.clean ? 'warn' : 'err'));
+        rfb.addEventListener('securityfailure', (e) => log('AUTH FAILED: ' + (e.detail?.reason || 'unknown'), 'err'));
+        rfb.addEventListener('credentialsrequired', (e) => {
+          log('CREDENTIALS REQUIRED: types=' + JSON.stringify(e.detail?.types), 'warn');
+          rfb.sendCredentials(creds);
+          log('Sent credentials via sendCredentials()', 'info');
+        });
+        rfb.addEventListener('desktopname', (e) => log('Desktop name: ' + e.detail?.name, 'ok'));
 
-      log('RFB instance created. Waiting for VNC events...', 'info');
-    }
+        log('RFB instance created. Waiting for VNC events...', 'info');
+      }
 
-    function testWebSocket() {
-      log('Testing raw WebSocket to ws://192.168.1.37:6080 ...', 'warn');
-      const ws = new WebSocket('ws://192.168.1.37:6080/', ['binary']);
-      ws.binaryType = 'arraybuffer';
-      ws.onopen = () => log('WebSocket CONNECTED', 'ok');
-      ws.onmessage = (e) => {
-        const buf = new Uint8Array(e.data);
-        const str = new TextDecoder().decode(buf.slice(0, Math.min(buf.length, 50)));
-        log('WS data (' + buf.length + ' bytes): ' + JSON.stringify(str));
-      };
-      ws.onerror = () => log('WebSocket ERROR', 'err');
-      ws.onclose = (e) => log('WebSocket CLOSED: code=' + e.code + ' clean=' + e.wasClean, 'warn');
-    }
+      function testWebSocket() {
+        log(`Testing raw WebSocket to ${wsUrl} ...`, 'warn');
+        const ws = new WebSocket(wsUrl + '/', ['binary']);
+        ws.binaryType = 'arraybuffer';
+        ws.onopen = () => log('WebSocket CONNECTED', 'ok');
+        ws.onmessage = (e) => {
+          const buf = new Uint8Array(e.data);
+          const str = new TextDecoder().decode(buf.slice(0, Math.min(buf.length, 50)));
+          log('WS data (' + buf.length + ' bytes): ' + JSON.stringify(str));
+        };
+        ws.onerror = () => log('WebSocket ERROR', 'err');
+        ws.onclose = (e) => log('WebSocket CLOSED: code=' + e.code + ' clean=' + e.wasClean, 'warn');
+      }
+    };
   </script>
 </body>
 </html>

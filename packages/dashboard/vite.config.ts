@@ -7,6 +7,8 @@ export default defineConfig({
     port: 3000,
     proxy: {
       '/api': 'http://localhost:18900',
+      '/auth': 'http://localhost:18900',
+      '/health': 'http://localhost:18900',
       '/ws': {
         target: 'ws://localhost:18900',
         ws: true,

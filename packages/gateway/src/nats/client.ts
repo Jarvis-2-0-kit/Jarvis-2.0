@@ -18,14 +18,28 @@ export class NatsClient {
   async connect(): Promise<void> {
     try {
       log.info(`Connecting to NATS servers: ${this.servers.join(', ')}`);
-      this.connection = await connect({
+      const natsOpts: Record<string, unknown> = {
         servers: this.servers,
         name: 'jarvis-gateway',
         reconnect: true,
         maxReconnectAttempts: 50,
         reconnectTimeWait: 2000,
         timeout: 10000,
-      });
+      };
+
+      // NATS authentication via env vars
+      if (process.env['NATS_USER'] && process.env['NATS_PASS']) {
+        natsOpts.user = process.env['NATS_USER'];
+        natsOpts.pass = process.env['NATS_PASS'];
+        log.info('NATS: using user/pass authentication');
+      } else if (process.env['NATS_TOKEN']) {
+        natsOpts.token = process.env['NATS_TOKEN'];
+        log.info('NATS: using token authentication');
+      } else {
+        log.warn('NATS: no authentication configured — connection is unauthenticated');
+      }
+
+      this.connection = await connect(natsOpts as Parameters<typeof connect>[0]);
 
       const connectedTo = (this.connection as unknown as { info?: { host?: string; port?: number } }).info;
       log.info(`Connected to NATS (servers: ${this.servers.join(', ')})`);

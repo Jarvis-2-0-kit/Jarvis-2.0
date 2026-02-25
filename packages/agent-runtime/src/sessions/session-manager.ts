@@ -1,10 +1,18 @@
 import { readFile, writeFile, appendFile, readdir, mkdir, stat } from 'node:fs/promises';
+import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { createLogger, type AgentId } from '@jarvis/shared';
 import type { Message, TokenUsage } from '../llm/types.js';
 
 const log = createLogger('agent:sessions');
+
+/** Session time-to-live: 24 hours */
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Maximum number of sessions retained per agent */
+const MAX_SESSIONS_PER_AGENT = 100;
 
 export interface SessionEntry {
   timestamp: number;
@@ -51,7 +59,10 @@ export class SessionManager {
 
   /** Create a new session, returns session ID */
   async createSession(taskId?: string): Promise<string> {
-    const sessionId = `${this.agentId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Clean up expired and excess sessions before creating a new one
+    await this.cleanExpiredSessions();
+
+    const sessionId = `${this.agentId}-${randomUUID()}`;
     const filePath = this.getSessionPath(sessionId);
 
     // Write initial meta entry
@@ -243,6 +254,42 @@ export class SessionManager {
     await writeFile(filePath, content, 'utf-8');
 
     log.info(`Compacted session ${sessionId}: ${entries.length} -> ${newEntries.length} entries`);
+  }
+
+  /** Remove expired sessions and enforce the per-agent session limit */
+  private async cleanExpiredSessions(): Promise<void> {
+    try {
+      const sessions = await this.listSessions(); // sorted by lastActivity desc
+      const now = Date.now();
+
+      // Delete sessions older than SESSION_TTL_MS
+      const expired = sessions.filter((s) => now - s.lastActivity > SESSION_TTL_MS);
+      for (const session of expired) {
+        try {
+          await unlink(this.getSessionPath(session.id));
+          log.info(`Deleted expired session: ${session.id}`);
+        } catch {
+          // File may already be gone
+        }
+      }
+
+      // Enforce MAX_SESSIONS_PER_AGENT (after removing expired ones)
+      const remaining = sessions.filter((s) => now - s.lastActivity <= SESSION_TTL_MS);
+      if (remaining.length > MAX_SESSIONS_PER_AGENT) {
+        // remaining is sorted newest-first; delete the oldest excess sessions
+        const excess = remaining.slice(MAX_SESSIONS_PER_AGENT);
+        for (const session of excess) {
+          try {
+            await unlink(this.getSessionPath(session.id));
+            log.info(`Deleted excess session: ${session.id}`);
+          } catch {
+            // File may already be gone
+          }
+        }
+      }
+    } catch (err) {
+      log.warn('Failed to clean expired sessions', err);
+    }
   }
 
   private getSessionPath(sessionId: string): string {

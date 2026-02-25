@@ -54,7 +54,19 @@ export const NatsSubjects = {
   coordinationResponse: 'jarvis.coordination.response',
   chat: (agentId: string) => `jarvis.chat.${agentId}`,
   chatBroadcast: 'jarvis.chat.broadcast',
+  chatStream: 'jarvis.chat.stream',
 } as const;
+
+/** Ephemeral streaming delta from an agent during LLM generation */
+export interface ChatStreamDelta {
+  from: string;
+  phase: 'thinking' | 'text' | 'tool_start' | 'done';
+  text?: string;
+  toolName?: string;
+  sessionId?: string;
+  round?: number;
+  timestamp: number;
+}
 
 /** Inter-agent message types */
 export const InterAgentMessageType = z.enum([

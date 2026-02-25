@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { authFetch } from '../../gateway/client.js';
 
 interface NetworkConfig {
   master: { ip: string; hostname: string; ports: { gateway: number; dashboard: number; nats: number; redis: number } };
@@ -47,7 +48,7 @@ export function SettingsPanel({ visible, onClose }: SettingsPanelProps) {
   const fetchConfig = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/config');
+      const res = await authFetch('/api/config');
       if (res.ok) {
         const data = await res.json() as NetworkConfig;
         setConfig(data);
@@ -78,7 +79,7 @@ export function SettingsPanel({ visible, onClose }: SettingsPanelProps) {
   const handleSave = async (section: string, data: Record<string, unknown>) => {
     try {
       setSaveMsg('Zapisywanie...');
-      const res = await fetch('/api/config', {
+      const res = await authFetch('/api/config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ section, ...data }),

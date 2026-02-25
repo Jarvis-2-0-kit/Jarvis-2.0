@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { VNCViewer } from './VNCViewer.js';
+import { authFetch } from '../../gateway/client.js';
+import { useGatewayStore } from '../../store/gateway-store.js';
 
 interface VNCEndpoint {
   id: string;
@@ -20,8 +22,10 @@ const DEFAULT_ENDPOINTS: VNCEndpoint[] = [
 ];
 
 export function VNCGrid() {
+  const connected = useGatewayStore((s) => s.connected);
   const [fullscreen, setFullscreen] = useState<string | null>(null);
   const [endpoints, setEndpoints] = useState<VNCEndpoint[]>(DEFAULT_ENDPOINTS);
+  const [endpointsLoaded, setEndpointsLoaded] = useState(false);
   const [thunderboltActive, setThunderboltActive] = useState(false);
   const [statuses, setStatuses] = useState<Record<string, VNCStatus>>({});
   const [viewOnly, setViewOnly] = useState(false);
@@ -30,11 +34,12 @@ export function VNCGrid() {
   const statusesRef = useRef(statuses);
   statusesRef.current = statuses;
 
-  // Fetch VNC endpoints from gateway (prefers Thunderbolt IPs when enabled)
+  // Fetch VNC endpoints from gateway (wait for WS connected so auth token is in localStorage)
   useEffect(() => {
+    if (!connected) return;
     const fetchVncEndpoints = async () => {
       try {
-        const res = await fetch('/api/vnc');
+        const res = await authFetch('/api/vnc');
         if (res.ok) {
           const data = await res.json() as {
             endpoints: Record<string, { host: string; port: number; username?: string; password?: string; label: string; thunderbolt?: boolean }>;
@@ -70,13 +75,14 @@ export function VNCGrid() {
           }
           if (fetched.length > 0) setEndpoints(fetched);
           setThunderboltActive(!!data.thunderboltEnabled);
+          setEndpointsLoaded(true);
         }
       } catch {
         // Use defaults on error
       }
     };
     void fetchVncEndpoints();
-  }, []);
+  }, [connected]);
 
   // Stable callback – never changes identity so VNCViewer won't re-render
   const handleStatusChange = useCallback((epId: string, status: VNCStatus) => {
@@ -294,17 +300,28 @@ export function VNCGrid() {
                 </span>
               </div>
 
-              {/* VNC Canvas */}
+              {/* VNC Canvas — only connect after credentials loaded from API */}
               <div style={{ flex: 1, overflow: 'hidden' }}>
-                <VNCViewer
-                  host={ep.host}
-                  port={ep.port}
-                  id={ep.id}
-                  username={ep.username}
-                  password={ep.password}
-                  viewOnly={viewOnly}
-                  onStatusChange={statusCallbacksRef.current[ep.id]}
-                />
+                {endpointsLoaded ? (
+                  <VNCViewer
+                    host={ep.host}
+                    port={ep.port}
+                    id={ep.id}
+                    username={ep.username}
+                    password={ep.password}
+                    viewOnly={viewOnly}
+                    onStatusChange={statusCallbacksRef.current[ep.id]}
+                  />
+                ) : (
+                  <div style={{
+                    width: '100%', height: '100%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--text-muted)', fontSize: 11,
+                    fontFamily: 'var(--font-display)', letterSpacing: 2,
+                  }}>
+                    {connected ? 'LOADING VNC...' : 'WAITING FOR GATEWAY...'}
+                  </div>
+                )}
               </div>
             </div>
           );

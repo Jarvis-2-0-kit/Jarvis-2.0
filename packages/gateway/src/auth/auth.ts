@@ -1,4 +1,5 @@
-import { createLogger, sha256 } from '@jarvis/shared';
+import { timingSafeEqual } from 'node:crypto';
+import { createLogger, sha256, generateToken } from '@jarvis/shared';
 
 const log = createLogger('gateway:auth');
 
@@ -13,6 +14,13 @@ export class AuthManager {
   private config: AuthConfig;
 
   constructor(dashboardToken: string) {
+    if (!dashboardToken) {
+      const generated = generateToken();
+      log.warn('No dashboard token configured - auto-generated a random token');
+      log.warn(`Dashboard token: ${generated}`);
+      dashboardToken = generated;
+    }
+
     this.config = {
       dashboardToken,
       machineTokens: new Map(),
@@ -25,23 +33,39 @@ export class AuthManager {
     log.info(`Registered machine token for ${agentId}`);
   }
 
-  /** Verify dashboard token */
-  verifyDashboardToken(token: string): boolean {
-    if (!this.config.dashboardToken) {
-      log.warn('No dashboard token configured - accepting all connections');
-      return true;
-    }
-    return token === this.config.dashboardToken;
+  /** Check whether a dashboard token is configured */
+  hasDashboardToken(): boolean {
+    return !!this.config.dashboardToken;
   }
 
-  /** Verify machine token for agent */
+  /** Get the effective dashboard token (for local /auth/token endpoint) */
+  getDashboardToken(): string {
+    return this.config.dashboardToken;
+  }
+
+  /** Verify dashboard token (timing-safe) */
+  verifyDashboardToken(token: string): boolean {
+    const a = Buffer.from(token);
+    const b = Buffer.from(this.config.dashboardToken);
+    if (a.length !== b.length) {
+      return false;
+    }
+    return timingSafeEqual(a, b);
+  }
+
+  /** Verify machine token for agent (timing-safe) */
   verifyMachineToken(agentId: string, token: string): boolean {
     const storedHash = this.config.machineTokens.get(agentId);
     if (!storedHash) {
       log.warn(`No machine token registered for ${agentId}`);
       return false;
     }
-    return sha256(token) === storedHash;
+    const a = Buffer.from(sha256(token));
+    const b = Buffer.from(storedHash);
+    if (a.length !== b.length) {
+      return false;
+    }
+    return timingSafeEqual(a, b);
   }
 
   /** Extract token from WebSocket upgrade request */

@@ -9,6 +9,7 @@ import { execSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+import { z } from 'zod';
 import {
   createLogger,
   shortId,
@@ -22,6 +23,9 @@ import {
   type AgentId,
   type TaskDefinition,
   type ChatMessage,
+  RateLimiter,
+  initAuditLogger,
+  getAuditLogger,
 } from '@jarvis/shared';
 import { NatsClient } from './nats/client.js';
 import { RedisClient } from './redis/client.js';
@@ -34,6 +38,39 @@ import { DependencyOrchestrator } from './orchestration/dependency-orchestrator.
 const log = createLogger('gateway:server');
 
 const ALL_AGENTS = ['jarvis', 'agent-alpha', 'agent-beta'] as const;
+
+// Rate limiters
+const wsRateLimiter = new RateLimiter(30);   // 30 msgs/min per WS connection
+const apiRateLimiter = new RateLimiter(60);  // 60 req/min per IP
+
+// Zod schema for chat.send validation
+const chatSendSchema = z.object({
+  id: z.string().max(64).optional(),
+  from: z.string().min(1).max(100),
+  to: z.string().min(1).max(100).optional(),
+  content: z.string().min(1).max(50000),
+  type: z.string().max(50).optional(),
+  sessionId: z.string().max(128).regex(/^[a-zA-Z0-9_\-]+$/).optional(),
+  timestamp: z.number().optional(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+/** Mask a secret string: show first 4 + last 4 chars */
+function maskSecret(value: string): string {
+  if (value.length <= 12) return '****';
+  return `${value.slice(0, 4)}${'*'.repeat(Math.min(value.length - 8, 20))}${value.slice(-4)}`;
+}
+
+/** Check if an env var key looks like a secret */
+function isSecretKey(key: string): boolean {
+  const upper = key.toUpperCase();
+  return /(?:KEY|SECRET|PASSWORD|TOKEN|CREDENTIAL|PASS)/.test(upper);
+}
+
+/** Strip HTML tags for basic sanitization */
+function stripHtml(str: string): string {
+  return str.replace(/<[^>]*>/g, '');
+}
 
 export interface GatewayConfig {
   port: number;
@@ -84,6 +121,19 @@ export class GatewayServer {
   async start(): Promise<void> {
     log.info(`Starting ${PROJECT_NAME} v${PROJECT_VERSION} Gateway...`);
 
+    // Initialize audit logger
+    const auditLogPath = this.nas.resolve('logs', 'security-audit.jsonl');
+    initAuditLogger({
+      logFilePath: auditLogPath,
+      onEvent: (event) => {
+        // Publish security events to NATS if connected
+        if (this.nats.isConnected) {
+          void this.nats.publish('jarvis.security.audit', event);
+        }
+      },
+    });
+    log.info(`Security audit log: ${auditLogPath}`);
+
     // Connect to infrastructure
     await this.nats.connect();
     await this.redis.connect();
@@ -124,10 +174,99 @@ export class GatewayServer {
   private setupHttpRoutes(): void {
     this.app.use(express.json());
 
+    // Security headers
+    this.app.use((_req, res, next) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.setHeader('X-XSS-Protection', '1; mode=block');
+      res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+      res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data: blob:");
+      if (_req.secure || _req.headers['x-forwarded-proto'] === 'https') {
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+      }
+      next();
+    });
+
+    // Rate limiting for REST API
+    this.app.use('/api', (req, res, next) => {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+      // Check if IP is blocked by audit logger
+      if (getAuditLogger().isBlocked(ip)) {
+        res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
+        return;
+      }
+
+      if (!apiRateLimiter.allow(ip)) {
+        getAuditLogger().logEvent('rate_limit.exceeded', 'gateway:http', { ip, path: req.path });
+        res.status(429).json({ error: 'Rate limit exceeded. Max 60 requests per minute.' });
+        return;
+      }
+      next();
+    });
+
+    // Auth middleware for /api/* routes
+    const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+      const token = req.headers.authorization?.replace('Bearer ', '') || req.query['token'] as string;
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+
+      if (!token || !this.auth.verifyDashboardToken(token)) {
+        getAuditLogger().logEvent('auth.failure', 'gateway:http', { ip, path: req.path, method: req.method }, ip);
+        getAuditLogger().trackFailedAuth(ip);
+        res.status(401).json({ error: 'Unauthorized' });
+        return;
+      }
+
+      getAuditLogger().clearFailedAuth(ip);
+      next();
+    };
+
+    // Health check - no auth required
     this.app.get('/health', async (_req, res) => {
       const health = await this.getHealthStatus();
       res.json(health);
     });
+
+    // Auth token endpoint - only accessible from localhost for initial dashboard setup
+    this.app.get('/auth/token', (req, res) => {
+      const ip = req.ip || req.socket.remoteAddress || '';
+      const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'localhost';
+      if (!isLocal) {
+        res.status(403).json({ error: 'Token endpoint only accessible from localhost' });
+        return;
+      }
+      res.json({ token: this.auth.getDashboardToken() });
+    });
+
+    // Webhook endpoints - authenticated via their own mechanisms (BEFORE auth middleware)
+    this.app.get('/api/whatsapp/webhook', (req, res) => {
+      const mode = req.query['hub.mode'];
+      const wToken = req.query['hub.verify_token'];
+      const challenge = req.query['hub.challenge'];
+      const waConfig = this.getChannelConfig('whatsapp') as Record<string, unknown>;
+      const verifyToken = (waConfig?.verifyToken as string) ?? 'jarvis-whatsapp-verify';
+      if (mode === 'subscribe' && wToken === verifyToken) {
+        log.info('WhatsApp webhook verified');
+        res.status(200).send(challenge);
+      } else {
+        res.sendStatus(403);
+      }
+    });
+    this.app.post('/api/whatsapp/webhook', async (req, res) => {
+      try { await this.handleWhatsAppWebhook(req.body as Record<string, unknown>); res.sendStatus(200); }
+      catch (err) { log.error('WhatsApp webhook error', { error: String(err) }); res.sendStatus(500); }
+    });
+    this.app.post('/api/telegram/webhook', async (req, res) => {
+      try { await this.handleTelegramWebhook(req.body as Record<string, unknown>); res.sendStatus(200); }
+      catch (err) { log.error('Telegram webhook error', { error: String(err) }); res.sendStatus(500); }
+    });
+    this.app.post('/api/discord/webhook', async (req, res) => {
+      try { await this.handleDiscordWebhook(req.body as Record<string, unknown>); res.sendStatus(200); }
+      catch (err) { log.error('Discord webhook error', { error: String(err) }); res.sendStatus(500); }
+    });
+
+    // Apply auth to all remaining /api/* routes
+    this.app.use('/api', requireAuth);
 
     this.app.get('/api/agents', async (_req, res) => {
       const agents = await this.store.getAllAgentStates();
@@ -149,6 +288,7 @@ export class GatewayServer {
         ? process.env['VNC_BETA_HOST_THUNDERBOLT']
         : process.env['VNC_BETA_HOST'] ?? 'mac-mini-beta.local';
 
+      // Authenticated endpoint — safe to include credentials
       res.json({
         endpoints: {
           alpha: {
@@ -255,59 +395,6 @@ export class GatewayServer {
       }
     });
 
-    // --- WhatsApp Webhook ---
-    this.app.get('/api/whatsapp/webhook', (req, res) => {
-      // Meta verification challenge
-      const mode = req.query['hub.mode'];
-      const token = req.query['hub.verify_token'];
-      const challenge = req.query['hub.challenge'];
-
-      const waConfig = this.getChannelConfig('whatsapp') as Record<string, unknown>;
-      const verifyToken = (waConfig?.verifyToken as string) ?? 'jarvis-whatsapp-verify';
-
-      if (mode === 'subscribe' && token === verifyToken) {
-        log.info('WhatsApp webhook verified');
-        res.status(200).send(challenge);
-      } else {
-        res.sendStatus(403);
-      }
-    });
-
-    this.app.post('/api/whatsapp/webhook', async (req, res) => {
-      try {
-        const body = req.body as Record<string, unknown>;
-        await this.handleWhatsAppWebhook(body);
-        res.sendStatus(200);
-      } catch (err) {
-        log.error('WhatsApp webhook error', { error: String(err) });
-        res.sendStatus(500);
-      }
-    });
-
-    // --- Telegram Webhook ---
-    this.app.post('/api/telegram/webhook', async (req, res) => {
-      try {
-        const body = req.body as Record<string, unknown>;
-        await this.handleTelegramWebhook(body);
-        res.sendStatus(200);
-      } catch (err) {
-        log.error('Telegram webhook error', { error: String(err) });
-        res.sendStatus(500);
-      }
-    });
-
-    // --- Discord Webhook ---
-    this.app.post('/api/discord/webhook', async (req, res) => {
-      try {
-        const body = req.body as Record<string, unknown>;
-        await this.handleDiscordWebhook(body);
-        res.sendStatus(200);
-      } catch (err) {
-        log.error('Discord webhook error', { error: String(err) });
-        res.sendStatus(500);
-      }
-    });
-
     // Serve dashboard static files (production build)
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const dashboardDist = resolve(__dirname, '../../dashboard/dist');
@@ -330,20 +417,42 @@ export class GatewayServer {
   private setupWebSocket(): void {
     this.wss.on('connection', (ws: WebSocket, req) => {
       const token = AuthManager.extractToken(req.url ?? '');
+      const ip = req.socket.remoteAddress || 'unknown';
 
-      // Allow connections from same-origin dashboard (no token needed)
-      // External API clients still need auth via REST endpoints
-      if (this.config.authToken && token && !this.auth.verifyDashboardToken(token)) {
-        log.warn('Invalid WebSocket token');
+      const isLoopback = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+
+      // Check if IP is blocked (skip for loopback — dashboard reconnects cause false positives)
+      if (!isLoopback && getAuditLogger().isBlocked(ip)) {
+        ws.close(4029, 'Too many failed attempts');
+        return;
+      }
+
+      // ALWAYS require a valid token — no bypass
+      if (!token || !this.auth.verifyDashboardToken(token)) {
+        getAuditLogger().logEvent('auth.failure', 'gateway:ws', { ip, hasToken: !!token }, ip);
+        if (!isLoopback) {
+          getAuditLogger().trackFailedAuth(ip);
+        }
+        log.warn(`WebSocket auth rejected from ${ip}`);
         ws.close(4001, 'Unauthorized');
         return;
       }
 
+      getAuditLogger().logEvent('auth.success', 'gateway:ws', { ip }, ip);
+      getAuditLogger().clearFailedAuth(ip);
+
       const clientId = shortId();
       this.protocol.registerClient(clientId, ws);
-      log.info(`Dashboard client connected: ${clientId}`);
+      log.info(`Dashboard client connected: ${clientId} from ${ip}`);
 
       ws.on('message', async (data) => {
+        // Rate limit WebSocket messages
+        if (!wsRateLimiter.allow(clientId)) {
+          getAuditLogger().logEvent('rate_limit.exceeded', 'gateway:ws', { clientId, ip });
+          const errMsg = JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message: 'Rate limit exceeded' } });
+          ws.send(errMsg);
+          return;
+        }
         await this.protocol.handleMessage(clientId, data.toString());
       });
 
@@ -364,6 +473,10 @@ export class GatewayServer {
   // --- Gateway Methods ---
 
   private registerMethods(): void {
+    this.protocol.registerMethod('ping', async () => {
+      return { pong: true, timestamp: Date.now() };
+    });
+
     this.protocol.registerMethod('health', async () => {
       return this.getHealthStatus();
     });
@@ -422,9 +535,21 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('chat.send', async (params) => {
-      const msg = params as ChatMessage;
+      // Validate input with Zod schema
+      const parsed = chatSendSchema.safeParse(params);
+      if (!parsed.success) {
+        const issues = parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join(', ');
+        throw new Error(`Invalid chat message: ${issues}`);
+      }
+
+      const msg = parsed.data as ChatMessage;
       msg.id = msg.id || shortId();
       msg.timestamp = Date.now();
+
+      // Sanitize HTML from content
+      if (typeof msg.content === 'string') {
+        msg.content = stripHtml(msg.content);
+      }
 
       // Persist message to NAS
       const sessionId = (msg as Record<string, unknown>).sessionId as string || 'default';
@@ -785,6 +910,10 @@ export class GatewayServer {
 
     this.protocol.registerMethod('apikeys.delete', async (params) => {
       return this.deleteApiKey((params as { id: string }).id);
+    });
+
+    this.protocol.registerMethod('apikeys.validate', async (params) => {
+      return this.validateApiKey(params as { id: string; key: string });
     });
 
     // --- Scheduler / Cron ---
@@ -1236,6 +1365,11 @@ export class GatewayServer {
           log.error(`WhatsApp reply failed: ${(err as Error).message}`);
         });
       }
+    });
+
+    // Chat stream deltas from agents (ephemeral, NOT persisted)
+    this.nats.subscribe(NatsSubjects.chatStream, (data) => {
+      this.protocol.broadcast('chat.stream', data);
     });
 
     // Also listen on dashboardBroadcast for general agent events
@@ -1775,53 +1909,66 @@ export class GatewayServer {
 
   private getApiKeys(): { keys: Array<{ id: string; name: string; provider: string; key: string; addedAt: number; lastUsed?: number }> } {
     const configPath = this.nas.resolve('config', 'api-keys.json');
+    let data: { keys: Array<{ id: string; name: string; provider: string; key: string; addedAt: number; lastUsed?: number }> } = { keys: [] };
+
     try {
       if (existsSync(configPath)) {
-        return JSON.parse(readFileSync(configPath, 'utf-8'));
+        data = JSON.parse(readFileSync(configPath, 'utf-8'));
       }
     } catch { /* ignore */ }
 
-    // Return env-based keys as fallback
-    const envKeys: Array<{ id: string; name: string; provider: string; key: string; addedAt: number }> = [];
+    // Add env-based keys as fallback
+    if (data.keys.length === 0) {
+      const envKeySources: Array<{ id: string; name: string; provider: string; envVar: string }> = [
+        { id: 'env-anthropic', name: 'ANTHROPIC_API_KEY', provider: 'anthropic', envVar: 'ANTHROPIC_API_KEY' },
+        { id: 'env-openai', name: 'OPENAI_API_KEY', provider: 'openai', envVar: 'OPENAI_API_KEY' },
+        { id: 'env-spotify', name: 'SPOTIFY_ACCESS_TOKEN', provider: 'spotify', envVar: 'SPOTIFY_ACCESS_TOKEN' },
+        { id: 'env-homeassistant', name: 'HASS_TOKEN', provider: 'homeassistant', envVar: 'HASS_TOKEN' },
+      ];
 
-    if (process.env['ANTHROPIC_API_KEY']) {
-      envKeys.push({
-        id: 'env-anthropic',
-        name: 'ANTHROPIC_API_KEY',
-        provider: 'anthropic',
-        key: process.env['ANTHROPIC_API_KEY'],
-        addedAt: Date.now(),
-      });
-    }
-    if (process.env['OPENAI_API_KEY']) {
-      envKeys.push({
-        id: 'env-openai',
-        name: 'OPENAI_API_KEY',
-        provider: 'openai',
-        key: process.env['OPENAI_API_KEY'],
-        addedAt: Date.now(),
-      });
-    }
-    if (process.env['SPOTIFY_ACCESS_TOKEN']) {
-      envKeys.push({
-        id: 'env-spotify',
-        name: 'SPOTIFY_ACCESS_TOKEN',
-        provider: 'spotify',
-        key: process.env['SPOTIFY_ACCESS_TOKEN'],
-        addedAt: Date.now(),
-      });
-    }
-    if (process.env['HASS_TOKEN']) {
-      envKeys.push({
-        id: 'env-homeassistant',
-        name: 'HASS_TOKEN',
-        provider: 'homeassistant',
-        key: process.env['HASS_TOKEN'],
-        addedAt: Date.now(),
-      });
+      for (const src of envKeySources) {
+        const value = process.env[src.envVar];
+        if (value) {
+          data.keys.push({ id: src.id, name: src.name, provider: src.provider, key: value, addedAt: Date.now() });
+        }
+      }
     }
 
-    return { keys: envKeys };
+    // SECURITY: Mask all key values before returning
+    return {
+      keys: data.keys.map(k => ({
+        ...k,
+        key: maskSecret(k.key),
+      })),
+    };
+  }
+
+  /** Validate an API key without exposing it — returns true/false */
+  private validateApiKey(params: { id: string; key: string }): { valid: boolean } {
+    const configPath = this.nas.resolve('config', 'api-keys.json');
+    try {
+      if (existsSync(configPath)) {
+        const data = JSON.parse(readFileSync(configPath, 'utf-8')) as { keys: Array<{ id: string; key: string }> };
+        const found = data.keys.find(k => k.id === params.id);
+        if (found) {
+          return { valid: found.key === params.key };
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Check env keys
+    const envMap: Record<string, string> = {
+      'env-anthropic': 'ANTHROPIC_API_KEY',
+      'env-openai': 'OPENAI_API_KEY',
+      'env-spotify': 'SPOTIFY_ACCESS_TOKEN',
+      'env-homeassistant': 'HASS_TOKEN',
+    };
+    const envVar = envMap[params.id];
+    if (envVar && process.env[envVar]) {
+      return { valid: process.env[envVar] === params.key };
+    }
+
+    return { valid: false };
   }
 
   private addApiKey(params: { name: string; provider: string; key: string }): { success: boolean; id: string } {
@@ -2172,7 +2319,8 @@ export class GatewayServer {
     for (const [key, value] of Object.entries(process.env)) {
       if (value === undefined) continue;
       if (prefixes.some((p) => key.startsWith(p))) {
-        relevant[key] = value;
+        // SECURITY: Mask values that look like secrets
+        relevant[key] = isSecretKey(key) ? maskSecret(value) : value;
       }
     }
 
@@ -2183,7 +2331,7 @@ export class GatewayServer {
         const custom = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, string>;
         for (const [key, value] of Object.entries(custom)) {
           if (!(key in relevant)) {
-            relevant[key] = value;
+            relevant[key] = isSecretKey(key) ? maskSecret(value) : value;
           }
         }
       }

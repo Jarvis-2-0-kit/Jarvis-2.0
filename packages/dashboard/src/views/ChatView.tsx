@@ -18,8 +18,9 @@ import {
   Send, Copy, RotateCcw, ChevronDown, Bot, User, Cpu, Terminal,
   Plus, Trash2, MessageSquare, Clock, StopCircle, Loader2,
   ChevronRight, Hash, Sparkles, CheckCheck, GripVertical,
-  Search, X, Pencil, Check, Wifi, WifiOff,
+  Search, X, Pencil, Check, Wifi, WifiOff, Activity,
 } from 'lucide-react';
+import { ActivityFeed } from '../components/chat/ActivityFeed.js';
 import { gateway } from '../gateway/client.js';
 import { useGatewayStore } from '../store/gateway-store.js';
 import { useToastStore } from '../store/toast-store.js';
@@ -37,6 +38,15 @@ interface ChatMsg {
   toolName?: string;
   toolArgs?: string;
   sessionId?: string;
+  thinking?: string;
+}
+
+/** Per-agent streaming state */
+interface StreamState {
+  phase: 'thinking' | 'text' | 'tool_start' | 'done';
+  text?: string;
+  toolName?: string;
+  round?: number;
 }
 
 interface ChatSession {
@@ -97,9 +107,8 @@ export function ChatView() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Streaming
-  const [streamText, setStreamText] = useState<string | null>(null);
-  const [streamFrom, setStreamFrom] = useState<string>('jarvis');
+  // Streaming — per-agent map to support multiple agents streaming at once
+  const [agentStreams, setAgentStreams] = useState<Map<string, StreamState>>(new Map());
   const [isAgentRunning, setIsAgentRunning] = useState(false);
 
   // Input
@@ -119,6 +128,13 @@ export function ChatView() {
 
   // Latency
   const [latency, setLatency] = useState<number | null>(null);
+
+  // Activity panel
+  const [activityPanelOpen, setActivityPanelOpen] = useState(false);
+  const [activityPanelWidth, setActivityPanelWidth] = useState(280);
+  const isResizingActivity = useRef(false);
+  const actStartX = useRef(0);
+  const actStartWidth = useRef(0);
 
   // Toast
   const addToast = useToastStore((s) => s.addToast);
@@ -221,6 +237,38 @@ export function ChatView() {
     document.body.style.userSelect = 'none';
   };
 
+  // ── Activity panel resize ──
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingActivity.current) return;
+      // Dragging left = larger panel (inverted because panel is on the right)
+      const newWidth = Math.min(Math.max(actStartWidth.current - (e.clientX - actStartX.current), 200), 500);
+      setActivityPanelWidth(newWidth);
+    };
+    const handleMouseUp = () => {
+      if (isResizingActivity.current) {
+        isResizingActivity.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  const startActivityResize = (e: RME) => {
+    e.preventDefault();
+    isResizingActivity.current = true;
+    actStartX.current = e.clientX;
+    actStartWidth.current = activityPanelWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
   // ── Load sessions ──
   useEffect(() => {
     if (!connected) return;
@@ -266,10 +314,19 @@ export function ChatView() {
         return [...prev.slice(-500), msg];
       });
 
-      // If this is from an agent, mark as done running
+      // If this is from an agent, mark as done running and capture thinking
       if (msg.from !== 'user') {
         setIsAgentRunning(false);
-        setStreamText(null);
+        setAgentStreams((prev) => {
+          const next = new Map(prev);
+          next.delete(msg.from);
+          return next;
+        });
+        // Capture thinking from metadata if present
+        const raw = payload as Record<string, unknown>;
+        if (raw.thinking && typeof raw.thinking === 'string') {
+          msg.thinking = raw.thinking;
+        }
       }
 
       // Auto-scroll if near bottom
@@ -280,14 +337,30 @@ export function ChatView() {
     };
 
     const streamHandler = (payload: unknown) => {
-      const data = payload as { sessionId?: string; text: string; from?: string; done?: boolean };
+      const data = payload as {
+        sessionId?: string; from?: string;
+        phase?: 'thinking' | 'text' | 'tool_start' | 'done';
+        text?: string; toolName?: string; round?: number;
+        done?: boolean; // legacy compat
+      };
       if (data.sessionId && data.sessionId !== activeSessionId) return;
-      if (data.done) {
-        setStreamText(null);
-        setIsAgentRunning(false);
+
+      const agentId = data.from ?? 'jarvis';
+      const phase = data.phase ?? (data.done ? 'done' : 'text');
+
+      if (phase === 'done') {
+        setAgentStreams((prev) => {
+          const next = new Map(prev);
+          next.delete(agentId);
+          return next;
+        });
+        if (agentStreams.size <= 1) setIsAgentRunning(false);
       } else {
-        setStreamText(data.text);
-        setStreamFrom(data.from ?? 'jarvis');
+        setAgentStreams((prev) => {
+          const next = new Map(prev);
+          next.set(agentId, { phase, text: data.text, toolName: data.toolName, round: data.round });
+          return next;
+        });
         setIsAgentRunning(true);
       }
     };
@@ -305,7 +378,7 @@ export function ChatView() {
   useEffect(() => {
     const unsub = gateway.on('_disconnected', () => {
       setIsAgentRunning(false);
-      setStreamText(null);
+      setAgentStreams(new Map());
     });
     return unsub;
   }, []);
@@ -351,7 +424,7 @@ export function ChatView() {
       addToast({ type: 'warning', title: 'Abort', message: `Could not abort: ${(err as Error).message}` });
     });
     setIsAgentRunning(false);
-    setStreamText(null);
+    setAgentStreams(new Map());
   };
 
   // ── New session ──
@@ -642,6 +715,23 @@ export function ChatView() {
               <Search size={11} />
             </button>
 
+            {/* Activity feed toggle */}
+            <button
+              onClick={() => setActivityPanelOpen(!activityPanelOpen)}
+              title="Toggle Activity Feed"
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24,
+                background: activityPanelOpen ? 'rgba(251,191,36,0.1)' : 'transparent',
+                border: `1px solid ${activityPanelOpen ? 'rgba(251,191,36,0.4)' : 'var(--border-dim)'}`,
+                borderRadius: 4, cursor: 'pointer',
+                color: activityPanelOpen ? '#fbbf24' : 'var(--text-muted)',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Activity size={11} />
+            </button>
+
             <div style={{ width: 1, height: 16, background: 'var(--border-dim)' }} />
 
             {(['all', 'jarvis', 'agent-alpha', 'agent-beta'] as const).map((t) => (
@@ -744,10 +834,10 @@ export function ChatView() {
             ))
           )}
 
-          {/* Streaming indicator */}
-          {isAgentRunning && (
-            <StreamingIndicator text={streamText} from={streamFrom} />
-          )}
+          {/* Streaming indicators — one per agent */}
+          {Array.from(agentStreams.entries()).map(([agentId, stream]) => (
+            <StreamingIndicator key={agentId} agentId={agentId} stream={stream} />
+          ))}
 
           <div ref={bottomRef} />
         </div>
@@ -869,6 +959,42 @@ export function ChatView() {
           )}
         </div>
       </div>
+
+      {/* ── Activity Feed panel ── */}
+      {activityPanelOpen && (
+        <>
+          {/* Resize handle */}
+          <div
+            onMouseDown={startActivityResize}
+            style={{
+              width: 6,
+              cursor: 'col-resize',
+              background: 'transparent',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+              position: 'relative',
+              zIndex: 2,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(251,191,36,0.1)'; }}
+            onMouseLeave={(e) => { if (!isResizingActivity.current) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+          >
+            <GripVertical size={10} color="var(--text-muted)" style={{ opacity: 0.4 }} />
+          </div>
+
+          {/* Panel */}
+          <div style={{
+            width: activityPanelWidth,
+            minWidth: activityPanelWidth,
+            borderLeft: '1px solid var(--border-primary)',
+            overflow: 'hidden',
+            transition: isResizingActivity.current ? 'none' : 'all 0.2s ease',
+          }}>
+            <ActivityFeed />
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -959,9 +1085,16 @@ function SessionItem({ session, active, onClick, onDelete }: {
   );
 }
 
-function StreamingIndicator({ text, from }: { text: string | null; from: string }) {
-  const cfg = SENDER_CFG[from] ?? SENDER_CFG['gateway'];
+function StreamingIndicator({ agentId, stream }: { agentId: string; stream: StreamState }) {
+  const cfg = SENDER_CFG[agentId] ?? SENDER_CFG['gateway'];
   const Icon = cfg.icon;
+
+  const phaseBadge = () => {
+    if (stream.phase === 'thinking') return { label: 'THINKING', bg: 'rgba(168,85,247,0.15)', color: '#c084fc', border: '#7c3aed' };
+    if (stream.phase === 'tool_start') return { label: `CALLING ${stream.toolName ?? 'tool'}`, bg: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '#d97706' };
+    return null;
+  };
+  const badge = phaseBadge();
 
   return (
     <div style={{
@@ -976,29 +1109,78 @@ function StreamingIndicator({ text, from }: { text: string | null; from: string 
         <Icon size={12} color={cfg.color} />
       </div>
       <div style={{ flex: 1 }}>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'baseline', marginBottom: 4 }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
           <span style={{
             fontSize: 10, fontWeight: 700, letterSpacing: 1,
             color: cfg.color, fontFamily: 'var(--font-ui)',
           }}>
             {cfg.label}
           </span>
+          {badge && (
+            <span style={{
+              fontSize: 8, fontWeight: 700, letterSpacing: 0.5,
+              padding: '1px 6px', borderRadius: 3,
+              background: badge.bg, color: badge.color,
+              border: `1px solid ${badge.border}44`,
+            }}>
+              {badge.label}
+            </span>
+          )}
+          {(stream.round ?? 0) > 1 && (
+            <span style={{ fontSize: 8, color: 'var(--text-muted)' }}>
+              Round {stream.round}
+            </span>
+          )}
         </div>
-        {text ? (
+
+        {/* Thinking phase: purple italic text */}
+        {stream.phase === 'thinking' && stream.text ? (
+          <div style={{
+            fontSize: 11, color: '#c084fc', lineHeight: 1.5,
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            fontStyle: 'italic',
+            borderLeft: '2px solid #7c3aed44', paddingLeft: 10,
+            maxHeight: 150, overflowY: 'auto',
+          }}>
+            {stream.text}
+            <span style={{
+              display: 'inline-block', width: 6, height: 14,
+              background: '#c084fc', marginLeft: 2, opacity: 0.6,
+              animation: 'cv-pulse 0.8s ease infinite', verticalAlign: 'text-bottom',
+            }} />
+          </div>
+        ) : stream.phase === 'text' && stream.text ? (
+          /* Text phase: green with cursor */
           <div style={{
             fontSize: 12, color: 'var(--green-secondary)', lineHeight: 1.5,
             whiteSpace: 'pre-wrap', wordBreak: 'break-word',
             borderLeft: '2px solid var(--green-dim)', paddingLeft: 10,
             animation: 'cv-stream 2s ease infinite',
           }}>
-            {renderContent(text)}
+            {renderContent(stream.text)}
             <span style={{
               display: 'inline-block', width: 6, height: 14,
               background: 'var(--green-bright)', marginLeft: 2,
               animation: 'cv-pulse 0.8s ease infinite', verticalAlign: 'text-bottom',
             }} />
           </div>
+        ) : stream.phase === 'tool_start' ? (
+          /* Tool phase: just the badge, animated dots */
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' }}>
+            <div style={{ display: 'flex', gap: 3 }}>
+              {[0, 1, 2].map((i) => (
+                <div key={i} style={{
+                  width: 4, height: 4, borderRadius: '50%',
+                  background: '#fbbf24', animation: `cv-typing 1.2s ease-in-out ${i * 0.2}s infinite`,
+                }} />
+              ))}
+            </div>
+            <span style={{ fontSize: 9, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+              executing...
+            </span>
+          </div>
         ) : (
+          /* Default: typing dots */
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '2px 0' }}>
             <div style={{ display: 'flex', gap: 3 }}>
               {[0, 1, 2].map((i) => (
@@ -1143,6 +1325,31 @@ function MsgBubble({ msg, sender, copiedId, onCopy, onResend, searchQuery, isEdi
       onMouseLeave={() => setHover(false)}
       style={{ position: 'relative', padding: '2px 0' }}
     >
+      {/* Collapsible thinking block */}
+      {msg.thinking && (
+        <details style={{ marginBottom: 4 }}>
+          <summary style={{
+            fontSize: 9, color: '#c084fc', cursor: 'pointer',
+            fontFamily: 'var(--font-ui)', letterSpacing: 0.5,
+            userSelect: 'none', display: 'flex', alignItems: 'center', gap: 4,
+          }}>
+            <Sparkles size={9} />
+            View thinking
+          </summary>
+          <div style={{
+            fontSize: 11, color: '#c084fc', lineHeight: 1.5,
+            fontStyle: 'italic', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            padding: '6px 10px', marginTop: 4,
+            borderLeft: '2px solid #7c3aed44',
+            background: 'rgba(168,85,247,0.05)',
+            borderRadius: '0 4px 4px 0',
+            maxHeight: 200, overflowY: 'auto',
+          }}>
+            {msg.thinking}
+          </div>
+        </details>
+      )}
+
       <div style={{
         fontSize: 12, lineHeight: 1.6, wordBreak: 'break-word',
         color: sender === 'user' ? 'var(--text-white)' : 'var(--green-secondary)',

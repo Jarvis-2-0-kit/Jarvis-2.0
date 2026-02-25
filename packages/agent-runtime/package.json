@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsdown src/index.ts --format esm",
-    "dev": "tsx watch src/index.ts",
+    "dev": "AGENT_ID=jarvis AGENT_ROLE=orchestrator tsx watch src/cli.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
     "clean": "rm -rf dist"

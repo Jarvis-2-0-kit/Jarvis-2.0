@@ -39,6 +39,29 @@ interface ActivityEntry {
   timestamp: number;
 }
 
+export type FeedEntryType = 'tool_call' | 'task_progress' | 'delegation' | 'status_change';
+
+export interface FeedEntry {
+  id: string;
+  type: FeedEntryType;
+  agentId: string;
+  timestamp: number;
+  detail: string;
+  // tool_call
+  toolName?: string;
+  toolArgs?: string;
+  // task_progress
+  taskId?: string;
+  progress?: number; // 0-100
+  taskTitle?: string;
+  // delegation
+  fromAgent?: string;
+  toAgent?: string;
+  // status_change
+  oldStatus?: string;
+  newStatus?: string;
+}
+
 interface HealthInfo {
   status: string;
   version: string;
@@ -64,6 +87,8 @@ interface GatewayStore {
   tasks: TaskDef[];
   chatMessages: ChatMessage[];
   activityLog: ActivityEntry[];
+  activityFeed: FeedEntry[];
+  taskProgress: Map<string, FeedEntry>;
   health: HealthInfo | null;
   consoleLines: Array<{ agentId: string; line: string; timestamp: number }>;
 
@@ -81,6 +106,8 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
   tasks: [],
   chatMessages: [],
   activityLog: [],
+  activityFeed: [],
+  taskProgress: new Map(),
   health: null,
   consoleLines: [],
 
@@ -112,15 +139,113 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
       const state = payload as AgentState;
       set((prev) => {
         const agents = new Map(prev.agents);
+        const oldAgent = agents.get(state.identity.agentId);
         agents.set(state.identity.agentId, state);
+
+        // Emit status_change feed entry when status actually changes
+        if (oldAgent && oldAgent.status !== state.status) {
+          const feedEntry: FeedEntry = {
+            id: `feed-sc-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: 'status_change',
+            agentId: state.identity.agentId,
+            timestamp: Date.now(),
+            detail: `${state.identity.agentId} → ${state.status}`,
+            oldStatus: oldAgent.status,
+            newStatus: state.status,
+          };
+          return {
+            agents,
+            activityFeed: [...prev.activityFeed.slice(-299), feedEntry],
+          };
+        }
+
         return { agents };
       });
     });
 
     gateway.on('agent.activity', (payload) => {
       const entry = payload as ActivityEntry;
+
+      // Also push tool_call entries to activityFeed
+      const isToolCall = entry.action?.startsWith('tool') || entry.action?.includes('call');
+      if (isToolCall) {
+        const feedEntry: FeedEntry = {
+          id: `feed-tc-${entry.id}`,
+          type: 'tool_call',
+          agentId: entry.agentId,
+          timestamp: entry.timestamp,
+          detail: entry.detail,
+          toolName: entry.action.replace('tool:', '').replace('tool_call:', ''),
+          toolArgs: entry.detail,
+        };
+        set((prev) => ({
+          activityLog: [...prev.activityLog.slice(-200), entry],
+          activityFeed: [...prev.activityFeed.slice(-299), feedEntry],
+        }));
+      } else {
+        set((prev) => ({
+          activityLog: [...prev.activityLog.slice(-200), entry],
+        }));
+      }
+    });
+
+    gateway.on('task.progress', (payload) => {
+      const data = payload as { taskId: string; agentId: string; progress: number; detail?: string; title?: string };
+      const feedEntry: FeedEntry = {
+        id: `feed-tp-${data.taskId}-${Date.now()}`,
+        type: 'task_progress',
+        agentId: data.agentId,
+        timestamp: Date.now(),
+        detail: data.detail ?? `Task ${data.taskId} — ${data.progress}%`,
+        taskId: data.taskId,
+        progress: data.progress,
+        taskTitle: data.title,
+      };
+      set((prev) => {
+        const taskProgress = new Map(prev.taskProgress);
+        if (data.progress >= 100) {
+          taskProgress.delete(data.taskId);
+        } else {
+          taskProgress.set(data.taskId, feedEntry);
+        }
+        return {
+          activityFeed: [...prev.activityFeed.slice(-299), feedEntry],
+          taskProgress,
+        };
+      });
+    });
+
+    gateway.on('coordination.request', (payload) => {
+      const data = payload as { fromAgent: string; toAgent: string; taskId?: string; detail?: string };
+      const feedEntry: FeedEntry = {
+        id: `feed-del-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: 'delegation',
+        agentId: data.fromAgent,
+        timestamp: Date.now(),
+        detail: data.detail ?? `${data.fromAgent} → ${data.toAgent}`,
+        fromAgent: data.fromAgent,
+        toAgent: data.toAgent,
+        taskId: data.taskId,
+      };
       set((prev) => ({
-        activityLog: [...prev.activityLog.slice(-200), entry],
+        activityFeed: [...prev.activityFeed.slice(-299), feedEntry],
+      }));
+    });
+
+    gateway.on('coordination.response', (payload) => {
+      const data = payload as { fromAgent: string; toAgent: string; taskId?: string; detail?: string };
+      const feedEntry: FeedEntry = {
+        id: `feed-delr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        type: 'delegation',
+        agentId: data.fromAgent,
+        timestamp: Date.now(),
+        detail: data.detail ?? `${data.fromAgent} responded to ${data.toAgent}`,
+        fromAgent: data.fromAgent,
+        toAgent: data.toAgent,
+        taskId: data.taskId,
+      };
+      set((prev) => ({
+        activityFeed: [...prev.activityFeed.slice(-299), feedEntry],
       }));
     });
 

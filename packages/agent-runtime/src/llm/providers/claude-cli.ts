@@ -13,9 +13,10 @@ import { createLogger } from '@jarvis/shared';
 import { execFile, execSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { existsSync } from 'node:fs';
+import { createInterface } from 'node:readline';
 import type {
   LLMProvider, ChatRequest, ChatResponse, ChatChunk,
-  ModelInfo, ContentBlock, Message, ToolDefinition,
+  ModelInfo, ContentBlock, Message, ToolDefinition, TokenUsage,
 } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -207,7 +208,7 @@ export class ClaudeCliProvider implements LLMProvider {
           '--no-session-persistence',
           '--dangerously-skip-permissions',
         ], {
-          env: { ...process.env, CLAUDECODE: '' },
+          env: { ...process.env, CLAUDECODE: '', ANTHROPIC_API_KEY: '', CLAUDE_CODE_ENTRYPOINT: '' },
           timeout: 600_000,
         });
 
@@ -313,29 +314,179 @@ export class ClaudeCliProvider implements LLMProvider {
   }
 
   async *chatStream(request: ChatRequest): AsyncIterable<ChatChunk> {
-    // For streaming, we just call chat() and yield the result as a single chunk
-    // True streaming would require --output-format stream-json with child_process.spawn
-    try {
-      const response = await this.chat(request);
+    if (!this.available) {
+      yield { type: 'error', error: 'Claude CLI not available' };
+      return;
+    }
 
-      for (const block of response.content) {
-        if (block.type === 'text') {
-          yield { type: 'text_delta', text: (block as { text: string }).text };
-        } else if (block.type === 'tool_use') {
-          const tu = block as { id: string; name: string; input: Record<string, unknown> };
-          yield { type: 'tool_use_start', toolCall: { id: tu.id, name: tu.name, input: '' } };
-          yield { type: 'tool_use_delta', toolCall: { id: tu.id, name: tu.name, input: JSON.stringify(tu.input) } };
-          yield { type: 'tool_use_end', toolCall: { id: tu.id, name: tu.name, input: JSON.stringify(tu.input) } };
+    const prompt = buildPrompt(request);
+    const model = request.model || 'claude-opus-4-6';
+
+    log.info(`Streaming claude -p (model: ${model}, prompt: ${prompt.length} chars)`);
+
+    // Spawn claude with stream-json + partial messages for token-by-token output
+    const child = spawn(CLAUDE_BIN, [
+      '-p',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--model', model,
+      '--no-session-persistence',
+      '--dangerously-skip-permissions',
+    ], {
+      env: { ...process.env, CLAUDECODE: '', ANTHROPIC_API_KEY: '', CLAUDE_CODE_ENTRYPOINT: '' },
+      timeout: 600_000,
+    });
+
+    // Track block types by index for content_block_stop
+    const blockTypes = new Map<number, string>();
+    let accumulatedText = '';
+    let stopReason: ChatChunk['stopReason'] = 'end_turn';
+    const usage: TokenUsage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    let hadError = false;
+
+    // Create a promise that resolves when the child exits
+    const exitPromise = new Promise<number | null>((resolve) => {
+      child.on('close', resolve);
+      child.on('error', (err) => {
+        log.error(`Claude CLI spawn error: ${err.message}`);
+        resolve(1);
+      });
+    });
+
+    // Buffer for yielding chunks from the async generator
+    const chunks: ChatChunk[] = [];
+    let lineResolve: (() => void) | null = null;
+    let streamDone = false;
+
+    const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+
+    rl.on('line', (line: string) => {
+      if (!line.trim()) return;
+
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+
+        if (event.type === 'stream_event') {
+          const se = event.event as Record<string, unknown>;
+          const seType = se.type as string;
+
+          if (seType === 'content_block_start') {
+            const idx = se.index as number;
+            const block = se.content_block as { type: string };
+            blockTypes.set(idx, block.type);
+
+            if (block.type === 'thinking') {
+              chunks.push({ type: 'thinking_start' });
+            }
+          } else if (seType === 'content_block_delta') {
+            const delta = se.delta as { type: string; text?: string; thinking?: string };
+
+            if (delta.type === 'text_delta' && delta.text) {
+              accumulatedText += delta.text;
+              chunks.push({ type: 'text_delta', text: delta.text });
+            } else if (delta.type === 'thinking_delta' && delta.thinking) {
+              chunks.push({ type: 'thinking_delta', thinking: delta.thinking });
+            }
+          } else if (seType === 'content_block_stop') {
+            const idx = se.index as number;
+            const blockType = blockTypes.get(idx);
+            if (blockType === 'thinking') {
+              chunks.push({ type: 'thinking_end' });
+            }
+          } else if (seType === 'message_delta') {
+            const delta = se.delta as { stop_reason?: string };
+            const seUsage = se.usage as { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | undefined;
+
+            if (delta.stop_reason) {
+              stopReason = delta.stop_reason as ChatChunk['stopReason'];
+            }
+            if (seUsage) {
+              usage.outputTokens = seUsage.output_tokens ?? usage.outputTokens;
+            }
+          }
+        } else if (event.type === 'result') {
+          const result = event as { is_error?: boolean; result?: string; usage?: Record<string, number>; modelUsage?: Record<string, Record<string, number>>; total_cost_usd?: number };
+
+          if (result.is_error) {
+            chunks.push({ type: 'error', error: `Claude CLI error: ${result.result || 'unknown error'}` });
+            hadError = true;
+          } else {
+            // Extract usage from result
+            const mu = result.modelUsage ? Object.values(result.modelUsage)[0] : undefined;
+            usage.inputTokens = mu?.inputTokens ?? result.usage?.input_tokens ?? 0;
+            usage.outputTokens = mu?.outputTokens ?? result.usage?.output_tokens ?? 0;
+            usage.cacheReadTokens = mu?.cacheReadInputTokens ?? result.usage?.cache_read_input_tokens ?? 0;
+            usage.cacheWriteTokens = mu?.cacheCreationInputTokens ?? result.usage?.cache_creation_input_tokens ?? 0;
+            usage.totalTokens = usage.inputTokens + usage.outputTokens;
+
+            log.info(`Claude CLI stream done: ${accumulatedText.length} chars, ${usage.totalTokens} tokens, cost: $${result.total_cost_usd?.toFixed(4) ?? '?'}`);
+          }
         }
+        // Ignore: system, assistant (full message duplicate), rate_limit_event
+      } catch (err) {
+        log.warn(`Failed to parse stream-json line: ${(err as Error).message}`);
       }
 
-      yield {
-        type: 'message_end',
-        stopReason: response.stopReason,
-        usage: response.usage,
-      };
-    } catch (err) {
-      yield { type: 'error', error: (err as Error).message };
+      // Wake up the generator if it's waiting
+      if (lineResolve) {
+        const r = lineResolve;
+        lineResolve = null;
+        r();
+      }
+    });
+
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    // Write prompt to stdin
+    child.stdin.write(prompt);
+    child.stdin.end();
+
+    rl.on('close', () => {
+      streamDone = true;
+      if (lineResolve) {
+        const r = lineResolve;
+        lineResolve = null;
+        r();
+      }
+    });
+
+    // Yield chunks as they arrive
+    while (true) {
+      // Drain buffered chunks
+      while (chunks.length > 0) {
+        yield chunks.shift()!;
+      }
+
+      if (streamDone) break;
+
+      // Wait for more data
+      await new Promise<void>((resolve) => { lineResolve = resolve; });
     }
+
+    // Drain any remaining chunks
+    while (chunks.length > 0) {
+      yield chunks.shift()!;
+    }
+
+    // Wait for child to exit
+    await exitPromise;
+
+    if (hadError) return;
+
+    // Parse tool calls from accumulated text
+    const { toolCalls } = parseToolCalls(accumulatedText);
+    if (toolCalls.length > 0) {
+      stopReason = 'tool_use';
+      for (const tc of toolCalls) {
+        const id = `cli-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        yield { type: 'tool_use_start', toolCall: { id, name: tc.name, input: '' } };
+        yield { type: 'tool_use_delta', toolCall: { id, name: tc.name, input: JSON.stringify(tc.input) } };
+        yield { type: 'tool_use_end', toolCall: { id, name: tc.name, input: JSON.stringify(tc.input) } };
+      }
+    }
+
+    yield { type: 'message_end', stopReason, usage };
   }
 }

@@ -1,7 +1,7 @@
 import { readFile, writeFile, readdir, stat, mkdir } from 'node:fs/promises';
 import { join, dirname, resolve, relative } from 'node:path';
-import { existsSync } from 'node:fs';
-import { createLogger } from '@jarvis/shared';
+import { existsSync, realpathSync } from 'node:fs';
+import { createLogger, getAuditLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
 
@@ -9,6 +9,33 @@ const log = createLogger('tool:file');
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB read limit
 const MAX_LINES = 5000;
+
+const ALLOWED_ROOTS = [
+  process.env['HOME'] || '/Users/kamilpadula',
+  '/tmp',
+  '/var/tmp',
+  process.env['NAS_MOUNT_PATH'] || '/Volumes/JarvisNAS/jarvis',
+];
+
+const BLOCKED_PATHS = [
+  '/.ssh/',
+  '/.gnupg/',
+  '/.config/gh/',
+  '/.aws/',
+  '/.azure/',
+  '/etc/shadow',
+  '/etc/passwd',
+  '/etc/sudoers',
+  '/.env',
+];
+
+const BLOCKED_WRITE_PATHS = [
+  '/node_modules/',
+  '/.git/',
+  '/package.json',
+  '/package-lock.json',
+  '/pnpm-lock.yaml',
+];
 
 // ------- READ TOOL -------
 export class ReadTool implements AgentTool {
@@ -52,6 +79,7 @@ export class ReadTool implements AgentTool {
       const numbered = lines.map((line, i) => `${String(startIdx + i + 1).padStart(6)} | ${line}`).join('\n');
       const header = `File: ${rawPath} (${allLines.length} lines total, showing ${startIdx + 1}-${endIdx})`;
 
+      getAuditLogger().logEvent('file.read', 'file-ops', { path: rawPath, lines: allLines.length });
       return createToolResult(`${header}\n${numbered}`);
     } catch (err) {
       return createErrorResult(`Failed to read file: ${(err as Error).message}`);
@@ -80,12 +108,13 @@ export class WriteTool implements AgentTool {
     if (!rawPath) return createErrorResult('Missing required parameter: path');
     if (content === undefined) return createErrorResult('Missing required parameter: content');
 
-    const filePath = resolvePath(rawPath, context);
+    const filePath = resolvePath(rawPath, context, 'write');
 
     try {
       await mkdir(dirname(filePath), { recursive: true });
       await writeFile(filePath, content, 'utf-8');
       const lines = content.split('\n').length;
+      getAuditLogger().logEvent('file.write', 'file-ops', { path: rawPath, lines });
       return createToolResult(`Wrote ${lines} lines to ${rawPath}`);
     } catch (err) {
       return createErrorResult(`Failed to write file: ${(err as Error).message}`);
@@ -115,7 +144,7 @@ export class EditTool implements AgentTool {
     const newString = params['new_string'] as string;
     if (!rawPath) return createErrorResult('Missing required parameter: path');
 
-    const filePath = resolvePath(rawPath, context);
+    const filePath = resolvePath(rawPath, context, 'write');
 
     try {
       const content = await readFile(filePath, 'utf-8');
@@ -297,9 +326,55 @@ function matchGlob(filename: string, glob: string): boolean {
 }
 
 // ------- Helpers -------
-function resolvePath(rawPath: string, context: ToolContext): string {
-  if (rawPath.startsWith('/')) return rawPath;
-  return resolve(context.cwd || context.workspacePath, rawPath);
+function resolvePath(rawPath: string, context: ToolContext, operation: 'read' | 'write' = 'read'): string {
+  const resolved = rawPath.startsWith('/')
+    ? resolve(rawPath)
+    : resolve(context.cwd || context.workspacePath, rawPath);
+
+  // Resolve symlinks to prevent jail escape
+  let realPath: string;
+  try {
+    realPath = realpathSync(resolved);
+  } catch {
+    // File doesn't exist yet (write operation) - use resolved path
+    realPath = resolved;
+  }
+
+  // Check against blocked paths
+  for (const blocked of BLOCKED_PATHS) {
+    if (realPath.includes(blocked)) {
+      getAuditLogger().logEvent('security.blocked_path', 'file-ops', {
+        path: rawPath,
+        resolved: realPath,
+        blocked,
+        operation,
+      });
+      throw new Error(`Access denied: path contains blocked segment '${blocked}'`);
+    }
+  }
+
+  // Check write-specific blocks
+  if (operation === 'write') {
+    for (const blocked of BLOCKED_WRITE_PATHS) {
+      if (realPath.includes(blocked)) {
+        throw new Error(`Write denied: path contains protected segment '${blocked}'`);
+      }
+    }
+  }
+
+  // Verify path is within allowed roots
+  const isAllowed = ALLOWED_ROOTS.some(root => realPath.startsWith(resolve(root)));
+  if (!isAllowed) {
+    getAuditLogger().logEvent('security.blocked_path', 'file-ops', {
+      path: rawPath,
+      resolved: realPath,
+      reason: 'outside allowed roots',
+      operation,
+    });
+    throw new Error(`Access denied: path '${rawPath}' is outside allowed directories`);
+  }
+
+  return resolved;
 }
 
 function formatSize(bytes: number): string {
