@@ -37,26 +37,46 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 ## ░ ARCHITECTURE
 
 ```
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                          JARVIS 2.0 PLATFORM                               ║
-╠══════════════════════════════════════════════════════════════════════════════╣
-║                                                                            ║
-║   ┌────────────┐     ┌────────────┐     ┌────────────┐    ┌─────────────┐ ║
-║   │  DASHBOARD │◄═══►│            │◄═══►│    NATS    │◄══►│ AGENT ALPHA │ ║
-║   │  React 19  │ WS  │  GATEWAY   │     │  Pub/Sub   │    │ Mac Mini 1  │ ║
-║   └────────────┘     │  Node.js   │     └──────┬─────┘    └─────────────┘ ║
-║                      │            │            │                           ║
-║   ┌────────────┐     │            │     ┌──────┴─────┐    ┌─────────────┐ ║
-║   │  CLI/API   │◄═══►│            │     │    NAS     │    │ AGENT BETA  │ ║
-║   │  REST/WS   │HTTP │            │     │  Storage   │    │ Mac Mini 2  │ ║
-║   └────────────┘     └─────┬──────┘     └────────────┘    └─────────────┘ ║
-║                            │                                               ║
-║                      ┌─────┴──────┐                                        ║
-║                      │   REDIS    │                                        ║
-║                      │   State    │                                        ║
-║                      └────────────┘                                        ║
-║                                                                            ║
-╚══════════════════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════════════════╗
+║                             JARVIS 2.0 PLATFORM                                ║
+╠══════════════════════════════════════════════════════════════════════════════════╣
+║                                                                                ║
+║   ┌────────────┐  ┌────────────┐                                               ║
+║   │  DASHBOARD │  │  CLI/API   │             ◆ USER INTERFACES                 ║
+║   │  React 19  │  │  REST/WS   │                                               ║
+║   └─────┬──────┘  └─────┬──────┘                                               ║
+║         │ WS             │ HTTP                                                 ║
+║         └───────┬────────┘                                                     ║
+║                 ▼                                                               ║
+║          ┌─────────────┐                                                        ║
+║          │   GATEWAY   │◄════► ┌───────┐                                        ║
+║          │   Node.js   │       │ REDIS │                                        ║
+║          └──────┬──────┘       │ State │                                        ║
+║                 │              └───────┘                                         ║
+║                 ▼                                                                ║
+║          ┌─────────────┐                                                        ║
+║          │    NATS     │          ◆ MESSAGE BUS                                 ║
+║          │   Pub/Sub   │                                                        ║
+║          └──┬───┬───┬──┘                                                        ║
+║             │   │   │                                                           ║
+║     ┌───────┘   │   └───────┐                                                   ║
+║     ▼           ▼           ▼                                                   ║
+║  ┌──────────┐ ┌──────────┐ ┌──────────┐                                         ║
+║  │  JARVIS  │ │  SMITH   │ │  JOHNY   │  ◆ AGENTS                              ║
+║  │ Orchest. │ │   Dev    │ │Marketing │                                         ║
+║  │  Master  │ │ Mac Mini │ │ Mac Mini │                                         ║
+║  └──────────┘ └────┬─────┘ └────┬─────┘                                         ║
+║       ▲            │            │                                                ║
+║       │            └─────┬──────┘                                                ║
+║       │    delegates     │  communicate                                          ║
+║       └──────────────────┘                                                       ║
+║                                                                                  ║
+║                 ┌─────────────┐                                                  ║
+║                 │     NAS     │   ◆ SHARED STORAGE                               ║
+║                 │   Storage   │                                                  ║
+║                 └─────────────┘                                                  ║
+║                                                                                  ║
+╚══════════════════════════════════════════════════════════════════════════════════╝
 ```
 
 | Component | Description |
@@ -64,8 +84,10 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 | `GATEWAY` | Central HTTP/WebSocket server — routes requests, manages state, serves dashboard |
 | `DASHBOARD` | React 19 SPA with cyberpunk theme — real-time monitoring, chat, task management |
 | `CLI/API` | REST/WebSocket interface for programmatic access and command-line control |
-| `AGENT RUNTIME` | Autonomous AI agent with 33+ tools, 12 plugins, LLM integration |
-| `NATS` | High-performance message bus for inter-agent communication |
+| `JARVIS` | Orchestrator agent — manages, delegates, and coordinates Smith & Johny |
+| `SMITH` | Dev agent — coding, builds, deploys (Mac Mini) |
+| `JOHNY` | Marketing agent — research, content, social media (Mac Mini) |
+| `NATS` | High-performance message bus — inter-agent communication |
 | `REDIS` | Task queue, agent state, session storage |
 | `NAS` | Shared network storage for configs, sessions, artifacts, memory |
 
