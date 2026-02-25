@@ -345,7 +345,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 brew install nats-server redis
 
 # ── Clone & Setup ──────────────────────────────────────────────
-git clone https://github.com/bosoninfinity-beep/Jarvis-2.0.git
+git clone https://github.com/Jarvis-2-0-kit/Jarvis-2.0.git
 cd Jarvis-2.0/jarvis
 pnpm install
 pnpm build
