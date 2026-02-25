@@ -31,7 +31,7 @@ export class ProviderRegistry {
 
   constructor(config: ProviderRegistryConfig) {
     this.defaultProvider = config.defaultProvider ?? 'anthropic';
-    this.defaultModel = config.defaultModel ?? 'claude-sonnet-4-6';
+    this.defaultModel = config.defaultModel ?? 'claude-opus-4-6';
 
     // Initialize providers based on available keys
     if (config.anthropicApiKey) {

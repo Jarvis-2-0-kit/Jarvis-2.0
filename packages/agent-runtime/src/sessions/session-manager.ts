@@ -129,12 +129,41 @@ export class SessionManager {
     const entries = await this.loadSession(sessionId);
     const messages: Message[] = [];
 
+    // Collect tool_result entries by toolId for reconstruction
+    const toolResults = new Map<string, SessionEntry>();
+    for (const entry of entries) {
+      if (entry.type === 'tool_result' && entry.toolId) {
+        toolResults.set(entry.toolId, entry);
+      }
+    }
+
     for (const entry of entries) {
       if (entry.type === 'message' && entry.role && entry.content) {
         if (typeof entry.content === 'string') {
           messages.push({ role: entry.role, content: entry.content });
         } else {
           messages.push({ role: entry.role, content: entry.content as Message['content'] });
+
+          // If this assistant message contains tool_use blocks, inject the matching
+          // tool_result user message right after (Anthropic API requires this)
+          if (entry.role === 'assistant' && Array.isArray(entry.content)) {
+            const toolUseBlocks = (entry.content as Array<{ type: string; id?: string }>)
+              .filter((b) => b.type === 'tool_use' && b.id);
+
+            if (toolUseBlocks.length > 0) {
+              const resultBlocks: Array<{ type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }> = [];
+              for (const tu of toolUseBlocks) {
+                const result = toolResults.get(tu.id!);
+                resultBlocks.push({
+                  type: 'tool_result',
+                  tool_use_id: tu.id!,
+                  content: result ? (typeof result.content === 'string' ? result.content : JSON.stringify(result.content)) : '(result not found)',
+                  is_error: result ? (result.meta?.['is_error'] as boolean ?? false) : true,
+                });
+              }
+              messages.push({ role: 'user', content: resultBlocks as unknown as Message['content'] });
+            }
+          }
         }
       }
     }

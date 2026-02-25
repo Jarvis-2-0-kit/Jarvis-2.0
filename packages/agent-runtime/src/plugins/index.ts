@@ -41,3 +41,4 @@ export { createActivityTimelinePlugin } from './builtin/activity-timeline-plugin
 export { createHealthCheckPlugin } from './builtin/health-check-plugin.js';
 export { createRateLimiterPlugin } from './builtin/rate-limiter-plugin.js';
 export { createVoicePlugin } from './builtin/voice-plugin.js';
+export { createObsidianPlugin } from './builtin/obsidian-plugin.js';

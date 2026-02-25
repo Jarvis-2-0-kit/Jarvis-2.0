@@ -31,6 +31,7 @@ import { createActivityTimelinePlugin } from './builtin/activity-timeline-plugin
 import { createHealthCheckPlugin } from './builtin/health-check-plugin.js';
 import { createRateLimiterPlugin } from './builtin/rate-limiter-plugin.js';
 import { createVoicePlugin } from './builtin/voice-plugin.js';
+import { createObsidianPlugin } from './builtin/obsidian-plugin.js';
 
 const log = createLogger('plugins:loader');
 
@@ -68,6 +69,7 @@ export async function loadPlugins(config: PluginLoaderConfig): Promise<LoadedPlu
       createHealthCheckPlugin(),
       createRateLimiterPlugin(),
       createVoicePlugin(),
+      createObsidianPlugin(),
     ];
 
     for (const plugin of builtins) {

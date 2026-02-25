@@ -24,6 +24,8 @@ import { AgentRunner } from './engine/runner.js';
 import type { AgentRole } from './system-prompt/index.js';
 import type { AgentId } from '@jarvis/shared';
 import { hostname } from 'node:os';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const log = createLogger('agent:cli');
 
@@ -36,7 +38,7 @@ const natsUrlThunderbolt = process.env['NATS_URL_THUNDERBOLT'] ?? undefined;
 const thunderboltEnabled = process.env['THUNDERBOLT_ENABLED'] === 'true';
 const nasMount = process.env['JARVIS_NAS_MOUNT'] ?? '/Volumes/JarvisNAS/jarvis';
 const workspace = process.env['WORKSPACE_PATH'] ?? `${nasMount}/workspace/projects`;
-const defaultModel = process.env['DEFAULT_MODEL'] ?? 'claude-sonnet-4-6';
+const defaultModel = process.env['DEFAULT_MODEL'] ?? 'claude-opus-4-6';
 
 // SSH host config for remote machine control
 const sshAlphaHost = process.env['SSH_ALPHA_HOST'] ?? process.env['VNC_ALPHA_HOST'];
@@ -158,6 +160,19 @@ async function main(): Promise<void> {
     },
   });
 
+  // Load model override from NAS config (saved via dashboard)
+  let activeModel = defaultModel;
+  try {
+    const configPath = join(nasMount, 'config', `agent-${agentId}.json`);
+    if (existsSync(configPath)) {
+      const savedConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as { config?: { model?: string } };
+      if (savedConfig.config?.model) {
+        activeModel = savedConfig.config.model;
+        log.info(`Model override from NAS config: ${activeModel}`);
+      }
+    }
+  } catch { /* ignore, use default */ }
+
   // Create runner
   const runner = new AgentRunner({
     agentId,
@@ -169,7 +184,7 @@ async function main(): Promise<void> {
     nasMountPath: nasMount,
     workspacePath: workspace,
     capabilities: CAPABILITIES[role] ?? [],
-    defaultModel,
+    defaultModel: activeModel,
     tools,
     llm: {
       anthropicApiKey: process.env['ANTHROPIC_API_KEY'],

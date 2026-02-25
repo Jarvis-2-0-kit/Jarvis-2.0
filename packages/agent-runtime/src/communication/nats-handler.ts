@@ -35,7 +35,7 @@ export class NatsHandler {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private subscriptions: Subscription[] = [];
   private taskCallback: ((task: TaskAssignment) => void) | null = null;
-  private chatCallback: ((msg: { from: string; content: string }) => void) | null = null;
+  private chatCallback: ((msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }) => void) | null = null;
   private startedAt: number = Date.now();
   private completedTasks: number = 0;
   private failedTasks: number = 0;
@@ -180,7 +180,7 @@ export class NatsHandler {
     (async () => {
       for await (const msg of sub) {
         try {
-          const data = JSON.parse(sc.decode(msg.data)) as { from: string; content: string };
+          const data = JSON.parse(sc.decode(msg.data)) as { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> };
           log.info(`Chat from ${data.from}: ${data.content.slice(0, 80)}`);
           this.chatCallback?.(data);
         } catch (err) {
@@ -196,7 +196,7 @@ export class NatsHandler {
   }
 
   /** Set callback for chat messages */
-  onChat(callback: (msg: { from: string; content: string }) => void): void {
+  onChat(callback: (msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }) => void): void {
     this.chatCallback = callback;
   }
 

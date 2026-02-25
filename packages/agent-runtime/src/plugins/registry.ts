@@ -129,13 +129,14 @@ export class PluginRegistry {
           // Array of tools
           this.toolRegistrations.push({
             pluginId,
-            tools: toolOrFactory,
+            tools: toolOrFactory.map((t) => this.normalizePluginTool(t)),
           });
         } else {
-          // Single tool
+          // Single tool - normalize from plugin format { name, inputSchema, execute }
+          // to AgentTool format { definition: { name, description, input_schema }, execute }
           this.toolRegistrations.push({
             pluginId,
-            tool: toolOrFactory as AgentTool,
+            tool: this.normalizePluginTool(toolOrFactory as AgentTool),
           });
         }
       },
@@ -178,6 +179,44 @@ export class PluginRegistry {
     return api;
   }
 
+  // ─── Tool Normalization ──────────────────────────────────────────
+
+  /**
+   * Convert plugin tool format { name, description, inputSchema, execute }
+   * to AgentTool format { definition: { name, description, input_schema }, execute }
+   */
+  private normalizePluginTool(tool: unknown): AgentTool {
+    const t = tool as Record<string, unknown>;
+
+    // Already in AgentTool format (has definition property)
+    if (t.definition && typeof t.definition === 'object') {
+      return tool as AgentTool;
+    }
+
+    // Plugin format: { name, description, inputSchema, execute }
+    const name = t.name as string;
+    const description = (t.description as string) || '';
+    const inputSchema = (t.inputSchema ?? t.input_schema ?? { type: 'object', properties: {} }) as Record<string, unknown>;
+    const executeFn = t.execute as (params: Record<string, unknown>, context: unknown) => Promise<unknown>;
+
+    return {
+      definition: {
+        name,
+        description,
+        input_schema: inputSchema,
+      },
+      execute: async (params, context) => {
+        const result = await executeFn(params, context);
+        const r = result as Record<string, unknown>;
+        // Normalize result: plugin may return { type, text } instead of { type, content }
+        if (r && r.type === 'text' && r.text && !r.content) {
+          return { type: 'text' as const, content: r.text as string };
+        }
+        return result as { type: 'text' | 'image' | 'error'; content: string; metadata?: Record<string, unknown> };
+      },
+    };
+  }
+
   // ─── Tool Resolution ─────────────────────────────────────────────
 
   /**
@@ -205,7 +244,8 @@ export class PluginRegistry {
         } else if (reg.factory) {
           const result = reg.factory(context);
           const factoryTools = Array.isArray(result) ? result : [result];
-          for (const t of factoryTools) {
+          for (const rawTool of factoryTools) {
+            const t = this.normalizePluginTool(rawTool);
             if (!seenNames.has(t.definition.name)) {
               tools.push(t);
               seenNames.add(t.definition.name);

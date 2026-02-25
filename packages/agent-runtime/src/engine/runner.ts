@@ -23,6 +23,47 @@ const log = createLogger('agent:runner');
 const MAX_TOOL_ROUNDS = 50;
 const MAX_CONSECUTIVE_ERRORS = 5;
 
+/**
+ * Sanitize messages array to ensure valid Anthropic API format.
+ * Ensures every tool_use block has a matching tool_result in the next user message.
+ * Removes orphaned tool_use blocks that would cause API 400 errors.
+ */
+function sanitizeMessages(messages: Message[]): Message[] {
+  const sanitized: Message[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const toolUseBlocks = (msg.content as Array<{ type: string; id?: string }>)
+        .filter((b) => b.type === 'tool_use' && b.id);
+
+      if (toolUseBlocks.length > 0) {
+        // Check if the next message has matching tool_results
+        const nextMsg = messages[i + 1];
+        const hasResults = nextMsg?.role === 'user' && Array.isArray(nextMsg.content) &&
+          (nextMsg.content as Array<{ type: string }>).some((b) => b.type === 'tool_result');
+
+        if (!hasResults) {
+          // Strip tool_use blocks from this assistant message, keep only text
+          const textBlocks = (msg.content as Array<{ type: string }>).filter((b) => b.type === 'text');
+          if (textBlocks.length > 0) {
+            sanitized.push({ role: 'assistant', content: textBlocks as ContentBlock[] });
+          } else {
+            sanitized.push({ role: 'assistant', content: '(tool execution was interrupted)' });
+          }
+          log.warn(`Sanitized orphaned tool_use blocks from message ${i}`);
+          continue;
+        }
+      }
+    }
+
+    sanitized.push(msg);
+  }
+
+  return sanitized;
+}
+
 export interface AgentRunnerConfig {
   agentId: AgentId;
   role: AgentRole;
@@ -270,8 +311,8 @@ export class AgentRunner {
     }
   }
 
-  /** Handle chat messages from dashboard */
-  private async handleChat(msg: { from: string; content: string }): Promise<void> {
+  /** Handle chat messages from dashboard or external channels (WhatsApp, etc.) */
+  private async handleChat(msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<void> {
     if (!this.currentSessionId) {
       const sessionId = await this.sessions.createSession();
       this.currentSessionId = sessionId;
@@ -285,6 +326,9 @@ export class AgentRunner {
       }
     }
 
+    // Track the external session ID for routing responses back
+    const externalSessionId = msg.sessionId;
+
     const systemPrompt = await this.buildEnhancedSystemPrompt();
 
     try {
@@ -294,18 +338,24 @@ export class AgentRunner {
       // Fire message_received hook
       if (this.hooks) {
         await this.hooks.runMessageReceived(
-          { role: 'user', content: msg.content, source: 'chat' },
+          { role: 'user', content: msg.content, source: msg.metadata?.source as string ?? 'chat' },
           { agentId: this.config.agentId, sessionId: this.currentSessionId },
         );
       }
 
       const result = await this.runAgentLoop(this.currentSessionId, systemPrompt, msg.content);
 
-      await this.nats.sendChatResponse(result.output);
+      const responseMeta: Record<string, unknown> = {};
+      if (externalSessionId) responseMeta.sessionId = externalSessionId;
+      if (msg.metadata?.source) responseMeta.source = msg.metadata.source;
+
+      await this.nats.sendChatResponse(result.output, Object.keys(responseMeta).length > 0 ? responseMeta : undefined);
       log.info(`Chat response sent (${result.output.length} chars)`);
     } catch (err) {
       log.error(`Chat error: ${(err as Error).message}`);
-      await this.nats.sendChatResponse(`Error: ${(err as Error).message}`);
+      const errorMeta: Record<string, unknown> = {};
+      if (externalSessionId) errorMeta.sessionId = externalSessionId;
+      await this.nats.sendChatResponse(`Error: ${(err as Error).message}`, Object.keys(errorMeta).length > 0 ? errorMeta : undefined);
     } finally {
       if (!this.currentTask) {
         await this.nats.updateStatus('idle');
@@ -443,9 +493,9 @@ export class AgentRunner {
     let consecutiveErrors = 0;
     let activeModel = this.config.defaultModel;
 
-    // Load existing context if resuming
+    // Load existing context if resuming, sanitize to prevent API errors
     const existingMessages = await this.sessions.loadMessagesForContext(sessionId);
-    messages.push(...existingMessages);
+    messages.push(...sanitizeMessages(existingMessages));
 
     // Add the new user message
     messages.push({ role: 'user', content: userMessage });
