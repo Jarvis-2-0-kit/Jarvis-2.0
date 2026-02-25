@@ -208,7 +208,7 @@ export class ClaudeCliProvider implements LLMProvider {
           '--dangerously-skip-permissions',
         ], {
           env: { ...process.env, CLAUDECODE: '' },
-          timeout: 120_000,
+          timeout: 600_000,
         });
 
         let stdout = '';
@@ -306,7 +306,7 @@ export class ClaudeCliProvider implements LLMProvider {
     } catch (err) {
       const errMsg = (err as Error).message;
       if (errMsg.includes('TIMEOUT') || errMsg.includes('timed out')) {
-        throw new Error('Claude CLI timed out (120s)');
+        throw new Error('Claude CLI timed out (600s)');
       }
       throw new Error(`Claude CLI failed: ${errMsg}`);
     }
