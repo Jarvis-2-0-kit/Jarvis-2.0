@@ -17,6 +17,7 @@
 [![Redis](https://img.shields.io/badge/REDIS-STATE-00ff41?style=for-the-badge&logo=redis&logoColor=00ff41&labelColor=0a0a0a)](https://redis.io)
 [![Claude](https://img.shields.io/badge/CLAUDE_OPUS-4.6-00ff41?style=for-the-badge&logo=anthropic&logoColor=00ff41&labelColor=0a0a0a)](https://anthropic.com)
 [![License](https://img.shields.io/badge/LICENSE-PRIVATE-555555?style=for-the-badge&labelColor=0a0a0a)]()
+[![Website](https://img.shields.io/badge/WEBSITE-LIVE-00ff41?style=for-the-badge&logo=firebase&logoColor=00ff41&labelColor=0a0a0a)](https://jarvis2-website.web.app)
 
 </div>
 
