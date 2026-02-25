@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00ff41"/>
+      <stop offset="50%" stop-color="#00cc33"/>
+      <stop offset="100%" stop-color="#00ff41"/>
+    </linearGradient>
+    <linearGradient id="darkGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#0a0a0a"/>
+    </linearGradient>
+    <filter id="greenGlow">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="strongGlow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="256" cy="256" r="250" fill="url(#darkGrad)" stroke="#00ff41" stroke-width="2" opacity="0.95"/>
+  <circle cx="256" cy="256" r="240" fill="none" stroke="#00ff41" stroke-width="0.5" opacity="0.3"/>
+
+  <!-- Grid pattern -->
+  <g opacity="0.06" stroke="#00ff41" stroke-width="0.5">
+    <line x1="56" y1="256" x2="456" y2="256"/>
+    <line x1="256" y1="56" x2="256" y2="456"/>
+    <line x1="106" y1="56" x2="106" y2="456"/>
+    <line x1="206" y1="56" x2="206" y2="456"/>
+    <line x1="306" y1="56" x2="306" y2="456"/>
+    <line x1="406" y1="56" x2="406" y2="456"/>
+    <line x1="56" y1="106" x2="456" y2="106"/>
+    <line x1="56" y1="206" x2="456" y2="206"/>
+    <line x1="56" y1="306" x2="456" y2="306"/>
+    <line x1="56" y1="406" x2="456" y2="406"/>
+  </g>
+
+  <!-- Outer hexagon frame -->
+  <polygon points="256,70 420,118 450,280 350,430 162,430 62,280 92,118"
+           fill="none" stroke="#00ff41" stroke-width="1.5" opacity="0.25"
+           filter="url(#greenGlow)"/>
+
+  <!-- Inner circuit lines -->
+  <g stroke="#00ff41" stroke-width="1" opacity="0.15" fill="none">
+    <path d="M 140 180 L 140 140 L 180 140"/>
+    <path d="M 372 180 L 372 140 L 332 140"/>
+    <path d="M 140 332 L 140 372 L 180 372"/>
+    <path d="M 372 332 L 372 372 L 332 372"/>
+  </g>
+
+  <!-- CPU/Brain icon - central element -->
+  <g filter="url(#strongGlow)">
+    <!-- Central processor square -->
+    <rect x="196" y="150" width="120" height="120" rx="12" fill="none" stroke="url(#glow)" stroke-width="2.5"/>
+
+    <!-- Processor inner detail -->
+    <rect x="218" y="172" width="76" height="76" rx="6" fill="none" stroke="#00ff41" stroke-width="1" opacity="0.5"/>
+
+    <!-- Central "J" letterform -->
+    <text x="256" y="232" text-anchor="middle" font-family="monospace" font-size="52" font-weight="bold" fill="#00ff41">
+      J
+    </text>
+
+    <!-- Processor pins - top -->
+    <line x1="226" y1="150" x2="226" y2="130" stroke="#00ff41" stroke-width="2"/>
+    <line x1="256" y1="150" x2="256" y2="125" stroke="#00ff41" stroke-width="2"/>
+    <line x1="286" y1="150" x2="286" y2="130" stroke="#00ff41" stroke-width="2"/>
+
+    <!-- Processor pins - bottom -->
+    <line x1="226" y1="270" x2="226" y2="290" stroke="#00ff41" stroke-width="2"/>
+    <line x1="256" y1="270" x2="256" y2="295" stroke="#00ff41" stroke-width="2"/>
+    <line x1="286" y1="270" x2="286" y2="290" stroke="#00ff41" stroke-width="2"/>
+
+    <!-- Processor pins - left -->
+    <line x1="196" y1="185" x2="176" y2="185" stroke="#00ff41" stroke-width="2"/>
+    <line x1="196" y1="210" x2="171" y2="210" stroke="#00ff41" stroke-width="2"/>
+    <line x1="196" y1="235" x2="176" y2="235" stroke="#00ff41" stroke-width="2"/>
+
+    <!-- Processor pins - right -->
+    <line x1="316" y1="185" x2="336" y2="185" stroke="#00ff41" stroke-width="2"/>
+    <line x1="316" y1="210" x2="341" y2="210" stroke="#00ff41" stroke-width="2"/>
+    <line x1="316" y1="235" x2="336" y2="235" stroke="#00ff41" stroke-width="2"/>
+  </g>
+
+  <!-- Connection nodes (3 agents) -->
+  <g filter="url(#greenGlow)">
+    <!-- Node 1 - Jarvis/Master (top) -->
+    <circle cx="256" cy="105" r="8" fill="#0a0a0a" stroke="#00ff41" stroke-width="2"/>
+    <circle cx="256" cy="105" r="3" fill="#00ff41"/>
+
+    <!-- Node 2 - Smith (bottom-left) -->
+    <circle cx="155" cy="310" r="8" fill="#0a0a0a" stroke="#00ffff" stroke-width="2"/>
+    <circle cx="155" cy="310" r="3" fill="#00ffff"/>
+
+    <!-- Node 3 - Johny (bottom-right) -->
+    <circle cx="357" cy="310" r="8" fill="#0a0a0a" stroke="#ffaa00" stroke-width="2"/>
+    <circle cx="357" cy="310" r="3" fill="#ffaa00"/>
+
+    <!-- Connection lines from CPU to nodes -->
+    <line x1="256" y1="125" x2="256" y2="113" stroke="#00ff41" stroke-width="1" opacity="0.6"/>
+    <line x1="176" y1="235" x2="163" y2="302" stroke="#00ffff" stroke-width="1" opacity="0.6"/>
+    <line x1="336" y1="235" x2="349" y2="302" stroke="#ffaa00" stroke-width="1" opacity="0.6"/>
+  </g>
+
+  <!-- Title: JARVIS -->
+  <text x="256" y="380" text-anchor="middle" font-family="'Courier New', monospace" font-size="36" font-weight="bold" fill="#00ff41" filter="url(#greenGlow)" letter-spacing="8">
+    JARVIS
+  </text>
+
+  <!-- Subtitle -->
+  <text x="256" y="410" text-anchor="middle" font-family="'Courier New', monospace" font-size="12" fill="#00ff41" opacity="0.6" letter-spacing="4">
+    2.0
+  </text>
+
+  <!-- Status dots -->
+  <g opacity="0.8">
+    <circle cx="218" cy="432" r="3" fill="#00ff41"/>
+    <text x="228" y="436" font-family="monospace" font-size="9" fill="#00ff41" opacity="0.5">ONLINE</text>
+    <circle cx="280" cy="432" r="3" fill="#00ffff"/>
+    <circle cx="296" cy="432" r="3" fill="#ffaa00"/>
+  </g>
+
+  <!-- Corner brackets -->
+  <g stroke="#00ff41" stroke-width="1.5" opacity="0.4" fill="none">
+    <path d="M 80 100 L 80 75 L 105 75"/>
+    <path d="M 432 100 L 432 75 L 407 75"/>
+    <path d="M 80 412 L 80 437 L 105 437"/>
+    <path d="M 432 412 L 432 437 L 407 437"/>
+  </g>
+</svg>
