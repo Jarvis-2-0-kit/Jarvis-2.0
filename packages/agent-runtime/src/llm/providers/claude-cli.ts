@@ -205,6 +205,7 @@ export class ClaudeCliProvider implements LLMProvider {
           '--output-format', 'json',
           '--model', model,
           '--no-session-persistence',
+          '--dangerously-skip-permissions',
         ], {
           env: { ...process.env, CLAUDECODE: '' },
           timeout: 120_000,
