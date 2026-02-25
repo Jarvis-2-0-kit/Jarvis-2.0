@@ -1,106 +1,88 @@
-<svg width="800" height="200" xmlns="http://www.w3.org/2000/svg">
-  <foreignObject width="800" height="200">
-    <div xmlns="http://www.w3.org/1999/xhtml">
-      <style>
-        @keyframes glow-pulse {
-          0%, 100% { text-shadow: 0 0 10px #00ff41, 0 0 20px #00ff41, 0 0 40px #00ff4180, 0 0 80px #00ff4140; opacity: 1; }
-          50% { text-shadow: 0 0 5px #00ff41, 0 0 10px #00ff41, 0 0 20px #00ff4180, 0 0 40px #00ff4140; opacity: 0.92; }
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(8px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes scanline {
-          0% { top: -2px; }
-          100% { top: 200px; }
-        }
-        @keyframes borderGlow {
-          0%, 100% { opacity: 0.6; }
-          50% { opacity: 1; }
-        }
-        .container {
-          width: 800px;
-          height: 200px;
-          background: #0a0a0a;
-          background-image:
-            linear-gradient(rgba(0,255,65,0.03) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(0,255,65,0.03) 1px, transparent 1px);
-          background-size: 40px 40px;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          position: relative;
-          overflow: hidden;
-          border-radius: 6px;
-          font-family: 'Courier New', 'Consolas', monospace;
-        }
-        .title {
-          font-size: 56px;
-          font-weight: bold;
-          color: #00ff41;
-          letter-spacing: 12px;
-          animation: glow-pulse 3s ease-in-out infinite;
-          margin: 0;
-          padding: 0;
-          line-height: 1.2;
-        }
-        .subtitle {
-          font-size: 13px;
-          color: #8b949e;
-          letter-spacing: 6px;
-          text-transform: uppercase;
-          animation: fadeIn 1.5s ease-out 0.5s both;
-          margin-top: 10px;
-        }
-        .version {
-          font-size: 11px;
-          color: #00ff4160;
-          letter-spacing: 4px;
-          animation: fadeIn 1.5s ease-out 1s both;
-          margin-top: 6px;
-        }
-        .scanline {
-          position: absolute;
-          width: 100%;
-          height: 2px;
-          background: linear-gradient(90deg, transparent, #00ff4130, #00ff4160, #00ff4130, transparent);
-          animation: scanline 4s linear infinite;
-          pointer-events: none;
-        }
-        .border-bottom {
-          position: absolute;
-          bottom: 0;
-          left: 0;
-          width: 100%;
-          height: 2px;
-          background: linear-gradient(90deg, transparent, #00ff41, transparent);
-          animation: borderGlow 3s ease-in-out infinite;
-        }
-        .corner-tl, .corner-tr, .corner-bl, .corner-br {
-          position: absolute;
-          width: 16px;
-          height: 16px;
-          border-color: #00ff4150;
-          border-style: solid;
-          border-width: 0;
-        }
-        .corner-tl { top: 6px; left: 6px; border-top-width: 2px; border-left-width: 2px; }
-        .corner-tr { top: 6px; right: 6px; border-top-width: 2px; border-right-width: 2px; }
-        .corner-bl { bottom: 6px; left: 6px; border-bottom-width: 2px; border-left-width: 2px; }
-        .corner-br { bottom: 6px; right: 6px; border-bottom-width: 2px; border-right-width: 2px; }
-      </style>
-      <div class="container">
-        <div class="scanline"></div>
-        <div class="corner-tl"></div>
-        <div class="corner-tr"></div>
-        <div class="corner-bl"></div>
-        <div class="corner-br"></div>
-        <div class="title">JARVIS 2.0</div>
-        <div class="subtitle">Autonomous Multi-Agent AI Platform</div>
-        <div class="version">[ SYSTEM INITIALIZED // ALL NODES ONLINE ]</div>
-        <div class="border-bottom"></div>
-      </div>
-    </div>
-  </foreignObject>
+<svg width="800" height="200" viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Glow filter for title -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="blur1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur2"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="16" result="blur3"/>
+      <feMerge>
+        <feMergeNode in="blur3"/>
+        <feMergeNode in="blur2"/>
+        <feMergeNode in="blur1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Subtle glow for small text -->
+    <filter id="glow-sm" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Grid pattern -->
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#00ff41" stroke-width="0.5" opacity="0.04"/>
+    </pattern>
+
+    <!-- Bottom border gradient -->
+    <linearGradient id="border-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00ff41" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#00ff41" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#00ff41" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Scanline gradient -->
+    <linearGradient id="scanline-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00ff41" stop-opacity="0"/>
+      <stop offset="30%" stop-color="#00ff41" stop-opacity="0.15"/>
+      <stop offset="50%" stop-color="#00ff41" stop-opacity="0.3"/>
+      <stop offset="70%" stop-color="#00ff41" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#00ff41" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="200" fill="#0a0a0a" rx="6"/>
+
+  <!-- Grid overlay -->
+  <rect width="800" height="200" fill="url(#grid)" rx="6"/>
+
+  <!-- Corner brackets -->
+  <g stroke="#00ff41" stroke-width="1.5" fill="none" opacity="0.35">
+    <polyline points="8,22 8,8 22,8"/>
+    <polyline points="778,8 792,8 792,22"/>
+    <polyline points="792,178 792,192 778,192"/>
+    <polyline points="22,192 8,192 8,178"/>
+  </g>
+
+  <!-- Scanline sweep -->
+  <rect width="800" height="3" fill="url(#scanline-grad)" y="0">
+    <animate attributeName="y" from="-3" to="200" dur="4s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- Title: JARVIS 2.0 -->
+  <text x="400" y="90" text-anchor="middle" font-family="'Courier New', Consolas, monospace" font-size="56" font-weight="bold" fill="#00ff41" letter-spacing="12" filter="url(#glow)">
+    JARVIS 2.0
+    <animate attributeName="opacity" values="1;0.88;1" dur="3s" repeatCount="indefinite"/>
+  </text>
+
+  <!-- Subtitle -->
+  <text x="400" y="126" text-anchor="middle" font-family="'Courier New', Consolas, monospace" font-size="13" fill="#8b949e" letter-spacing="5">
+    AUTONOMOUS MULTI-AGENT AI PLATFORM
+    <animate attributeName="opacity" from="0" to="1" dur="1.5s" fill="freeze"/>
+  </text>
+
+  <!-- Version tag -->
+  <text x="400" y="152" text-anchor="middle" font-family="'Courier New', Consolas, monospace" font-size="11" fill="#00ff41" opacity="0.4" letter-spacing="3">
+    [ SYSTEM INITIALIZED // ALL NODES ONLINE ]
+    <animate attributeName="opacity" from="0" to="0.4" dur="1.5s" begin="0.8s" fill="freeze"/>
+  </text>
+
+  <!-- Bottom border glow -->
+  <rect x="0" y="197" width="800" height="3" fill="url(#border-grad)" rx="1">
+    <animate attributeName="opacity" values="0.5;1;0.5" dur="3s" repeatCount="indefinite"/>
+  </rect>
 </svg>

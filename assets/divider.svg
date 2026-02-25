@@ -1,39 +1,26 @@
-<svg width="800" height="8" xmlns="http://www.w3.org/2000/svg">
-  <foreignObject width="800" height="8">
-    <div xmlns="http://www.w3.org/1999/xhtml">
-      <style>
-        @keyframes shimmer {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
-        .divider-wrap {
-          width: 800px;
-          height: 8px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          overflow: hidden;
-          position: relative;
-        }
-        .line {
-          width: 100%;
-          height: 1px;
-          background: linear-gradient(90deg, transparent, #00ff4140, #00ff41, #00ff4140, transparent);
-        }
-        .shimmer {
-          position: absolute;
-          top: 3px;
-          left: 0;
-          width: 100%;
-          height: 2px;
-          background: linear-gradient(90deg, transparent 0%, transparent 40%, #00ff4180 50%, transparent 60%, transparent 100%);
-          animation: shimmer 3s ease-in-out infinite;
-        }
-      </style>
-      <div class="divider-wrap">
-        <div class="line"></div>
-        <div class="shimmer"></div>
-      </div>
-    </div>
-  </foreignObject>
+<svg width="800" height="8" viewBox="0 0 800 8" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="line-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00ff41" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#00ff41" stop-opacity="0.25"/>
+      <stop offset="50%" stop-color="#00ff41" stop-opacity="1"/>
+      <stop offset="80%" stop-color="#00ff41" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#00ff41" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="shimmer" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00ff41" stop-opacity="0"/>
+      <stop offset="45%" stop-color="#00ff41" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#00ff41" stop-opacity="0.6"/>
+      <stop offset="55%" stop-color="#00ff41" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#00ff41" stop-opacity="0"/>
+      <animate attributeName="x1" values="-100%;100%" dur="3s" repeatCount="indefinite"/>
+      <animate attributeName="x2" values="0%;200%" dur="3s" repeatCount="indefinite"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Base line -->
+  <rect x="0" y="3" width="800" height="1" fill="url(#line-grad)"/>
+
+  <!-- Shimmer overlay -->
+  <rect x="0" y="2.5" width="800" height="2" fill="url(#shimmer)"/>
 </svg>
