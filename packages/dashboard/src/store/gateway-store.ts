@@ -24,8 +24,11 @@ interface TaskDef {
   title: string;
   description: string;
   priority: string;
-  assignedAgent: string | null;
   status?: string;
+  assignedAgent: string | null;
+  requiredCapabilities?: string[];
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 interface ActivityEntry {
@@ -70,6 +73,8 @@ interface GatewayStore {
   createTask: (task: Partial<TaskDef>) => void;
 }
 
+let initialized = false;
+
 export const useGatewayStore = create<GatewayStore>((set) => ({
   connected: false,
   agents: new Map(),
@@ -80,6 +85,8 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
   consoleLines: [],
 
   init: () => {
+    if (initialized) return;
+    initialized = true;
     gateway.connect();
 
     gateway.on('_connected', () => {
@@ -127,6 +134,33 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
       set((prev) => ({
         tasks: prev.tasks.map((t) =>
           t.id === result.taskId ? { ...t, status: 'completed' } : t
+        ),
+      }));
+    });
+
+    gateway.on('task.cancelled', (payload) => {
+      const result = payload as { taskId: string };
+      set((prev) => ({
+        tasks: prev.tasks.map((t) =>
+          t.id === result.taskId ? { ...t, status: 'cancelled', assignedAgent: null } : t
+        ),
+      }));
+    });
+
+    gateway.on('task.assigned', (payload) => {
+      const result = payload as { taskId: string; agentId: string };
+      set((prev) => ({
+        tasks: prev.tasks.map((t) =>
+          t.id === result.taskId ? { ...t, status: 'assigned', assignedAgent: result.agentId } : t
+        ),
+      }));
+    });
+
+    gateway.on('task.failed', (payload) => {
+      const result = payload as { taskId: string };
+      set((prev) => ({
+        tasks: prev.tasks.map((t) =>
+          t.id === result.taskId ? { ...t, status: 'failed' } : t
         ),
       }));
     });

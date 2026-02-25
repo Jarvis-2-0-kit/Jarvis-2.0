@@ -13,14 +13,16 @@
  * - Abort running response
  */
 
-import { useState, useRef, useEffect, useCallback, type KeyboardEvent as RKE } from 'react';
+import { useState, useRef, useEffect, useCallback, type KeyboardEvent as RKE, type MouseEvent as RME } from 'react';
 import {
   Send, Copy, RotateCcw, ChevronDown, Bot, User, Cpu, Terminal,
   Plus, Trash2, MessageSquare, Clock, StopCircle, Loader2,
-  ChevronRight, Hash, Sparkles, CheckCheck,
+  ChevronRight, Hash, Sparkles, CheckCheck, GripVertical,
+  Search, X, Pencil, Check, Wifi, WifiOff,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 import { useGatewayStore } from '../store/gateway-store.js';
+import { useToastStore } from '../store/toast-store.js';
 import { formatTime, formatRelativeTime } from '../utils/formatters.js';
 
 // ─── Types ─────────────────────────────────────────────────────────
@@ -75,6 +77,8 @@ const CSS = `
 @keyframes cv-fade   { from{opacity:0} to{opacity:1} }
 @keyframes cv-pulse  { 0%,100%{opacity:.5} 50%{opacity:1} }
 @keyframes cv-stream { 0%{border-color:var(--green-dim)} 50%{border-color:var(--green-muted)} 100%{border-color:var(--green-dim)} }
+.cv-resize-handle:hover { background: rgba(0,255,65,0.1) !important; }
+.cv-resize-handle:active { background: rgba(0,255,65,0.2) !important; }
 `;
 
 // ─── Main Component ────────────────────────────────────────────────
@@ -99,15 +103,36 @@ export function ChatView() {
 
   // Input
   const [input, setInput] = useState('');
-  const [target, setTarget] = useState<'all' | 'agent-alpha' | 'agent-beta'>('all');
+  const [target, setTarget] = useState<'all' | 'agent-alpha' | 'agent-beta'>('agent-alpha');
   const [showCmds, setShowCmds] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Edit
+  const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
+
+  // Latency
+  const [latency, setLatency] = useState<number | null>(null);
+
+  // Toast
+  const addToast = useToastStore((s) => s.addToast);
+
+  // Resize
+  const [sidebarWidth, setSidebarWidth] = useState(220);
+  const isResizing = useRef(false);
+  const startX = useRef(0);
+  const startWidth = useRef(0);
 
   // Refs
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
 
   // ── Inject CSS ──
@@ -121,6 +146,80 @@ export function ChatView() {
     }
   }, []);
 
+  // ── Prevent accidental tab close during streaming ──
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (isAgentRunning) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isAgentRunning]);
+
+  // ── Ctrl+F search ──
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+      if (e.key === 'Escape' && searchOpen) {
+        setSearchOpen(false);
+        setSearchQuery('');
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [searchOpen]);
+
+  // ── Heartbeat / latency ──
+  useEffect(() => {
+    if (!connected) { setLatency(null); return; }
+    const interval = setInterval(() => {
+      const start = Date.now();
+      gateway.request('ping').then(() => {
+        setLatency(Date.now() - start);
+      }).catch(() => setLatency(null));
+    }, 15_000);
+    // Initial ping
+    const start = Date.now();
+    gateway.request('ping').then(() => setLatency(Date.now() - start)).catch(() => {});
+    return () => clearInterval(interval);
+  }, [connected]);
+
+  // ── Sidebar resize ──
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing.current) return;
+      const newWidth = Math.min(Math.max(startWidth.current + (e.clientX - startX.current), 140), 500);
+      setSidebarWidth(newWidth);
+    };
+    const handleMouseUp = () => {
+      if (isResizing.current) {
+        isResizing.current = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, []);
+
+  const startResize = (e: RME) => {
+    e.preventDefault();
+    isResizing.current = true;
+    startX.current = e.clientX;
+    startWidth.current = sidebarWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  };
+
   // ── Load sessions ──
   useEffect(() => {
     if (!connected) return;
@@ -131,7 +230,10 @@ export function ChatView() {
         setActiveSessionId(list[0].id);
       }
       setSessionsLoading(false);
-    }).catch(() => setSessionsLoading(false));
+    }).catch((err) => {
+      setSessionsLoading(false);
+      addToast({ type: 'error', title: 'Sessions', message: `Failed to load sessions: ${(err as Error).message}` });
+    });
   }, [connected]);
 
   // ── Load messages for active session ──
@@ -143,9 +245,10 @@ export function ChatView() {
       setMessages(msgs);
       setLoadingHistory(false);
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'auto' }), 50);
-    }).catch(() => {
+    }).catch((err) => {
       setMessages([]);
       setLoadingHistory(false);
+      addToast({ type: 'error', title: 'History', message: `Failed to load chat history: ${(err as Error).message}` });
     });
   }, [connected, activeSessionId]);
 
@@ -156,7 +259,11 @@ export function ChatView() {
       // Only show messages for current session (or no session filter)
       if (msg.sessionId && msg.sessionId !== activeSessionId) return;
 
-      setMessages((prev) => [...prev.slice(-500), msg]);
+      // Deduplicate: skip if message with same ID already exists (optimistic append or duplicate WS)
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === msg.id)) return prev;
+        return [...prev.slice(-500), msg];
+      });
 
       // If this is from an agent, mark as done running
       if (msg.from !== 'user') {
@@ -193,21 +300,14 @@ export function ChatView() {
     };
   }, [activeSessionId]);
 
-  // ── Also listen for store-based messages (fallback) ──
-  const storeMessages = useGatewayStore((s) => s.chatMessages);
+  // ── Reset streaming state on disconnect ──
   useEffect(() => {
-    if (storeMessages.length === 0) return;
-    const last = storeMessages[storeMessages.length - 1];
-    // Deduplicate — only append if not already in our local state
-    setMessages((prev) => {
-      if (prev.find((m) => m.id === last.id)) return prev;
-      return [...prev.slice(-500), last as ChatMsg];
-    });
-
-    if (last.from !== 'user') {
+    const unsub = gateway.on('_disconnected', () => {
       setIsAgentRunning(false);
-    }
-  }, [storeMessages.length]);
+      setStreamText(null);
+    });
+    return unsub;
+  }, []);
 
   // ── Send ──
   const handleSend = useCallback(() => {
@@ -229,8 +329,16 @@ export function ChatView() {
     setIsAgentRunning(true);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-    gateway.request('chat.send', { ...msg }).catch(() => {
+    // Auto-name session from first message
+    const currentSession = sessions.find((s) => s.id === activeSessionId);
+    if (currentSession && (currentSession.title === 'New Chat' || currentSession.messageCount === 0)) {
+      const autoTitle = text.length > 40 ? text.substring(0, 40) + '...' : text;
+      setSessions((prev) => prev.map((s) => s.id === activeSessionId ? { ...s, title: autoTitle, messageCount: s.messageCount + 1 } : s));
+    }
+
+    gateway.request('chat.send', { ...msg }).catch((err) => {
       setIsAgentRunning(false);
+      addToast({ type: 'error', title: 'Send failed', message: (err as Error).message });
     });
 
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 80);
@@ -238,7 +346,9 @@ export function ChatView() {
 
   // ── Abort ──
   const handleAbort = () => {
-    gateway.request('chat.abort', { sessionId: activeSessionId }).catch(() => {});
+    gateway.request('chat.abort', { sessionId: activeSessionId }).catch((err) => {
+      addToast({ type: 'warning', title: 'Abort', message: `Could not abort: ${(err as Error).message}` });
+    });
     setIsAgentRunning(false);
     setStreamText(null);
   };
@@ -261,7 +371,9 @@ export function ChatView() {
 
   // ── Delete session ──
   const handleDeleteSession = (id: string) => {
-    gateway.request('chat.session.delete', { sessionId: id }).catch(() => {});
+    gateway.request('chat.session.delete', { sessionId: id }).catch((err) => {
+      addToast({ type: 'error', title: 'Delete', message: `Failed to delete session: ${(err as Error).message}` });
+    });
     setSessions((prev) => prev.filter((s) => s.id !== id));
     if (activeSessionId === id) {
       const remaining = sessions.filter((s) => s.id !== id);
@@ -311,8 +423,45 @@ export function ChatView() {
     });
   };
 
-  // ── Group messages ──
-  const groups = groupMessages(messages);
+  // ── Filter & group messages ──
+  const filteredMessages = searchQuery
+    ? messages.filter((m) => m.content.toLowerCase().includes(searchQuery.toLowerCase()))
+    : messages;
+  const groups = groupMessages(filteredMessages);
+
+  // ── Edit handlers ──
+  const handleStartEdit = (msg: ChatMsg) => {
+    setEditingMsgId(msg.id);
+    setEditText(msg.content);
+  };
+
+  const handleSaveEdit = () => {
+    if (!editingMsgId || !editText.trim()) return;
+    const text = editText.trim();
+    // Send as a new message (edit = resend with new content)
+    const msg: ChatMsg = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      from: 'user',
+      to: target,
+      content: text,
+      timestamp: Date.now(),
+      sessionId: activeSessionId,
+    };
+    setMessages((prev) => [...prev, msg]);
+    setIsAgentRunning(true);
+    setEditingMsgId(null);
+    setEditText('');
+    gateway.request('chat.send', { ...msg }).catch((err) => {
+      setIsAgentRunning(false);
+      addToast({ type: 'error', title: 'Send failed', message: (err as Error).message });
+    });
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 80);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMsgId(null);
+    setEditText('');
+  };
 
   // ───────────────────────────────────────────────────────────────────
   return (
@@ -320,14 +469,14 @@ export function ChatView() {
 
       {/* ── Session sidebar ── */}
       <div style={{
-        width: sidebarCollapsed ? 0 : 220,
-        minWidth: sidebarCollapsed ? 0 : 220,
+        width: sidebarCollapsed ? 0 : sidebarWidth,
+        minWidth: sidebarCollapsed ? 0 : sidebarWidth,
         borderRight: sidebarCollapsed ? 'none' : '1px solid var(--border-primary)',
         background: 'var(--bg-primary)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
-        transition: 'all 0.2s ease',
+        transition: isResizing.current ? 'none' : 'all 0.2s ease',
       }}>
         {/* Sidebar header */}
         <div style={{
@@ -382,6 +531,28 @@ export function ChatView() {
         </div>
       </div>
 
+      {/* ── Resize handle ── */}
+      {!sidebarCollapsed && (
+        <div
+          onMouseDown={startResize}
+          style={{
+            width: 6,
+            cursor: 'col-resize',
+            background: 'transparent',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            position: 'relative',
+            zIndex: 2,
+          }}
+          onMouseEnter={(e) => { (e.currentTarget as HTMLDivElement).style.background = 'rgba(0,255,65,0.1)'; }}
+          onMouseLeave={(e) => { if (!isResizing.current) (e.currentTarget as HTMLDivElement).style.background = 'transparent'; }}
+        >
+          <GripVertical size={10} color="var(--text-muted)" style={{ opacity: 0.4 }} />
+        </div>
+      )}
+
       {/* ── Main chat area ── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 
@@ -435,7 +606,43 @@ export function ChatView() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {/* Latency indicator */}
+            {connected && latency !== null && (
+              <span style={{
+                fontSize: 9, color: latency < 100 ? 'var(--green-muted)' : latency < 300 ? '#fbbf24' : '#ef4444',
+                fontFamily: 'var(--font-mono)', display: 'flex', alignItems: 'center', gap: 3,
+              }}>
+                <Wifi size={10} />
+                {latency}ms
+              </span>
+            )}
+            {connected && latency === null && (
+              <WifiOff size={10} color="var(--text-muted)" />
+            )}
+
+            {/* Search toggle */}
+            <button
+              onClick={() => {
+                setSearchOpen(!searchOpen);
+                if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50);
+                else setSearchQuery('');
+              }}
+              title="Search messages (Ctrl+F)"
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24,
+                background: searchOpen ? 'var(--green-dim)' : 'transparent',
+                border: `1px solid ${searchOpen ? 'var(--green-muted)' : 'var(--border-dim)'}`,
+                borderRadius: 4, cursor: 'pointer',
+                color: searchOpen ? 'var(--green-bright)' : 'var(--text-muted)',
+              }}
+            >
+              <Search size={11} />
+            </button>
+
+            <div style={{ width: 1, height: 16, background: 'var(--border-dim)' }} />
+
             {(['all', 'agent-alpha', 'agent-beta'] as const).map((t) => (
               <button
                 key={t}
@@ -454,6 +661,44 @@ export function ChatView() {
             ))}
           </div>
         </div>
+
+        {/* Search bar */}
+        {searchOpen && (
+          <div style={{
+            padding: '6px 16px',
+            borderBottom: '1px solid var(--border-primary)',
+            background: 'var(--bg-tertiary)',
+            display: 'flex', gap: 8, alignItems: 'center',
+            animation: 'cv-slide 0.15s ease-out',
+          }}>
+            <Search size={12} color="var(--text-muted)" />
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search messages..."
+              style={{
+                flex: 1, background: 'transparent', border: 'none', outline: 'none',
+                color: 'var(--text-primary)', fontSize: 12, fontFamily: 'var(--font-ui)',
+              }}
+            />
+            {searchQuery && (
+              <span style={{ fontSize: 9, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                {messages.filter((m) => m.content.toLowerCase().includes(searchQuery.toLowerCase())).length} found
+              </span>
+            )}
+            <button
+              onClick={() => { setSearchOpen(false); setSearchQuery(''); }}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: 'var(--text-muted)', padding: 2,
+              }}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
 
         {/* Messages */}
         <div
@@ -487,6 +732,13 @@ export function ChatView() {
                 copiedId={copiedId}
                 onCopy={copyMsg}
                 onResend={(c) => { setInput(c); textareaRef.current?.focus(); }}
+                searchQuery={searchQuery}
+                editingMsgId={editingMsgId}
+                editText={editText}
+                onEditStart={handleStartEdit}
+                onEditChange={setEditText}
+                onEditSave={handleSaveEdit}
+                onEditCancel={handleCancelEdit}
               />
             ))
           )}
@@ -765,10 +1017,17 @@ function StreamingIndicator({ text, from }: { text: string | null; from: string 
   );
 }
 
-function MessageGroupBlock({ group, copiedId, onCopy, onResend }: {
+function MessageGroupBlock({ group, copiedId, onCopy, onResend, searchQuery, editingMsgId, editText, onEditStart, onEditChange, onEditSave, onEditCancel }: {
   group: MsgGroup; copiedId: string | null;
   onCopy: (id: string, content: string) => void;
   onResend: (content: string) => void;
+  searchQuery: string;
+  editingMsgId: string | null;
+  editText: string;
+  onEditStart: (msg: ChatMsg) => void;
+  onEditChange: (text: string) => void;
+  onEditSave: () => void;
+  onEditCancel: () => void;
 }) {
   const cfg = SENDER_CFG[group.sender] ?? SENDER_CFG['system'];
   const Icon = cfg.icon;
@@ -811,6 +1070,13 @@ function MessageGroupBlock({ group, copiedId, onCopy, onResend }: {
             copiedId={copiedId}
             onCopy={onCopy}
             onResend={onResend}
+            searchQuery={searchQuery}
+            isEditing={editingMsgId === msg.id}
+            editText={editText}
+            onEditStart={() => onEditStart(msg)}
+            onEditChange={onEditChange}
+            onEditSave={onEditSave}
+            onEditCancel={onEditCancel}
           />
         ))}
       </div>
@@ -818,12 +1084,57 @@ function MessageGroupBlock({ group, copiedId, onCopy, onResend }: {
   );
 }
 
-function MsgBubble({ msg, sender, copiedId, onCopy, onResend }: {
+function MsgBubble({ msg, sender, copiedId, onCopy, onResend, searchQuery, isEditing, editText, onEditStart, onEditChange, onEditSave, onEditCancel }: {
   msg: ChatMsg; sender: string; copiedId: string | null;
   onCopy: (id: string, content: string) => void;
   onResend: (content: string) => void;
+  searchQuery: string;
+  isEditing: boolean;
+  editText: string;
+  onEditStart: () => void;
+  onEditChange: (text: string) => void;
+  onEditSave: () => void;
+  onEditCancel: () => void;
 }) {
   const [hover, setHover] = useState(false);
+
+  if (isEditing) {
+    return (
+      <div style={{ padding: '4px 0' }}>
+        <textarea
+          value={editText}
+          onChange={(e) => onEditChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onEditSave(); }
+            if (e.key === 'Escape') onEditCancel();
+          }}
+          autoFocus
+          style={{
+            width: '100%', background: 'var(--bg-tertiary)', border: '1px solid var(--cyan-muted)',
+            borderRadius: 4, padding: '6px 8px', color: 'var(--text-white)', fontSize: 12,
+            fontFamily: 'var(--font-ui)', resize: 'vertical', minHeight: 36, outline: 'none',
+            lineHeight: 1.5,
+          }}
+        />
+        <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+          <button onClick={onEditSave} style={{
+            fontSize: 9, padding: '2px 8px', background: 'var(--green-dim)',
+            border: '1px solid var(--green-muted)', borderRadius: 3,
+            color: 'var(--green-bright)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 3,
+          }}>
+            <Check size={9} /> Send
+          </button>
+          <button onClick={onEditCancel} style={{
+            fontSize: 9, padding: '2px 8px', background: 'transparent',
+            border: '1px solid var(--border-dim)', borderRadius: 3,
+            color: 'var(--text-muted)', cursor: 'pointer',
+          }}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -832,10 +1143,10 @@ function MsgBubble({ msg, sender, copiedId, onCopy, onResend }: {
       style={{ position: 'relative', padding: '2px 0' }}
     >
       <div style={{
-        fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        fontSize: 12, lineHeight: 1.6, wordBreak: 'break-word',
         color: sender === 'user' ? 'var(--text-white)' : 'var(--green-secondary)',
       }}>
-        {renderContent(msg.content)}
+        {renderContent(msg.content, searchQuery)}
       </div>
 
       {hover && (
@@ -858,8 +1169,22 @@ function MsgBubble({ msg, sender, copiedId, onCopy, onResend }: {
           </button>
           {sender === 'user' && (
             <button
-              onClick={() => onResend(msg.content)}
+              onClick={onEditStart}
               title="Edit & resend"
+              style={{
+                width: 22, height: 22,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'var(--bg-tertiary)', border: '1px solid var(--border-dim)',
+                borderRadius: 3, cursor: 'pointer', color: 'var(--text-muted)',
+              }}
+            >
+              <Pencil size={10} />
+            </button>
+          )}
+          {sender === 'user' && (
+            <button
+              onClick={() => onResend(msg.content)}
+              title="Resend"
               style={{
                 width: 22, height: 22,
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -892,29 +1217,35 @@ function groupMessages(msgs: ChatMsg[]): MsgGroup[] {
 }
 
 /**
- * Render message content with basic markdown:
- * - ```code blocks```
+ * Render message content with full markdown support:
+ * - ```code blocks``` with language labels
+ * - ```tool:name blocks``` with special styling
+ * - # Headers (h1-h6)
+ * - Unordered lists (- or *)
+ * - Ordered lists (1. 2. 3.)
+ * - Blockquotes (> text)
+ * - Horizontal rules (---)
+ * - Tables (| col | col |)
+ * - **bold**, *italic*, ~~strikethrough~~
  * - `inline code`
- * - **bold**
  * - URLs
- * - Tool call blocks (```tool:name ... ```)
+ * - Search highlighting
  */
-function renderContent(content: string): (string | JSX.Element)[] {
+function renderContent(content: string, searchQuery = ''): (string | JSX.Element)[] {
   const parts: (string | JSX.Element)[] = [];
-  const codeBlockRx = /```(\w*)\n?([\s\S]*?)```/g;
+  const codeBlockRx = /```(\w*(?::\w+)?)\n?([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
   let last = 0;
   let key = 0;
 
   while ((match = codeBlockRx.exec(content)) !== null) {
     if (match.index > last) {
-      parts.push(...renderInline(content.substring(last, match.index), key));
-      key += 20;
+      parts.push(...renderBlocks(content.substring(last, match.index), key, searchQuery));
+      key += 200;
     }
     const lang = match[1] || '';
     const code = match[2].trim();
 
-    // Tool call styling
     if (lang.startsWith('tool')) {
       parts.push(
         <div key={`tc-${key++}`} style={{
@@ -923,7 +1254,7 @@ function renderContent(content: string): (string | JSX.Element)[] {
           fontFamily: 'var(--font-mono)', color: '#60a5fa',
         }}>
           <div style={{ fontSize: 9, color: '#60a5fa', marginBottom: 4, fontWeight: 600 }}>
-            ⚡ TOOL: {lang.replace('tool:', '')}
+            TOOL: {lang.replace('tool:', '')}
           </div>
           <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: 'var(--text-primary)' }}>{code}</pre>
         </div>
@@ -953,45 +1284,236 @@ function renderContent(content: string): (string | JSX.Element)[] {
   }
 
   if (last < content.length) {
-    parts.push(...renderInline(content.substring(last), key));
+    parts.push(...renderBlocks(content.substring(last), key, searchQuery));
   }
 
   return parts.length > 0 ? parts : [content];
 }
 
-function renderInline(text: string, startKey: number): (string | JSX.Element)[] {
+/** Process block-level markdown: headers, lists, blockquotes, tables, HR */
+function renderBlocks(text: string, startKey: number, searchQuery: string): JSX.Element[] {
+  const elements: JSX.Element[] = [];
+  const lines = text.split('\n');
+  let k = startKey;
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) { i++; continue; }
+
+    // Horizontal rule
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      elements.push(<hr key={`hr-${k++}`} style={{ border: 'none', borderTop: '1px solid var(--border-dim)', margin: '8px 0' }} />);
+      i++; continue;
+    }
+
+    // Headers
+    const hMatch = trimmed.match(/^(#{1,6})\s+(.+)/);
+    if (hMatch) {
+      const level = hMatch[1].length;
+      const sizes = [18, 16, 14, 13, 12, 11];
+      elements.push(
+        <div key={`h-${k++}`} style={{
+          fontSize: sizes[level - 1], fontWeight: 700,
+          color: level <= 2 ? 'var(--green-bright)' : 'var(--text-white)',
+          margin: `${level <= 2 ? 10 : 6}px 0 4px`,
+          fontFamily: level <= 2 ? 'var(--font-display)' : 'var(--font-ui)',
+          letterSpacing: level <= 2 ? 1 : 0,
+        }}>
+          {renderInline(hMatch[2], k, searchQuery)}
+        </div>
+      );
+      k += 20; i++; continue;
+    }
+
+    // Blockquote
+    if (trimmed.startsWith('> ')) {
+      const quoteLines: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith('> ')) {
+        quoteLines.push(lines[i].trim().substring(2));
+        i++;
+      }
+      elements.push(
+        <div key={`bq-${k++}`} style={{
+          borderLeft: '3px solid var(--cyan-muted)', paddingLeft: 12,
+          margin: '6px 0', color: 'var(--text-secondary)', fontStyle: 'italic',
+          fontSize: 12, lineHeight: 1.6,
+        }}>
+          {quoteLines.map((ql, qi) => (
+            <span key={qi}>{renderInline(ql, k + qi * 20, searchQuery)}{qi < quoteLines.length - 1 && <br />}</span>
+          ))}
+        </div>
+      );
+      k += quoteLines.length * 20; continue;
+    }
+
+    // Unordered list
+    if (/^[-*]\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (i < lines.length && /^[-*]\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^[-*]\s+/, ''));
+        i++;
+      }
+      elements.push(
+        <ul key={`ul-${k++}`} style={{ margin: '4px 0', paddingLeft: 20, listStyleType: 'none' }}>
+          {items.map((item, j) => (
+            <li key={j} style={{ fontSize: 12, lineHeight: 1.6, padding: '1px 0', position: 'relative', paddingLeft: 12 }}>
+              <span style={{ position: 'absolute', left: 0, color: 'var(--green-muted)' }}>&#9656;</span>
+              {renderInline(item, k + j * 20, searchQuery)}
+            </li>
+          ))}
+        </ul>
+      );
+      k += items.length * 20; continue;
+    }
+
+    // Ordered list
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        items.push(lines[i].trim().replace(/^\d+\.\s+/, ''));
+        i++;
+      }
+      elements.push(
+        <ol key={`ol-${k++}`} style={{ margin: '4px 0', paddingLeft: 24 }}>
+          {items.map((item, j) => (
+            <li key={j} style={{ fontSize: 12, lineHeight: 1.6, padding: '1px 0', color: 'var(--green-muted)' }}>
+              <span style={{ color: 'inherit' }}>{renderInline(item, k + j * 20, searchQuery)}</span>
+            </li>
+          ))}
+        </ol>
+      );
+      k += items.length * 20; continue;
+    }
+
+    // Table
+    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+      const tableLines: string[] = [];
+      while (i < lines.length && lines[i].trim().startsWith('|') && lines[i].trim().endsWith('|')) {
+        tableLines.push(lines[i].trim());
+        i++;
+      }
+      if (tableLines.length >= 2) {
+        const parseRow = (row: string) => row.split('|').slice(1, -1).map((c) => c.trim());
+        const headers = parseRow(tableLines[0]);
+        const hasSep = tableLines.length >= 2 && tableLines[1].includes('---');
+        const dataStart = hasSep ? 2 : 1;
+        const rows = tableLines.slice(dataStart).map(parseRow);
+
+        elements.push(
+          <div key={`tbl-${k++}`} style={{ overflowX: 'auto', margin: '8px 0' }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 11 }}>
+              <thead>
+                <tr>
+                  {headers.map((h, j) => (
+                    <th key={j} style={{
+                      padding: '4px 10px', borderBottom: '2px solid var(--green-dim)',
+                      textAlign: 'left', color: 'var(--green-bright)',
+                      fontWeight: 600, fontSize: 10, letterSpacing: 0.5, whiteSpace: 'nowrap',
+                    }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, ri) => (
+                  <tr key={ri} style={{ background: ri % 2 === 1 ? 'rgba(0,255,65,0.02)' : 'transparent' }}>
+                    {row.map((cell, ci) => (
+                      <td key={ci} style={{
+                        padding: '3px 10px', borderBottom: '1px solid var(--border-dim)',
+                        color: 'var(--text-secondary)', fontSize: 11,
+                      }}>{renderInline(cell, k + ri * 100 + ci, searchQuery)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+        k += 200; continue;
+      }
+    }
+
+    // Regular text line
+    elements.push(
+      <span key={`t-${k++}`} style={{ display: 'block' }}>
+        {renderInline(trimmed, k, searchQuery)}
+      </span>
+    );
+    k += 20; i++;
+  }
+
+  return elements;
+}
+
+/** Render inline markdown: bold, italic, strikethrough, code, URLs, search highlighting */
+function renderInline(text: string, startKey: number, searchQuery = ''): (string | JSX.Element)[] {
   const parts: (string | JSX.Element)[] = [];
-  const rx = /(\*\*(.+?)\*\*)|(`([^`]+?)`)|((https?:\/\/[^\s]+))/g;
+  const rx = /\*\*(.+?)\*\*|\*([^*\n]+?)\*|~~(.+?)~~|`([^`\n]+?)`|(https?:\/\/[^\s)]+)/g;
   let m: RegExpExecArray | null;
   let li = 0;
   let k = startKey;
 
   while ((m = rx.exec(text)) !== null) {
-    if (m.index > li) parts.push(text.substring(li, m.index));
-    if (m[2]) {
-      parts.push(<strong key={`b-${k++}`} style={{ color: 'var(--text-white)', fontWeight: 600 }}>{m[2]}</strong>);
+    if (m.index > li) parts.push(...highlightSearch(text.substring(li, m.index), k, searchQuery));
+    k += 5;
+
+    if (m[1]) {
+      // **bold**
+      parts.push(<strong key={`b-${k++}`} style={{ color: 'var(--text-white)', fontWeight: 600 }}>{m[1]}</strong>);
+    } else if (m[2]) {
+      // *italic*
+      parts.push(<em key={`i-${k++}`} style={{ fontStyle: 'italic', color: 'var(--text-secondary)' }}>{m[2]}</em>);
+    } else if (m[3]) {
+      // ~~strikethrough~~
+      parts.push(<del key={`s-${k++}`} style={{ color: 'var(--text-muted)', textDecoration: 'line-through' }}>{m[3]}</del>);
     } else if (m[4]) {
+      // `inline code`
       parts.push(
         <code key={`c-${k++}`} style={{
           background: 'rgba(0,0,0,0.3)', padding: '1px 5px', borderRadius: 3,
           fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--cyan-bright)',
-        }}>
-          {m[4]}
-        </code>
+        }}>{m[4]}</code>
       );
-    } else if (m[6]) {
+    } else if (m[5]) {
+      // URL
       parts.push(
-        <a key={`u-${k++}`} href={m[6]} target="_blank" rel="noopener noreferrer" style={{
+        <a key={`u-${k++}`} href={m[5]} target="_blank" rel="noopener noreferrer" style={{
           color: 'var(--cyan-bright)', textDecoration: 'underline',
           textDecorationColor: 'rgba(0,200,255,0.3)',
-        }}>
-          {m[6].length > 60 ? m[6].substring(0, 60) + '...' : m[6]}
-        </a>
+        }}>{m[5].length > 60 ? m[5].substring(0, 60) + '...' : m[5]}</a>
       );
     }
     li = m.index + m[0].length;
   }
 
-  if (li < text.length) parts.push(text.substring(li));
+  if (li < text.length) parts.push(...highlightSearch(text.substring(li), k, searchQuery));
+  return parts;
+}
+
+/** Highlight search query matches in text */
+function highlightSearch(text: string, startKey: number, query: string): (string | JSX.Element)[] {
+  if (!query || !text) return [text];
+  const lower = text.toLowerCase();
+  const q = query.toLowerCase();
+  const parts: (string | JSX.Element)[] = [];
+  let last = 0;
+  let k = startKey;
+  let idx = lower.indexOf(q, last);
+
+  while (idx !== -1) {
+    if (idx > last) parts.push(text.substring(last, idx));
+    parts.push(
+      <mark key={`hl-${k++}`} style={{
+        background: 'rgba(255,200,0,0.3)', color: 'inherit',
+        borderRadius: 2, padding: '0 1px',
+      }}>{text.substring(idx, idx + query.length)}</mark>
+    );
+    last = idx + query.length;
+    idx = lower.indexOf(q, last);
+  }
+
+  if (last < text.length) parts.push(text.substring(last));
   return parts;
 }

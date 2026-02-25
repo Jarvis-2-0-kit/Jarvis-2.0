@@ -27,6 +27,12 @@ export class GatewayClient {
   }
 
   connect(): void {
+    // Close existing connection to prevent duplicates (React StrictMode calls this twice)
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.close();
+      this.ws = null;
+    }
     const wsUrl = this.token ? `${this.url}?token=${this.token}` : this.url;
     this.ws = new WebSocket(wsUrl);
 
@@ -47,6 +53,12 @@ export class GatewayClient {
 
     this.ws.onclose = () => {
       this._connected = false;
+      // Reject all pending requests immediately instead of letting them hang 30s
+      const disconnectError = new Error('WebSocket disconnected');
+      for (const cb of this.pending.values()) {
+        cb.reject(disconnectError);
+      }
+      this.pending.clear();
       this.emit('_disconnected', null);
       this.scheduleReconnect();
     };
