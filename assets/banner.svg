@@ -1,0 +1,106 @@
+<svg width="800" height="200" xmlns="http://www.w3.org/2000/svg">
+  <foreignObject width="800" height="200">
+    <div xmlns="http://www.w3.org/1999/xhtml">
+      <style>
+        @keyframes glow-pulse {
+          0%, 100% { text-shadow: 0 0 10px #00ff41, 0 0 20px #00ff41, 0 0 40px #00ff4180, 0 0 80px #00ff4140; opacity: 1; }
+          50% { text-shadow: 0 0 5px #00ff41, 0 0 10px #00ff41, 0 0 20px #00ff4180, 0 0 40px #00ff4140; opacity: 0.92; }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes scanline {
+          0% { top: -2px; }
+          100% { top: 200px; }
+        }
+        @keyframes borderGlow {
+          0%, 100% { opacity: 0.6; }
+          50% { opacity: 1; }
+        }
+        .container {
+          width: 800px;
+          height: 200px;
+          background: #0a0a0a;
+          background-image:
+            linear-gradient(rgba(0,255,65,0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0,255,65,0.03) 1px, transparent 1px);
+          background-size: 40px 40px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          position: relative;
+          overflow: hidden;
+          border-radius: 6px;
+          font-family: 'Courier New', 'Consolas', monospace;
+        }
+        .title {
+          font-size: 56px;
+          font-weight: bold;
+          color: #00ff41;
+          letter-spacing: 12px;
+          animation: glow-pulse 3s ease-in-out infinite;
+          margin: 0;
+          padding: 0;
+          line-height: 1.2;
+        }
+        .subtitle {
+          font-size: 13px;
+          color: #8b949e;
+          letter-spacing: 6px;
+          text-transform: uppercase;
+          animation: fadeIn 1.5s ease-out 0.5s both;
+          margin-top: 10px;
+        }
+        .version {
+          font-size: 11px;
+          color: #00ff4160;
+          letter-spacing: 4px;
+          animation: fadeIn 1.5s ease-out 1s both;
+          margin-top: 6px;
+        }
+        .scanline {
+          position: absolute;
+          width: 100%;
+          height: 2px;
+          background: linear-gradient(90deg, transparent, #00ff4130, #00ff4160, #00ff4130, transparent);
+          animation: scanline 4s linear infinite;
+          pointer-events: none;
+        }
+        .border-bottom {
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          width: 100%;
+          height: 2px;
+          background: linear-gradient(90deg, transparent, #00ff41, transparent);
+          animation: borderGlow 3s ease-in-out infinite;
+        }
+        .corner-tl, .corner-tr, .corner-bl, .corner-br {
+          position: absolute;
+          width: 16px;
+          height: 16px;
+          border-color: #00ff4150;
+          border-style: solid;
+          border-width: 0;
+        }
+        .corner-tl { top: 6px; left: 6px; border-top-width: 2px; border-left-width: 2px; }
+        .corner-tr { top: 6px; right: 6px; border-top-width: 2px; border-right-width: 2px; }
+        .corner-bl { bottom: 6px; left: 6px; border-bottom-width: 2px; border-left-width: 2px; }
+        .corner-br { bottom: 6px; right: 6px; border-bottom-width: 2px; border-right-width: 2px; }
+      </style>
+      <div class="container">
+        <div class="scanline"></div>
+        <div class="corner-tl"></div>
+        <div class="corner-tr"></div>
+        <div class="corner-bl"></div>
+        <div class="corner-br"></div>
+        <div class="title">JARVIS 2.0</div>
+        <div class="subtitle">Autonomous Multi-Agent AI Platform</div>
+        <div class="version">[ SYSTEM INITIALIZED // ALL NODES ONLINE ]</div>
+        <div class="border-bottom"></div>
+      </div>
+    </div>
+  </foreignObject>
+</svg>
