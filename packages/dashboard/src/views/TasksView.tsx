@@ -47,24 +47,28 @@ export function TasksView() {
       description: newDescription,
       priority: newPriority,
       assignedAgent: null,
+      requiredCapabilities: newCapabilities.split(',').map(c => c.trim()).filter(Boolean),
     });
     setNewTitle('');
     setNewDescription('');
     setNewPriority('normal');
+    setNewCapabilities('code');
     setShowCreateForm(false);
   };
 
   const handleCancel = async (taskId: string) => {
     try {
       await gateway.request('tasks.cancel', { taskId });
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('Cancel failed:', err);
     }
   };
 
   const filteredTasks = filter === 'all'
     ? tasks
-    : tasks.filter(t => t.status === filter || (filter === 'active' && !t.status));
+    : filter === 'active'
+      ? tasks.filter(t => !t.status || t.status === 'pending' || t.status === 'queued' || t.status === 'assigned' || t.status === 'in-progress')
+      : tasks.filter(t => t.status === filter);
 
   const getStatusIcon = (status?: string) => {
     switch (status) {

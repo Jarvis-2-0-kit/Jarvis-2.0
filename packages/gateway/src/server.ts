@@ -5,7 +5,10 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSy
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname, cpus, totalmem, freemem, loadavg, networkInterfaces, uptime as osUptime } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 import {
   createLogger,
   shortId,
@@ -382,12 +385,13 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('tasks.list', async () => {
-      return this.store.getPendingTasks();
+      return this.store.getAllTasks();
     });
 
     this.protocol.registerMethod('tasks.create', async (params) => {
       const task = params as TaskDefinition;
       task.id = task.id || shortId();
+      task.status = task.status || 'pending';
       task.createdAt = Date.now();
       task.updatedAt = Date.now();
       await this.store.createTask(task);
@@ -403,7 +407,7 @@ export class GatewayServer {
 
     this.protocol.registerMethod('tasks.cancel', async (params) => {
       const { taskId } = params as { taskId: string };
-      await this.store.updateTask(taskId, { assignedAgent: null });
+      await this.store.updateTask(taskId, { assignedAgent: null, status: 'cancelled' });
       this.protocol.broadcast('task.cancelled', { taskId });
       return { success: true };
     });
@@ -425,12 +429,9 @@ export class GatewayServer {
       this.persistChatMessage(sessionId, msg);
 
       // Route to the appropriate agent via NATS
-      if (msg.to === 'all') {
-        await this.nats.publish(NatsSubjects.chat('agent-alpha'), msg);
-        await this.nats.publish(NatsSubjects.chat('agent-beta'), msg);
-      } else {
-        await this.nats.publish(NatsSubjects.chat(msg.to), msg);
-      }
+      // Default to agent-alpha if no specific target or 'all' - avoids duplicate processing
+      const target = (!msg.to || msg.to === 'all') ? 'agent-alpha' : msg.to;
+      await this.nats.publish(NatsSubjects.chat(target), msg);
 
       // Broadcast to dashboard for display
       this.protocol.broadcast('chat.message', msg);
@@ -487,9 +488,50 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('config.set', async (params) => {
-      // For now, config is read-only at runtime
-      log.warn('Runtime config update attempted', { params });
-      return { success: false, message: 'Runtime config updates not yet supported' };
+      const { agentId, tools, skills, config: agentConfig } = params as {
+        agentId?: string; tools?: Record<string, boolean>;
+        skills?: Record<string, boolean>; config?: Record<string, string>;
+      };
+      if (!agentId) return { success: false, message: 'agentId required' };
+
+      const configPath = this.nas.resolve('config', `agent-${agentId}.json`);
+      let existing: Record<string, unknown> = {};
+      try {
+        if (existsSync(configPath)) {
+          existing = JSON.parse(readFileSync(configPath, 'utf-8'));
+        }
+      } catch { /* ignore */ }
+
+      const updated = {
+        ...existing,
+        ...(tools && { tools }),
+        ...(skills && { skills }),
+        ...(agentConfig && { config: agentConfig }),
+        updatedAt: new Date().toISOString(),
+      };
+
+      try {
+        const configDir = this.nas.resolve('config');
+        if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
+        writeFileSync(configPath, JSON.stringify(updated, null, 2));
+        log.info(`Agent config saved for ${agentId}`);
+        return { success: true };
+      } catch (err) {
+        log.error(`Failed to save agent config: ${(err as Error).message}`);
+        return { success: false, message: (err as Error).message };
+      }
+    });
+
+    this.protocol.registerMethod('config.agent.get', async (params) => {
+      const { agentId } = params as { agentId: string };
+      if (!agentId) return {};
+      const configPath = this.nas.resolve('config', `agent-${agentId}.json`);
+      try {
+        if (existsSync(configPath)) {
+          return JSON.parse(readFileSync(configPath, 'utf-8'));
+        }
+      } catch { /* ignore */ }
+      return {};
     });
 
     this.protocol.registerMethod('metrics.usage', async () => {
@@ -973,7 +1015,7 @@ export class GatewayServer {
 
     this.protocol.registerMethod('slack.messages', async (params) => {
       const { limit } = (params ?? {}) as { limit?: number };
-      return { messages: this.getChannelMessages('slack', limit ?? 200) };
+      return this.getChannelMessages('slack', limit ?? 200);
     });
 
     // --- iMessage ---
@@ -1001,7 +1043,26 @@ export class GatewayServer {
 
     this.protocol.registerMethod('imessage.messages', async (params) => {
       const { limit } = (params ?? {}) as { limit?: number };
-      return { messages: this.getChannelMessages('imessage', limit ?? 200) };
+      return this.getChannelMessages('imessage', limit ?? 200);
+    });
+
+    this.protocol.registerMethod('imessage.conversations', async (params) => {
+      const { limit } = (params ?? {}) as { limit?: number };
+      return this.getIMessageConversations(limit ?? 50);
+    });
+
+    this.protocol.registerMethod('imessage.conversation', async (params) => {
+      const { chatId, limit } = params as { chatId: string; limit?: number };
+      return this.getIMessageConversation(chatId, limit ?? 50);
+    });
+
+    this.protocol.registerMethod('imessage.search', async (params) => {
+      const { query, limit } = params as { query: string; limit?: number };
+      return this.searchIMessages(query, limit ?? 30);
+    });
+
+    this.protocol.registerMethod('imessage.contacts', async () => {
+      return this.getIMessageContacts();
     });
 
     // --- Channels (unified) ---
@@ -1135,7 +1196,14 @@ export class GatewayServer {
 
       this.nats.subscribe(NatsSubjects.agentResult(agentId), (data) => {
         const result = data as { taskId: string; success?: boolean; output?: string; [key: string]: unknown };
-        this.protocol.broadcast('task.completed', result);
+        const finalStatus = result.success !== false ? 'completed' : 'failed';
+
+        // Update task status in store
+        if (result.taskId) {
+          void this.store.updateTask(result.taskId, { status: finalStatus }).catch(() => {});
+        }
+
+        this.protocol.broadcast(result.success !== false ? 'task.completed' : 'task.failed', result);
 
         // Notify dependency orchestrator of completion/failure
         if (result.taskId) {
@@ -1157,6 +1225,14 @@ export class GatewayServer {
         this.persistChatMessage(msg.sessionId ?? 'default', msg);
       }
       this.protocol.broadcast('chat.message', data);
+
+      // Forward to WhatsApp if this is a WhatsApp session response
+      if (msg.sessionId && this.waActiveChats.has(msg.sessionId) && msg.content) {
+        const jid = this.waActiveChats.get(msg.sessionId)!;
+        this.sendWhatsAppMessage({ to: jid, message: msg.content }).catch((err) => {
+          log.error(`WhatsApp reply failed: ${(err as Error).message}`);
+        });
+      }
     });
 
     // Also listen on dashboardBroadcast for general agent events
@@ -1917,7 +1993,7 @@ export class GatewayServer {
       );
 
       if (hasAllCapabilities) {
-        await this.store.updateTask(task.id, { assignedAgent: agent.identity.agentId });
+        await this.store.updateTask(task.id, { assignedAgent: agent.identity.agentId, status: 'assigned' });
         await this.nats.publish(NatsSubjects.agentTask(agent.identity.agentId), task);
         this.protocol.broadcast('task.assigned', {
           taskId: task.id,
@@ -2552,6 +2628,8 @@ export class GatewayServer {
   private waQrDataUrl: string | null = null;
   private waLoginResolve: ((value: { connected: boolean; message: string }) => void) | null = null;
   private waSelfJid: string | null = null;
+  /** Maps WhatsApp session IDs to JIDs for routing agent responses back via WhatsApp */
+  private waActiveChats = new Map<string, string>();
 
   private getWhatsAppAuthDir(): string {
     const dir = this.nas.resolve('whatsapp-auth');
@@ -2756,20 +2834,34 @@ export class GatewayServer {
           this.protocol.broadcast('whatsapp.message', incomingMsg);
           log.info(`WhatsApp from ${pushName}: "${text.substring(0, 80)}"`);
 
-          // Auto-reply if enabled
+          // Auto-reply if enabled — route to agent for full computer control
           const config = this.getChannelConfig('whatsapp');
           if (config.jarvisMode) {
             const lang = (config.autoReplyLanguage as string) ?? 'pl';
-            let reply: string;
 
             if (text.startsWith('/')) {
-              reply = await this.handleChannelCommand(text, lang);
+              // Quick commands handled locally
+              const reply = await this.handleChannelCommand(text, lang);
+              await this.sendWhatsAppMessage({ to: from, message: reply });
             } else {
-              const processed = await this.processVoiceMessage({ message: text, language: lang });
-              reply = processed.reply;
-            }
+              // Route to agent via NATS chat — same as dashboard, gives full computer control
+              const sessionId = `whatsapp-${from.split('@')[0]}`;
+              this.waActiveChats.set(sessionId, from);
 
-            await this.sendWhatsAppMessage({ to: from, message: reply });
+              const chatMsg: ChatMessage = {
+                id: shortId(),
+                from: 'user',
+                to: 'agent-alpha',
+                content: `[WhatsApp from ${pushName}]: ${text}`,
+                timestamp: Date.now(),
+                metadata: { source: 'whatsapp', whatsappJid: from, sessionId, language: lang },
+              };
+
+              this.persistChatMessage(sessionId, chatMsg);
+              await this.nats.publish(NatsSubjects.chat('agent-alpha'), { ...chatMsg, sessionId });
+              this.protocol.broadcast('chat.message', chatMsg);
+              log.info(`WhatsApp → agent-alpha: "${text.substring(0, 80)}" (session: ${sessionId})`);
+            }
           }
         }
       });
@@ -3265,8 +3357,8 @@ export class GatewayServer {
 
     try {
       // Use osascript to send iMessage
-      const escapedMsg = message.replace(/"/g, '\\"').replace(/\\/g, '\\\\');
-      const escapedTo = to.replace(/"/g, '\\"');
+      const escapedMsg = message.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const escapedTo = to.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       const script = `tell application "Messages"
   set targetService to 1st account whose service type = iMessage
   set targetBuddy to participant "${escapedTo}" of targetService
@@ -3291,6 +3383,210 @@ end tell`;
       return { success: true };
     } catch (err) {
       return { success: false, error: (err as Error).message };
+    }
+  }
+
+  // --- iMessage via AppleScript + Contacts ---
+
+  private async runAppleScript(script: string): Promise<string> {
+    const { stdout } = await execFileAsync('osascript', ['-e', script], {
+      timeout: 30_000,
+      maxBuffer: 1024 * 1024 * 5,
+    });
+    return stdout.trim();
+  }
+
+  private async getIMessageConversations(limit: number): Promise<Record<string, unknown>> {
+    if (process.platform !== 'darwin') return { conversations: [], error: 'macOS only' };
+    try {
+      const cap = Math.min(limit, 80);
+      const script = `
+tell application "Messages"
+  set output to ""
+  set chatCount to count of chats
+  if chatCount > ${cap} then set chatCount to ${cap}
+  repeat with i from 1 to chatCount
+    set aChat to chat i
+    set chatId to id of aChat
+    set chatName to ""
+    try
+      set chatName to name of aChat
+    end try
+    if chatName is missing value then set chatName to ""
+    set chatHandles to ""
+    try
+      set pList to participants of aChat
+      repeat with p in pList
+        set chatHandles to chatHandles & (handle of p) & ";"
+      end repeat
+    end try
+    set output to output & chatId & "|||" & chatName & "|||" & chatHandles & linefeed
+  end repeat
+  return output
+end tell`;
+      const raw = await this.runAppleScript(script);
+      if (!raw) return { conversations: [] };
+
+      // Also load contacts for name resolution
+      const contactMap = await this.getContactsMap();
+
+      // Also load our JSONL messages to get last message per chat
+      const jarvisMessages = await this.getChannelMessages('imessage', 500);
+      const msgList = (jarvisMessages as { messages: Array<{ channel: string; text: string; timestamp: number; direction: string }> }).messages ?? [];
+
+      const conversations = raw.split('\n').filter(Boolean).map((line) => {
+        const [chatId, chatName, handles] = line.split('|||');
+        const handleList = (handles || '').split(';').filter(Boolean);
+        const primaryHandle = handleList[0] || chatId?.replace('any;-;', '') || '';
+
+        // Resolve display name: chatName > contact name > handle
+        let displayName = chatName || '';
+        if (!displayName || displayName === 'missing value') {
+          displayName = contactMap.get(primaryHandle) || primaryHandle;
+        }
+
+        // Find last JSONL message for this contact
+        const contactMsgs = msgList.filter((m) =>
+          m.channel === primaryHandle || handleList.some((h) => m.channel === h)
+        );
+        const lastMsg = contactMsgs.length > 0 ? contactMsgs[contactMsgs.length - 1] : null;
+
+        return {
+          chatId: chatId || '',
+          displayName,
+          handle: primaryHandle,
+          handles: handleList,
+          lastMessage: lastMsg?.text || '',
+          lastMessageDate: lastMsg ? new Date(lastMsg.timestamp).toISOString() : '',
+          lastFromMe: lastMsg?.direction === 'out',
+          messageCount: contactMsgs.length,
+          unreadCount: 0,
+        };
+      }).filter((c) => c.chatId && c.handle);
+
+      return { conversations };
+    } catch (err) {
+      return { conversations: [], error: (err as Error).message };
+    }
+  }
+
+  private async getContactsMap(): Promise<Map<string, string>> {
+    const map = new Map<string, string>();
+    try {
+      const script = `
+tell application "Contacts"
+  set output to ""
+  repeat with p in people
+    set pName to name of p
+    repeat with ph in phones of p
+      set output to output & (value of ph) & "|||" & pName & linefeed
+    end repeat
+    repeat with em in emails of p
+      set output to output & (value of em) & "|||" & pName & linefeed
+    end repeat
+  end repeat
+  return output
+end tell`;
+      const raw = await this.runAppleScript(script);
+      if (raw) {
+        for (const line of raw.split('\n').filter(Boolean)) {
+          const [handle, name] = line.split('|||');
+          if (handle && name) {
+            // Store normalized + raw
+            map.set(handle.trim(), name.trim());
+            const norm = handle.replace(/[\s\-()]/g, '');
+            map.set(norm, name.trim());
+          }
+        }
+      }
+    } catch { /* Contacts.app not available */ }
+    return map;
+  }
+
+  private async getIMessageConversation(chatId: string, _limit: number): Promise<Record<string, unknown>> {
+    if (process.platform !== 'darwin') return { messages: [], error: 'macOS only' };
+    if (!chatId) return { messages: [], error: 'chatId required' };
+
+    // Get handle from chatId
+    const handle = chatId.replace('any;-;', '').replace('any;+;', '');
+
+    // Return messages from JSONL store matching this handle
+    const jarvisMessages = await this.getChannelMessages('imessage', 500);
+    const msgList = (jarvisMessages as { messages: Array<{ id: string; channel: string; text: string; timestamp: number; direction: string; user: string }> }).messages ?? [];
+
+    const messages = msgList
+      .filter((m) => m.channel === handle)
+      .map((m) => ({
+        id: m.id || '',
+        text: m.text || '',
+        isFromMe: m.direction === 'out',
+        date: new Date(m.timestamp).toISOString().replace('T', ' ').slice(0, 19),
+        sender: m.direction === 'out' ? 'jarvis' : m.channel,
+        hasAttachment: false,
+      }));
+
+    return { messages, chatId, handle };
+  }
+
+  private async searchIMessages(query: string, _limit: number): Promise<Record<string, unknown>> {
+    if (process.platform !== 'darwin') return { results: [], error: 'macOS only' };
+    if (!query) return { results: [], error: 'query required' };
+
+    // Search in JSONL messages
+    const jarvisMessages = await this.getChannelMessages('imessage', 1000);
+    const msgList = (jarvisMessages as { messages: Array<{ channel: string; text: string; timestamp: number; direction: string }> }).messages ?? [];
+
+    const lowerQ = query.toLowerCase();
+    const results = msgList
+      .filter((m) => m.text?.toLowerCase().includes(lowerQ) || m.channel?.toLowerCase().includes(lowerQ))
+      .slice(-30)
+      .map((m) => ({
+        text: m.text || '',
+        isFromMe: m.direction === 'out',
+        contact: m.channel || '',
+        chatId: `any;-;${m.channel}`,
+        displayName: m.channel || '',
+        date: new Date(m.timestamp).toISOString().replace('T', ' ').slice(0, 19),
+      }));
+
+    return { results };
+  }
+
+  private async getIMessageContacts(): Promise<Record<string, unknown>> {
+    if (process.platform !== 'darwin') return { contacts: [], error: 'macOS only' };
+    try {
+      const script = `
+tell application "Contacts"
+  set output to ""
+  repeat with p in people
+    set pName to name of p
+    set pPhones to ""
+    repeat with ph in phones of p
+      set pPhones to pPhones & (value of ph) & ";"
+    end repeat
+    set pEmails to ""
+    repeat with em in emails of p
+      set pEmails to pEmails & (value of em) & ";"
+    end repeat
+    set output to output & pName & "|||" & pPhones & "|||" & pEmails & linefeed
+  end repeat
+  return output
+end tell`;
+      const raw = await this.runAppleScript(script);
+      if (!raw) return { contacts: [] };
+
+      const contacts = raw.split('\n').filter(Boolean).map((line) => {
+        const [name, phones, emails] = line.split('|||');
+        return {
+          name: name?.trim() || '',
+          phones: (phones || '').split(';').filter(Boolean).map((p) => p.trim()),
+          emails: (emails || '').split(';').filter(Boolean).map((e) => e.trim()),
+        };
+      }).filter((c) => c.name && (c.phones.length > 0 || c.emails.length > 0));
+
+      return { contacts };
+    } catch (err) {
+      return { contacts: [], error: (err as Error).message };
     }
   }
 

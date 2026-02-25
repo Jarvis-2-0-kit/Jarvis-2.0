@@ -95,6 +95,22 @@ export class StateStore {
     return tasks;
   }
 
+  async getAllTasks(limit = 100): Promise<TaskDefinition[]> {
+    const tasks: TaskDefinition[] = [];
+    const seen = new Set<string>();
+    for (const priority of ['critical', 'high', 'normal', 'low']) {
+      const ids = await this.getTasksByPriority(priority, limit);
+      for (const id of ids) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const task = await this.getTask(id);
+        if (task) tasks.push(task);
+      }
+      if (tasks.length >= limit) break;
+    }
+    return tasks;
+  }
+
   async setTaskResult(result: TaskResult): Promise<void> {
     const key = `${RedisKeys.task(result.taskId)}:result`;
     await this.redis.setJson(key, result);

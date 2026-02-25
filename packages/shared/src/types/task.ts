@@ -19,6 +19,7 @@ export const TaskDefinition = z.object({
   title: z.string(),
   description: z.string(),
   priority: TaskPriority.default('normal'),
+  status: TaskStatus.default('pending'),
   requiredCapabilities: z.array(z.string()),
   assignedAgent: z.string().nullable().default(null),
   parentTaskId: z.string().nullable().default(null),
