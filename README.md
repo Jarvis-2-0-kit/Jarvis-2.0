@@ -330,22 +330,35 @@ Agents connect via **NATS Thunderbolt** for ultra-low-latency messaging (sub-mil
 
 ## Screenshots
 
-> **Note:** Screenshots are from the live dashboard running at `http://localhost:18900`
+<div align="center">
+
+### Command Center
+<img src="screenshots/command-center.png" alt="JARVIS 2.0 Command Center" width="100%">
+
+*Remote control with dual-machine view — live terminal streams, agent chat, task queue, and real-time metrics all in one panel.*
+
+<br>
+
+### System Overview
+<img src="screenshots/system-overview.png" alt="System Overview Dashboard" width="100%">
+
+*Infrastructure health at a glance — Gateway, NATS, Redis, NAS status, CPU/Memory/Disk metrics, agent heartbeats, top processes, and quick stats.*
+
+<br>
 
 ### App Launcher
-*Fullscreen Launchpad-style navigation with 5 categorized groups, search, and 4K-optimized icon tiles.*
+<img src="screenshots/app-launcher.png" alt="App Launcher" width="100%">
 
-### Chat Interface
-*AI chat with full Markdown rendering, code blocks, message search (Ctrl+F), inline editing, and latency indicator.*
+*Fullscreen Launchpad-style navigation with 5 categorized groups (Agents & Workflow, Communication, AI & Knowledge, Monitoring, System), fuzzy search, and 4K-optimized icon tiles.*
 
-### iMessage Messenger
-*Split-panel messenger with Contacts.app integration, conversation list, iMessage-style chat bubbles, and compose mode.*
+<br>
 
-### Skills Browser
-*50+ skills across 12 categories with install/enable toggles, requirement badges, and visual category filtering.*
+### Skills Marketplace
+<img src="screenshots/skills-browser.png" alt="Skills Marketplace" width="100%">
 
-### Agent Monitoring
-*Real-time agent status with heartbeat tracking, capability badges, session history, and tool usage stats.*
+*50+ skills across 12 categories — GitHub, iMessage, Spotify, Image Gen, Voice, Obsidian, Smart Home, and more. One-click install with requirement detection and status badges.*
+
+</div>
 
 ---
 
