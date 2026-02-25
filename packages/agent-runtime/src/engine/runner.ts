@@ -6,7 +6,7 @@ import {
   createUsageAccumulator, mergeUsage, type UsageAccumulator,
 } from '../llm/index.js';
 import { type ToolRegistry } from '@jarvis/tools';
-import { NatsHandler, type NatsHandlerConfig, type TaskAssignment } from '../communication/nats-handler.js';
+import { NatsHandler, type NatsHandlerConfig, type TaskAssignment, type InterAgentMsg } from '../communication/nats-handler.js';
 import { SessionManager } from '../sessions/session-manager.js';
 import { buildSystemPrompt, type AgentRole, type PromptContext } from '../system-prompt/index.js';
 import {
@@ -178,7 +178,32 @@ export class AgentRunner {
       });
     });
 
-    log.info(`Agent ${this.config.agentId} is ready and listening for tasks`);
+    // Set up inter-agent communication handlers
+    this.nats.onDM((msg) => {
+      log.info(`Received DM from ${msg.from}: ${(msg.content || '').slice(0, 80)}`);
+      this.handleInterAgentMessage(msg).catch((err) => {
+        log.error(`DM handler error: ${(err as Error).message}`);
+      });
+    });
+
+    this.nats.onBroadcast((msg) => {
+      log.info(`Received broadcast from ${msg.from}: ${(msg.content || '').slice(0, 80)}`);
+      // Only process broadcasts that need action (e.g., queries)
+      if (msg.type === 'query') {
+        this.handleInterAgentMessage(msg).catch((err) => {
+          log.error(`Broadcast handler error: ${(err as Error).message}`);
+        });
+      }
+    });
+
+    this.nats.onCoordination((msg) => {
+      log.info(`Received coordination from ${msg.from}: ${(msg.content || '').slice(0, 80)}`);
+      this.handleCoordinationRequest(msg).catch((err) => {
+        log.error(`Coordination handler error: ${(err as Error).message}`);
+      });
+    });
+
+    log.info(`Agent ${this.config.agentId} is ready and listening for tasks (peers: ${this.nats.getPeers().length})`);
   }
 
   async stop(): Promise<void> {
@@ -363,6 +388,45 @@ export class AgentRunner {
     }
   }
 
+  /** Handle direct messages or queries from other agents */
+  private async handleInterAgentMessage(msg: InterAgentMsg): Promise<void> {
+    if (!msg.content) return;
+
+    // Route as chat message with metadata indicating it's from another agent
+    await this.handleChat({
+      from: msg.from,
+      content: `[Inter-agent message from ${msg.from}] ${msg.content}`,
+      metadata: { source: 'agent-dm', fromAgent: msg.from, replyTo: msg.replyTo, originalType: msg.type },
+    });
+
+    // If it was a query, send response back as DM
+    // The chat handler will produce the response via sendChatResponse
+  }
+
+  /** Handle coordination/delegation requests from other agents */
+  private async handleCoordinationRequest(msg: InterAgentMsg): Promise<void> {
+    if (this.currentTask) {
+      // Already busy, reject
+      await this.nats.respondCoordination(msg.id, false, `busy with task ${this.currentTask.taskId}`);
+      return;
+    }
+
+    // Accept delegation and process as task
+    const payload = msg.payload as { title?: string; description?: string; priority?: string } | undefined;
+    if (payload?.title) {
+      await this.nats.respondCoordination(msg.id, true);
+      await this.handleTask({
+        taskId: `delegated-${msg.id}`,
+        title: payload.title,
+        description: payload.description || payload.title,
+        priority: payload.priority || 'normal',
+        context: { delegatedBy: msg.from },
+      });
+    } else {
+      await this.nats.respondCoordination(msg.id, false, 'no task payload');
+    }
+  }
+
   /**
    * Build enhanced system prompt with plugin sections and skills.
    */
@@ -382,6 +446,17 @@ export class AgentRunner {
     const skills = loadSkills(this.config.nasMountPath);
     if (skills.length > 0) {
       systemPrompt += '\n\n' + buildSkillsPromptSection(skills);
+    }
+
+    // ─── Add inter-agent awareness ───
+    const peers = this.nats.getPeers();
+    if (peers.length > 0) {
+      const peerLines = peers.map((p) =>
+        `- **${p.agentId}** (role: ${p.role}, machine: ${p.hostname}, status: ${p.status}, capabilities: ${p.capabilities.join(', ')})`
+      ).join('\n');
+      systemPrompt += `\n\n## Connected Agents\n\nYou are part of a multi-agent system. The following agents are currently online:\n${peerLines}\n\nYou can coordinate with them via task delegation. Use the \`message_agent\` tool to send messages to other agents when their capabilities match the task at hand.`;
+    } else {
+      systemPrompt += `\n\n## Connected Agents\n\nYou are part of a multi-agent system but no other agents are currently online. You are operating solo.`;
     }
 
     // ─── Add plugin prompt sections ───

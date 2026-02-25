@@ -1,6 +1,7 @@
 import { createLogger } from '@jarvis/shared';
 import type { LLMProvider, ModelInfo, ChatRequest, ChatResponse, ChatChunk } from './types.js';
-import { AnthropicProvider } from './providers/anthropic.js';
+import { AnthropicProvider, type AnthropicAuthMode } from './providers/anthropic.js';
+import { ClaudeCliProvider } from './providers/claude-cli.js';
 import { OpenAIProvider } from './providers/openai.js';
 import { GoogleProvider } from './providers/google.js';
 import { OllamaProvider } from './providers/ollama.js';
@@ -10,6 +11,7 @@ const log = createLogger('llm:registry');
 
 export interface ProviderRegistryConfig {
   anthropicApiKey?: string;
+  anthropicAuthMode?: AnthropicAuthMode;
   openaiApiKey?: string;
   googleApiKey?: string;
   ollamaBaseUrl?: string;
@@ -34,8 +36,18 @@ export class ProviderRegistry {
     this.defaultModel = config.defaultModel ?? 'claude-opus-4-6';
 
     // Initialize providers based on available keys
-    if (config.anthropicApiKey) {
-      this.registerProvider(new AnthropicProvider(config.anthropicApiKey));
+    if (config.anthropicAuthMode === 'claude-cli') {
+      const cliProvider = new ClaudeCliProvider();
+      if (cliProvider.isAvailable()) {
+        this.registerProvider(cliProvider);
+      } else {
+        log.warn('Claude CLI not available, falling back to API key mode');
+        if (config.anthropicApiKey) {
+          this.registerProvider(new AnthropicProvider({ apiKey: config.anthropicApiKey, authMode: 'api-key' }));
+        }
+      }
+    } else if (config.anthropicApiKey) {
+      this.registerProvider(new AnthropicProvider({ apiKey: config.anthropicApiKey, authMode: 'api-key' }));
     }
     if (config.openaiApiKey) {
       this.registerProvider(new OpenAIProvider(config.openaiApiKey));
@@ -82,7 +94,7 @@ export class ProviderRegistry {
     if (providerId) return this.providers.get(providerId);
 
     // Heuristic: guess provider from model name
-    if (modelId.startsWith('claude-')) return this.providers.get('anthropic');
+    if (modelId.startsWith('claude-')) return this.providers.get('claude-cli') ?? this.providers.get('anthropic');
     if (modelId.startsWith('gpt-') || modelId.startsWith('o1') || modelId.startsWith('o3') || modelId.startsWith('o4')) return this.providers.get('openai');
     if (modelId.startsWith('gemini-')) return this.providers.get('google');
     if (modelId.includes('/')) return this.providers.get('openrouter'); // e.g. "meta-llama/llama-3.1-70b"

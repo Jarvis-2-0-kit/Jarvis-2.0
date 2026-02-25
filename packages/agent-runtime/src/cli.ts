@@ -39,6 +39,7 @@ const thunderboltEnabled = process.env['THUNDERBOLT_ENABLED'] === 'true';
 const nasMount = process.env['JARVIS_NAS_MOUNT'] ?? '/Volumes/JarvisNAS/jarvis';
 const workspace = process.env['WORKSPACE_PATH'] ?? `${nasMount}/workspace/projects`;
 const defaultModel = process.env['DEFAULT_MODEL'] ?? 'claude-opus-4-6';
+let anthropicAuthMode = (process.env['ANTHROPIC_AUTH_MODE'] ?? 'api-key') as 'api-key' | 'claude-cli';
 
 // SSH host config for remote machine control
 const sshAlphaHost = process.env['SSH_ALPHA_HOST'] ?? process.env['VNC_ALPHA_HOST'];
@@ -105,6 +106,7 @@ async function main(): Promise<void> {
   }
   log.info(`NAS: ${nasMount}`);
   log.info(`Model: ${defaultModel}`);
+  log.info(`Auth mode: ${anthropicAuthMode}${anthropicAuthMode === 'claude-cli' ? ' (Claude Max subscription)' : ' (API key)'}`);
 
   // Initialize tools
   const hasSshHosts = Object.keys(sshHosts).length > 0;
@@ -165,10 +167,14 @@ async function main(): Promise<void> {
   try {
     const configPath = join(nasMount, 'config', `agent-${agentId}.json`);
     if (existsSync(configPath)) {
-      const savedConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as { config?: { model?: string } };
+      const savedConfig = JSON.parse(readFileSync(configPath, 'utf-8')) as { config?: { model?: string; authMode?: string } };
       if (savedConfig.config?.model) {
         activeModel = savedConfig.config.model;
         log.info(`Model override from NAS config: ${activeModel}`);
+      }
+      if (savedConfig.config?.authMode === 'api-key' || savedConfig.config?.authMode === 'claude-cli') {
+        anthropicAuthMode = savedConfig.config.authMode;
+        log.info(`Auth mode override from NAS config: ${anthropicAuthMode}`);
       }
     }
   } catch { /* ignore, use default */ }
@@ -188,6 +194,7 @@ async function main(): Promise<void> {
     tools,
     llm: {
       anthropicApiKey: process.env['ANTHROPIC_API_KEY'],
+      anthropicAuthMode: anthropicAuthMode,
       openaiApiKey: process.env['OPENAI_API_KEY'],
       googleApiKey: process.env['GOOGLE_AI_API_KEY'],
       ollamaBaseUrl: process.env['OLLAMA_BASE_URL'],

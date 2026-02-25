@@ -1258,6 +1258,45 @@ export class GatewayServer {
     this.nats.subscribe('jarvis.task.*.progress', (data) => {
       this.protocol.broadcast('task.progress', data);
     });
+
+    // ─── Inter-Agent Communication ───────────────────
+
+    // Agent discovery (online/offline announcements)
+    this.nats.subscribe(NatsSubjects.agentsDiscovery, (data) => {
+      const msg = data as { agentId: string; role?: string; status?: string; capabilities?: string[]; hostname?: string; timestamp?: number };
+      log.info(`Agent discovery: ${msg.agentId} → ${msg.status ?? 'unknown'}`);
+      this.protocol.broadcast('agent.discovery', msg);
+    });
+
+    // Shared broadcast channel (all agents)
+    this.nats.subscribe(NatsSubjects.agentsBroadcast, (data) => {
+      const msg = data as { type?: string; from?: string; content?: string; timestamp?: number };
+      log.info(`Agent broadcast from ${msg.from ?? 'unknown'}: ${msg.type ?? 'broadcast'}`);
+      this.protocol.broadcast('agent.broadcast', msg);
+    });
+
+    // Coordination requests (task delegation between agents)
+    this.nats.subscribe(NatsSubjects.coordinationRequest, (data) => {
+      const msg = data as { type?: string; from?: string; to?: string; content?: string; payload?: unknown; timestamp?: number };
+      log.info(`Coordination request from ${msg.from ?? 'unknown'} → ${msg.to ?? 'all'}: ${msg.content ?? ''}`);
+      this.protocol.broadcast('coordination.request', msg);
+    });
+
+    // Coordination responses (delegation ack/nack)
+    this.nats.subscribe(NatsSubjects.coordinationResponse, (data) => {
+      const msg = data as { type?: string; from?: string; content?: string; replyTo?: string; timestamp?: number };
+      log.info(`Coordination response from ${msg.from ?? 'unknown'}: ${msg.content ?? ''}`);
+      this.protocol.broadcast('coordination.response', msg);
+    });
+
+    // Direct messages between agents (subscribe for both known agents)
+    for (const agentId of ['agent-alpha', 'agent-beta']) {
+      this.nats.subscribe(NatsSubjects.agentDM(agentId), (data) => {
+        const msg = data as { from?: string; to?: string; content?: string; timestamp?: number };
+        log.info(`Agent DM: ${msg.from ?? 'unknown'} → ${agentId}: ${(msg.content ?? '').slice(0, 80)}`);
+        this.protocol.broadcast('agent.dm', { ...msg as Record<string, unknown>, target: agentId });
+      });
+    }
   }
 
   // --- Sessions ---

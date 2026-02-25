@@ -1,4 +1,5 @@
 import { createLogger } from '@jarvis/shared';
+import { execSync } from 'node:child_process';
 import type {
   LLMProvider, ChatRequest, ChatResponse, ChatChunk,
   ModelInfo, ContentBlock, TokenUsage, Message,
@@ -15,14 +16,95 @@ const MODELS: ModelInfo[] = [
   { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', provider: 'anthropic', contextWindow: 200000, maxOutputTokens: 64000, supportsTools: true, supportsVision: true, costPerInputToken: 1 / 1e6, costPerOutputToken: 5 / 1e6 },
 ];
 
+export type AnthropicAuthMode = 'api-key' | 'claude-cli';
+
+export interface AnthropicProviderConfig {
+  apiKey?: string;
+  authMode?: AnthropicAuthMode;
+}
+
+/** Read OAuth access token from Claude CLI's macOS Keychain credentials */
+function readClaudeCliToken(): { accessToken: string; expiresAt: number; refreshToken: string } | null {
+  if (process.platform !== 'darwin') {
+    log.warn('Claude CLI auth is only supported on macOS (Keychain)');
+    return null;
+  }
+  try {
+    const raw = execSync(
+      'security find-generic-password -s "Claude Code-credentials" -a "$(whoami)" -w 2>/dev/null',
+      { encoding: 'utf-8', timeout: 5000 },
+    ).trim();
+    const creds = JSON.parse(raw) as {
+      claudeAiOauth?: { accessToken?: string; expiresAt?: number; refreshToken?: string };
+    };
+    const oauth = creds.claudeAiOauth;
+    if (!oauth?.accessToken) {
+      log.warn('Claude CLI credentials found but no accessToken present');
+      return null;
+    }
+    return {
+      accessToken: oauth.accessToken,
+      expiresAt: oauth.expiresAt ?? 0,
+      refreshToken: oauth.refreshToken ?? '',
+    };
+  } catch (err) {
+    log.warn(`Failed to read Claude CLI token from Keychain: ${(err as Error).message}`);
+    return null;
+  }
+}
+
 export class AnthropicProvider implements LLMProvider {
   id = 'anthropic';
   name = 'Anthropic';
 
-  constructor(private apiKey: string) {}
+  private apiKey?: string;
+  private authMode: AnthropicAuthMode;
+  private oauthToken: string | null = null;
+  private oauthExpiresAt: number = 0;
+
+  constructor(config: string | AnthropicProviderConfig) {
+    if (typeof config === 'string') {
+      // Legacy: plain API key string
+      this.apiKey = config;
+      this.authMode = 'api-key';
+    } else {
+      this.apiKey = config.apiKey;
+      this.authMode = config.authMode ?? (config.apiKey ? 'api-key' : 'claude-cli');
+    }
+
+    if (this.authMode === 'claude-cli') {
+      this.refreshOAuthToken();
+    }
+
+    log.info(`Anthropic provider initialized (auth: ${this.authMode}${this.authMode === 'claude-cli' ? ', token: ' + (this.oauthToken ? 'ok' : 'MISSING') : ''})`);
+  }
 
   isAvailable(): boolean {
+    if (this.authMode === 'claude-cli') {
+      return !!this.getOAuthToken();
+    }
     return !!this.apiKey;
+  }
+
+  /** Get current OAuth token, refreshing from Keychain if expired */
+  private getOAuthToken(): string | null {
+    if (this.oauthToken && Date.now() < this.oauthExpiresAt - 60_000) {
+      return this.oauthToken; // Still valid (with 60s margin)
+    }
+    this.refreshOAuthToken();
+    return this.oauthToken;
+  }
+
+  private refreshOAuthToken(): void {
+    const creds = readClaudeCliToken();
+    if (creds) {
+      this.oauthToken = creds.accessToken;
+      this.oauthExpiresAt = creds.expiresAt;
+      log.info(`OAuth token refreshed (expires: ${new Date(creds.expiresAt).toISOString()})`);
+    } else {
+      this.oauthToken = null;
+      this.oauthExpiresAt = 0;
+    }
   }
 
   listModels(): ModelInfo[] {
@@ -31,11 +113,22 @@ export class AnthropicProvider implements LLMProvider {
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const body = this.buildRequestBody(request, false);
-    const response = await fetch(ANTHROPIC_API_URL, {
+    let response = await fetch(ANTHROPIC_API_URL, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(body),
     });
+
+    // Auto-refresh OAuth token on 401 and retry once
+    if (response.status === 401 && this.authMode === 'claude-cli') {
+      log.info('OAuth token expired, refreshing from Keychain...');
+      this.refreshOAuthToken();
+      response = await fetch(ANTHROPIC_API_URL, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(body),
+      });
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -152,12 +245,26 @@ export class AnthropicProvider implements LLMProvider {
     }
   }
 
+  getAuthMode(): AnthropicAuthMode {
+    return this.authMode;
+  }
+
   private getHeaders(): Record<string, string> {
-    return {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'x-api-key': this.apiKey,
       'anthropic-version': ANTHROPIC_VERSION,
     };
+
+    if (this.authMode === 'claude-cli') {
+      const token = this.getOAuthToken();
+      if (!token) throw new Error('Claude CLI OAuth token not available');
+      headers['Authorization'] = `Bearer ${token}`;
+    } else {
+      if (!this.apiKey) throw new Error('Anthropic API key not configured');
+      headers['x-api-key'] = this.apiKey;
+    }
+
+    return headers;
   }
 
   private buildRequestBody(request: ChatRequest, stream: boolean): Record<string, unknown> {

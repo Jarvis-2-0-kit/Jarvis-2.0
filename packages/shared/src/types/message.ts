@@ -41,13 +41,44 @@ export const NatsSubjects = {
   agentTask: (agentId: string) => `jarvis.agent.${agentId}.task`,
   agentResult: (agentId: string) => `jarvis.agent.${agentId}.result`,
   agentHeartbeat: (agentId: string) => `jarvis.agent.${agentId}.heartbeat`,
+  /** Direct message to a specific agent */
+  agentDM: (agentId: string) => `jarvis.agent.${agentId}.dm`,
   taskProgress: (taskId: string) => `jarvis.task.${taskId}.progress`,
   dashboardBroadcast: 'jarvis.broadcast.dashboard',
+  /** Shared broadcast channel — ALL agents + gateway subscribe */
+  agentsBroadcast: 'jarvis.agents.broadcast',
+  /** Agent discovery announcements (online/offline) */
+  agentsDiscovery: 'jarvis.agents.discovery',
+  /** Coordination — task delegation between agents */
   coordinationRequest: 'jarvis.coordination.request',
   coordinationResponse: 'jarvis.coordination.response',
   chat: (agentId: string) => `jarvis.chat.${agentId}`,
   chatBroadcast: 'jarvis.chat.broadcast',
 } as const;
+
+/** Inter-agent message types */
+export const InterAgentMessageType = z.enum([
+  'discovery',    // Agent announcing online/offline
+  'dm',           // Direct message between agents
+  'delegation',   // Task delegation request
+  'delegation-ack', // Task delegation accepted/rejected
+  'broadcast',    // Message to all agents
+  'query',        // Ask another agent something
+  'response',     // Response to a query
+]);
+export type InterAgentMessageType = z.infer<typeof InterAgentMessageType>;
+
+export const InterAgentMessage = z.object({
+  id: z.string(),
+  type: InterAgentMessageType,
+  from: z.string(),
+  to: z.string().optional(),          // omit = broadcast to all
+  content: z.string().optional(),
+  payload: z.unknown().optional(),
+  replyTo: z.string().optional(),     // correlate responses
+  timestamp: z.number(),
+});
+export type InterAgentMessage = z.infer<typeof InterAgentMessage>;
 
 /** Redis key helpers */
 export const RedisKeys = {

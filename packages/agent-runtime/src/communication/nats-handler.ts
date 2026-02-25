@@ -22,13 +22,35 @@ export interface TaskAssignment {
   context?: Record<string, unknown>;
 }
 
+export interface PeerAgent {
+  agentId: string;
+  role: string;
+  capabilities: string[];
+  machineId: string;
+  hostname: string;
+  status: string;
+  lastSeen: number;
+}
+
+export interface InterAgentMsg {
+  id: string;
+  type: string;
+  from: string;
+  to?: string;
+  content?: string;
+  payload?: unknown;
+  replyTo?: string;
+  timestamp: number;
+}
+
 /**
  * NatsHandler manages NATS connectivity for an agent:
  * - Heartbeat broadcasts
  * - Status updates
  * - Task reception
  * - Result publishing
- * - Inter-agent messaging
+ * - Inter-agent messaging (DM, broadcast, discovery)
+ * - Coordination (task delegation)
  */
 export class NatsHandler {
   private nc: NatsConnection | null = null;
@@ -36,6 +58,9 @@ export class NatsHandler {
   private subscriptions: Subscription[] = [];
   private taskCallback: ((task: TaskAssignment) => void) | null = null;
   private chatCallback: ((msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }) => void) | null = null;
+  private dmCallback: ((msg: InterAgentMsg) => void) | null = null;
+  private broadcastCallback: ((msg: InterAgentMsg) => void) | null = null;
+  private coordinationCallback: ((msg: InterAgentMsg) => void) | null = null;
   private startedAt: number = Date.now();
   private completedTasks: number = 0;
   private failedTasks: number = 0;
@@ -43,16 +68,17 @@ export class NatsHandler {
   private activeTaskId: string | null = null;
   private activeTaskDescription: string | null = null;
 
+  /** Known peer agents in the system */
+  readonly peers: Map<string, PeerAgent> = new Map();
+
   constructor(private config: NatsHandlerConfig) {}
 
   async connect(): Promise<void> {
-    // Build server list: Thunderbolt first (priority, 10 Gbps), then regular network
     const servers = [
       this.config.natsUrlThunderbolt,
       this.config.natsUrl,
     ].filter((s): s is string => !!s);
 
-    // Retry initial connection (WiFi can have transient EHOSTUNREACH)
     const MAX_RETRIES = 30;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
@@ -63,18 +89,17 @@ export class NatsHandler {
           maxReconnectAttempts: -1,
           reconnectTimeWait: 2000,
         });
-        break; // Connected successfully
+        break;
       } catch (err) {
-        const msg = (err as Error).message;
         if (attempt === MAX_RETRIES) throw err;
-        log.warn(`NATS connect attempt ${attempt}/${MAX_RETRIES} failed: ${msg}. Retrying in 3s...`);
+        log.warn(`NATS connect attempt ${attempt}/${MAX_RETRIES} failed: ${(err as Error).message}. Retrying in 3s...`);
         await new Promise(r => setTimeout(r, 3000));
       }
     }
 
     log.info(`Connected to NATS (servers: ${servers.join(', ')})`);
 
-    // Monitor connection status (reconnects, disconnects, errors)
+    // Monitor connection status
     void (async () => {
       if (!this.nc) return;
       for await (const status of this.nc.status()) {
@@ -84,8 +109,8 @@ export class NatsHandler {
             break;
           case 'reconnect':
             log.info(`NATS reconnected successfully`);
-            // Re-register after reconnect so gateway picks us up again
             await this.register();
+            await this.announcePresence('online');
             break;
           case 'disconnect':
             log.warn(`NATS disconnected: ${String(status.data)}`);
@@ -103,9 +128,15 @@ export class NatsHandler {
     this.startHeartbeat();
     this.subscribeToTasks();
     this.subscribeToChat();
+    this.subscribeToDiscovery();
+    this.subscribeToDM();
+    this.subscribeToAgentsBroadcast();
+    this.subscribeToCoordination();
+    await this.announcePresence('online');
   }
 
-  /** Build a proper AgentState object that matches the gateway's expected format */
+  // ─── Agent State ──────────────────────────────────
+
   private buildAgentState(): AgentState {
     return {
       identity: {
@@ -124,7 +155,6 @@ export class NatsHandler {
     };
   }
 
-  /** Register agent with gateway */
   private async register(): Promise<void> {
     this.currentStatus = 'idle';
     const state = this.buildAgentState();
@@ -132,7 +162,8 @@ export class NatsHandler {
     log.info(`Registered agent: ${this.config.agentId} (role: ${this.config.role})`);
   }
 
-  /** Start heartbeat loop */
+  // ─── Heartbeat ────────────────────────────────────
+
   private startHeartbeat(): void {
     this.heartbeatInterval = setInterval(async () => {
       try {
@@ -142,17 +173,27 @@ export class NatsHandler {
           memoryUsage: process.memoryUsage().heapUsed,
           uptime: process.uptime(),
           status: this.currentStatus,
+          peers: Array.from(this.peers.keys()),
         });
-        // Also re-publish full state periodically so gateway stays in sync
         const state = this.buildAgentState();
         await this.publish(NatsSubjects.agentStatus(this.config.agentId), state);
+
+        // Prune stale peers (not seen for 60s)
+        const now = Date.now();
+        for (const [id, peer] of this.peers) {
+          if (now - peer.lastSeen > 60_000) {
+            this.peers.delete(id);
+            log.info(`Peer ${id} went offline (timeout)`);
+          }
+        }
       } catch (err) {
         log.error(`Heartbeat failed: ${(err as Error).message}`);
       }
     }, HEARTBEAT_INTERVAL);
   }
 
-  /** Subscribe to task assignments */
+  // ─── Task Subscriptions ───────────────────────────
+
   private subscribeToTasks(): void {
     if (!this.nc) return;
     const sub = this.nc.subscribe(NatsSubjects.agentTask(this.config.agentId));
@@ -171,7 +212,6 @@ export class NatsHandler {
     })();
   }
 
-  /** Subscribe to chat messages from dashboard */
   private subscribeToChat(): void {
     if (!this.nc) return;
     const sub = this.nc.subscribe(NatsSubjects.chat(this.config.agentId));
@@ -190,14 +230,216 @@ export class NatsHandler {
     })();
   }
 
-  /** Set callback for task assignments */
+  // ─── Inter-Agent Communication ────────────────────
+
+  /** Subscribe to agent discovery announcements */
+  private subscribeToDiscovery(): void {
+    if (!this.nc) return;
+    const sub = this.nc.subscribe(NatsSubjects.agentsDiscovery);
+    this.subscriptions.push(sub);
+
+    (async () => {
+      for await (const msg of sub) {
+        try {
+          const data = JSON.parse(sc.decode(msg.data)) as {
+            agentId: string; role: string; capabilities: string[];
+            machineId: string; hostname: string; status: string; timestamp: number;
+          };
+          if (data.agentId === this.config.agentId) continue; // skip self
+
+          if (data.status === 'offline') {
+            this.peers.delete(data.agentId);
+            log.info(`Peer ${data.agentId} announced offline`);
+          } else {
+            const isNew = !this.peers.has(data.agentId);
+            this.peers.set(data.agentId, {
+              agentId: data.agentId,
+              role: data.role,
+              capabilities: data.capabilities,
+              machineId: data.machineId,
+              hostname: data.hostname,
+              status: data.status,
+              lastSeen: Date.now(),
+            });
+            if (isNew) {
+              log.info(`Discovered peer: ${data.agentId} (role: ${data.role}, machine: ${data.hostname})`);
+              // Announce back so the new agent knows about us
+              await this.announcePresence('online');
+            }
+          }
+        } catch (err) {
+          log.error(`Discovery parse error: ${(err as Error).message}`);
+        }
+      }
+    })();
+  }
+
+  /** Subscribe to direct messages from other agents */
+  private subscribeToDM(): void {
+    if (!this.nc) return;
+    const sub = this.nc.subscribe(NatsSubjects.agentDM(this.config.agentId));
+    this.subscriptions.push(sub);
+
+    (async () => {
+      for await (const msg of sub) {
+        try {
+          const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
+          log.info(`DM from ${data.from}: ${(data.content || '').slice(0, 80)}`);
+
+          // Update peer last seen
+          if (this.peers.has(data.from)) {
+            this.peers.get(data.from)!.lastSeen = Date.now();
+          }
+
+          this.dmCallback?.(data);
+        } catch (err) {
+          log.error(`DM parse error: ${(err as Error).message}`);
+        }
+      }
+    })();
+  }
+
+  /** Subscribe to shared agents broadcast channel */
+  private subscribeToAgentsBroadcast(): void {
+    if (!this.nc) return;
+    const sub = this.nc.subscribe(NatsSubjects.agentsBroadcast);
+    this.subscriptions.push(sub);
+
+    (async () => {
+      for await (const msg of sub) {
+        try {
+          const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
+          if (data.from === this.config.agentId) continue; // skip own broadcasts
+          log.info(`Broadcast from ${data.from}: ${data.type} — ${(data.content || '').slice(0, 60)}`);
+
+          // Update peer last seen
+          if (this.peers.has(data.from)) {
+            this.peers.get(data.from)!.lastSeen = Date.now();
+          }
+
+          this.broadcastCallback?.(data);
+        } catch (err) {
+          log.error(`Broadcast parse error: ${(err as Error).message}`);
+        }
+      }
+    })();
+  }
+
+  /** Subscribe to coordination requests (task delegation) */
+  private subscribeToCoordination(): void {
+    if (!this.nc) return;
+    const sub = this.nc.subscribe(NatsSubjects.coordinationRequest);
+    this.subscriptions.push(sub);
+
+    (async () => {
+      for await (const msg of sub) {
+        try {
+          const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
+          if (data.from === this.config.agentId) continue;
+          // Only handle if directed at us or broadcast
+          if (data.to && data.to !== this.config.agentId) continue;
+
+          log.info(`Coordination from ${data.from}: ${data.type} — ${(data.content || '').slice(0, 60)}`);
+          this.coordinationCallback?.(data);
+        } catch (err) {
+          log.error(`Coordination parse error: ${(err as Error).message}`);
+        }
+      }
+    })();
+  }
+
+  // ─── Callbacks ────────────────────────────────────
+
   onTask(callback: (task: TaskAssignment) => void): void {
     this.taskCallback = callback;
   }
 
-  /** Set callback for chat messages */
   onChat(callback: (msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }) => void): void {
     this.chatCallback = callback;
+  }
+
+  onDM(callback: (msg: InterAgentMsg) => void): void {
+    this.dmCallback = callback;
+  }
+
+  onBroadcast(callback: (msg: InterAgentMsg) => void): void {
+    this.broadcastCallback = callback;
+  }
+
+  onCoordination(callback: (msg: InterAgentMsg) => void): void {
+    this.coordinationCallback = callback;
+  }
+
+  // ─── Publishing ───────────────────────────────────
+
+  /** Announce presence on discovery channel */
+  async announcePresence(status: 'online' | 'offline'): Promise<void> {
+    await this.publish(NatsSubjects.agentsDiscovery, {
+      agentId: this.config.agentId,
+      role: this.config.role,
+      capabilities: this.config.capabilities,
+      machineId: this.config.machineId,
+      hostname: this.config.hostname,
+      status,
+      timestamp: Date.now(),
+    });
+    log.info(`Announced presence: ${status} (peers: ${this.peers.size})`);
+  }
+
+  /** Send direct message to another agent */
+  async sendDM(toAgentId: string, content: string, payload?: unknown): Promise<void> {
+    const msg: InterAgentMsg = {
+      id: `dm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'dm',
+      from: this.config.agentId,
+      to: toAgentId,
+      content,
+      payload,
+      timestamp: Date.now(),
+    };
+    await this.publish(NatsSubjects.agentDM(toAgentId), msg);
+    log.info(`DM sent to ${toAgentId}: ${content.slice(0, 60)}`);
+  }
+
+  /** Broadcast message to all agents */
+  async broadcastToAgents(content: string, type: string = 'broadcast', payload?: unknown): Promise<void> {
+    const msg: InterAgentMsg = {
+      id: `bc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type,
+      from: this.config.agentId,
+      content,
+      payload,
+      timestamp: Date.now(),
+    };
+    await this.publish(NatsSubjects.agentsBroadcast, msg);
+  }
+
+  /** Request task delegation to another agent */
+  async delegateTask(toAgentId: string, task: { title: string; description: string; priority?: string }): Promise<void> {
+    const msg: InterAgentMsg = {
+      id: `del-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'delegation',
+      from: this.config.agentId,
+      to: toAgentId,
+      content: task.title,
+      payload: task,
+      timestamp: Date.now(),
+    };
+    await this.publish(NatsSubjects.coordinationRequest, msg);
+    log.info(`Delegation request to ${toAgentId}: ${task.title}`);
+  }
+
+  /** Respond to coordination request */
+  async respondCoordination(replyTo: string, accepted: boolean, reason?: string): Promise<void> {
+    const msg: InterAgentMsg = {
+      id: `coord-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'delegation-ack',
+      from: this.config.agentId,
+      content: accepted ? 'accepted' : `rejected: ${reason || 'busy'}`,
+      replyTo,
+      timestamp: Date.now(),
+    };
+    await this.publish(NatsSubjects.coordinationResponse, msg);
   }
 
   /** Publish status update */
@@ -209,16 +451,11 @@ export class NatsHandler {
     await this.publish(NatsSubjects.agentStatus(this.config.agentId), state);
   }
 
-  /** Track task completion stats */
   trackTaskComplete(success: boolean): void {
-    if (success) {
-      this.completedTasks++;
-    } else {
-      this.failedTasks++;
-    }
+    if (success) this.completedTasks++;
+    else this.failedTasks++;
   }
 
-  /** Publish task result */
   async publishResult(taskId: string, result: { success: boolean; output: string; artifacts?: string[] }): Promise<void> {
     await this.publish(NatsSubjects.agentResult(this.config.agentId), {
       agentId: this.config.agentId,
@@ -228,7 +465,6 @@ export class NatsHandler {
     });
   }
 
-  /** Publish task progress */
   async publishProgress(taskId: string, progress: { step: string; percentage?: number; log?: string }): Promise<void> {
     await this.publish(`jarvis.task.${taskId}.progress`, {
       agentId: this.config.agentId,
@@ -238,7 +474,6 @@ export class NatsHandler {
     });
   }
 
-  /** Broadcast to dashboard (general events) */
   async broadcastDashboard(event: string, payload: unknown): Promise<void> {
     await this.publish(NatsSubjects.dashboardBroadcast, {
       event,
@@ -248,7 +483,6 @@ export class NatsHandler {
     });
   }
 
-  /** Send chat response back to dashboard via chatBroadcast subject */
   async sendChatResponse(content: string, metadata?: Record<string, unknown>): Promise<void> {
     await this.publish(NatsSubjects.chatBroadcast, {
       from: this.config.agentId,
@@ -259,14 +493,30 @@ export class NatsHandler {
     });
   }
 
-  /** Publish generic NATS message */
+  /** Get list of known online peers */
+  getPeers(): PeerAgent[] {
+    return Array.from(this.peers.values());
+  }
+
+  /** Check if a specific agent is online */
+  isPeerOnline(agentId: string): boolean {
+    const peer = this.peers.get(agentId);
+    return !!peer && (Date.now() - peer.lastSeen) < 60_000;
+  }
+
+  // ─── Low-level ────────────────────────────────────
+
   async publish(subject: string, data: unknown): Promise<void> {
     if (!this.nc) throw new Error('Not connected to NATS');
     this.nc.publish(subject, sc.encode(JSON.stringify(data)));
   }
 
-  /** Disconnect from NATS */
   async disconnect(): Promise<void> {
+    // Announce offline before disconnecting
+    try {
+      await this.announcePresence('offline');
+    } catch { /* ignore if NATS already gone */ }
+
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
