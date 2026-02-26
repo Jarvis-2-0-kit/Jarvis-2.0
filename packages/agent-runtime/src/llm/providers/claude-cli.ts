@@ -207,6 +207,7 @@ export class ClaudeCliProvider implements LLMProvider {
           '--model', model,
           '--no-session-persistence',
           '--dangerously-skip-permissions',
+          '--tools', '',
         ], {
           env: { ...process.env, CLAUDECODE: '', ANTHROPIC_API_KEY: '', CLAUDE_CODE_ENTRYPOINT: '' },
           timeout: 600_000,
@@ -333,6 +334,7 @@ export class ClaudeCliProvider implements LLMProvider {
       '--model', model,
       '--no-session-persistence',
       '--dangerously-skip-permissions',
+      '--tools', '',
     ], {
       env: { ...process.env, CLAUDECODE: '', ANTHROPIC_API_KEY: '', CLAUDE_CODE_ENTRYPOINT: '' },
       timeout: 600_000,
