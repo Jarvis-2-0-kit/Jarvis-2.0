@@ -187,7 +187,7 @@ async function main(): Promise<void> {
     enableFileOps: true,
     enableWebFetch: true,
     enableWebSearch: true,
-    enableMessageAgent: false, // Will be enabled after NATS connects
+    enableMessageAgent: false, // Registered dynamically by runner after NATS connects
     enableSsh: hasSshHosts,
     enableComputerUse: hasVncHosts,
     enableIMessage,

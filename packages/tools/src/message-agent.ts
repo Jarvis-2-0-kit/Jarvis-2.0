@@ -4,11 +4,11 @@ import { createToolResult, createErrorResult } from './base.js';
 
 const log = createLogger('tool:message-agent');
 
-type NatsPublishFn = (subject: string, data: string) => Promise<void>;
+type NatsPublishFn = (subject: string, data: unknown) => Promise<void>;
 
 /**
  * Inter-agent messaging tool via NATS.
- * Allows agents to send messages, queries, and notifications to other agents.
+ * Allows agents to send messages, queries, notifications, and delegation requests to other agents.
  */
 export class MessageAgentTool implements AgentTool {
   private publish: NatsPublishFn;
@@ -19,18 +19,18 @@ export class MessageAgentTool implements AgentTool {
 
   definition = {
     name: 'message_agent',
-    description: 'Send a message to another agent in the Jarvis system. Use for coordination, delegating subtasks, or sharing information between Agent Alpha (Dev) and Agent Beta (Marketing).',
+    description: 'Send a message to another agent in the Jarvis system. Use for coordination, delegating subtasks, or sharing information between agents.',
     input_schema: {
       type: 'object',
       properties: {
         to: {
           type: 'string',
-          enum: ['agent-alpha', 'agent-beta'],
+          enum: ['jarvis', 'agent-alpha', 'agent-beta'],
           description: 'The target agent ID',
         },
         type: {
           type: 'string',
-          enum: ['task', 'query', 'notification', 'result'],
+          enum: ['task', 'delegation', 'query', 'notification', 'result'],
           description: 'Message type',
         },
         content: {
@@ -63,14 +63,22 @@ export class MessageAgentTool implements AgentTool {
       from: context.agentId,
       to,
       type,
-      payload: { content },
+      payload: type === 'task' || type === 'delegation'
+        ? { title: content, description: content, priority }
+        : { content },
       priority,
       timestamp: Date.now(),
     };
 
     try {
-      const subject = `jarvis.agent.${to}.task`;
-      await this.publish(subject, JSON.stringify(message));
+      // Route based on message type:
+      // - task/delegation → coordination channel (handled by handleCoordinationRequest)
+      // - query/notification/result → direct message (handled by handleInterAgentMessage)
+      const subject = type === 'task' || type === 'delegation'
+        ? `jarvis.coordination.request`
+        : `jarvis.agent.${to}.dm`;
+
+      await this.publish(subject, message);
       log.info(`Sent ${type} message to ${to}: ${content.slice(0, 80)}`);
       return createToolResult(`Message sent to ${to} (type: ${type}, priority: ${priority})`);
     } catch (err) {

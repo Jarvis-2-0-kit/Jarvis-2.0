@@ -5,7 +5,7 @@ import {
   type Message, type ContentBlock, type ToolUseBlock, type ToolResultBlock, type ThinkingBlock, type TextBlock,
   createUsageAccumulator, mergeUsage, type UsageAccumulator, type TokenUsage,
 } from '../llm/index.js';
-import { type ToolRegistry } from '@jarvis/tools';
+import { type ToolRegistry, MessageAgentTool } from '@jarvis/tools';
 import { NatsHandler, type NatsHandlerConfig, type TaskAssignment, type InterAgentMsg } from '../communication/nats-handler.js';
 import { SessionManager } from '../sessions/session-manager.js';
 import { buildSystemPrompt, type AgentRole, type PromptContext } from '../system-prompt/index.js';
@@ -17,6 +17,7 @@ import {
   type HookRunner,
   type PluginRegistry as PluginReg,
 } from '../plugins/index.js';
+import type { PluginRuntimeConfig } from '../plugins/types.js';
 
 const log = createLogger('agent:runner');
 
@@ -101,6 +102,7 @@ export class AgentRunner {
   private currentSessionId: string | null = null;
 
   // Plugin system
+  private runtimeConfig!: PluginRuntimeConfig;
   private pluginSystem: LoadedPluginSystem | null = null;
   private hooks: HookRunner | null = null;
   private pluginRegistry: PluginReg | null = null;
@@ -129,16 +131,18 @@ export class AgentRunner {
     await this.sessions.init();
 
     // ─── Load Plugin System ───
+    this.runtimeConfig = {
+      agentId: this.config.agentId,
+      role: this.config.role,
+      hostname: this.config.hostname,
+      workspacePath: this.config.workspacePath,
+      nasPath: this.config.nasMountPath,
+      defaultModel: this.config.defaultModel,
+    };
+
     try {
       this.pluginSystem = await loadPlugins({
-        runtimeConfig: {
-          agentId: this.config.agentId,
-          role: this.config.role,
-          hostname: this.config.hostname,
-          workspacePath: this.config.workspacePath,
-          nasPath: this.config.nasMountPath,
-          defaultModel: this.config.defaultModel,
-        },
+        runtimeConfig: this.runtimeConfig,
         nasPath: this.config.nasMountPath,
         enableBuiltins: true,
       });
@@ -163,6 +167,14 @@ export class AgentRunner {
 
     // Connect to NATS
     await this.nats.connect();
+
+    // ─── Wire inter-agent tools to NATS ───
+    this.tools.register(new MessageAgentTool(
+      (subject, data) => this.nats.publish(subject, data),
+    ));
+    this.runtimeConfig.delegateTask = (targetAgent, task) =>
+      this.nats.delegateTask(targetAgent, task);
+    log.info('Inter-agent tools wired to NATS');
 
     // Set up task handler
     this.nats.onTask((task) => {
@@ -465,7 +477,7 @@ export class AgentRunner {
       const peerLines = peers.map((p) =>
         `- **${p.agentId}** (role: ${p.role}, machine: ${p.hostname}, status: ${p.status}, capabilities: ${p.capabilities.join(', ')})`
       ).join('\n');
-      systemPrompt += `\n\n## Connected Agents\n\nYou are part of a multi-agent system. The following agents are currently online:\n${peerLines}\n\nYou can coordinate with them via task delegation. Use the \`message_agent\` tool to send messages to other agents when their capabilities match the task at hand.`;
+      systemPrompt += `\n\n## Connected Agents\n\nYou are part of a multi-agent system. The following agents are currently online:\n${peerLines}\n\nYou can coordinate with them using:\n- \`message_agent\` — send messages, queries, notifications, or delegation requests to other agents\n- \`delegate_to_agent\` — delegate a structured task to another agent (non-blocking, with progress tracking)`;
     } else {
       systemPrompt += `\n\n## Connected Agents\n\nYou are part of a multi-agent system but no other agents are currently online. You are operating solo.`;
     }

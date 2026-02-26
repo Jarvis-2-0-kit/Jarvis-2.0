@@ -362,7 +362,7 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
             properties: {
               targetAgent: {
                 type: 'string',
-                enum: ['agent-alpha', 'agent-beta'],
+                enum: ['jarvis', 'agent-alpha', 'agent-beta'],
                 description: 'Target agent to delegate to',
               },
               title: {
@@ -433,20 +433,30 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
             }
           }
 
-          // Build the NATS message (will be picked up by the runner via publishDelegation)
-          // Store the delegation request so the runner can pick it up
-          const delegationFile = join(nasPath, 'plans', `delegation-${taskId}.json`);
-          writeFileSync(delegationFile, JSON.stringify({
-            taskId,
-            targetAgent,
-            title: params.title as string,
-            description: params.description as string,
-            priority: (params.priority as string) || 'normal',
-            sourceAgent: myAgent,
-            planId: params.planId || null,
-            stepId: params.stepId || null,
-            createdAt: Date.now(),
-          }, null, 2));
+          // Delegate via NATS if available, otherwise fall back to file-based delegation
+          if (api.config.delegateTask) {
+            await api.config.delegateTask(targetAgent, {
+              title: params.title as string,
+              description: params.description as string,
+              priority: (params.priority as string) || 'normal',
+            });
+            log.info(`[task-planner] Delegation sent via NATS to ${targetAgent}`);
+          } else {
+            // Fallback: store delegation request as file for the runner to pick up
+            const delegationFile = join(nasPath, 'plans', `delegation-${taskId}.json`);
+            writeFileSync(delegationFile, JSON.stringify({
+              taskId,
+              targetAgent,
+              title: params.title as string,
+              description: params.description as string,
+              priority: (params.priority as string) || 'normal',
+              sourceAgent: myAgent,
+              planId: params.planId || null,
+              stepId: params.stepId || null,
+              createdAt: Date.now(),
+            }, null, 2));
+            log.info(`[task-planner] Delegation saved to file (NATS not available)`);
+          }
 
           log.info(
             `[task-planner] Delegated "${params.title}" to ${targetAgent} (taskId: ${taskId})`,
