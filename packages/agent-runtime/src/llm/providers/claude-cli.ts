@@ -46,6 +46,8 @@ function resolveClaudeBin(): string {
 
 const CLAUDE_BIN = resolveClaudeBin();
 
+const ALLOWED_MODELS = new Set(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001']);
+
 const MODELS: ModelInfo[] = [
   { id: 'claude-opus-4-6', name: 'Claude Opus 4.6 (CLI)', provider: 'claude-cli', contextWindow: 200000, maxOutputTokens: 32000, supportsTools: true, supportsVision: false, costPerInputToken: 0, costPerOutputToken: 0 },
   { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (CLI)', provider: 'claude-cli', contextWindow: 200000, maxOutputTokens: 64000, supportsTools: true, supportsVision: false, costPerInputToken: 0, costPerOutputToken: 0 },
@@ -196,11 +198,29 @@ export class ClaudeCliProvider implements LLMProvider {
     const prompt = buildPrompt(request);
     const model = request.model || 'claude-opus-4-6';
 
+    // Validate model name to prevent argument injection
+    if (!ALLOWED_MODELS.has(model)) {
+      throw new Error(`Model '${model}' is not in the allowed list for Claude CLI`);
+    }
+
     log.info(`Calling claude -p (model: ${model}, prompt: ${prompt.length} chars)`);
 
     try {
-      // Use spawn to pass prompt via stdin
+      // Use spawn to pass prompt via stdin — only pass necessary env vars
       const response = await new Promise<string>((resolve, reject) => {
+        const safeEnv: Record<string, string> = {
+          PATH: process.env['PATH'] ?? '',
+          HOME: process.env['HOME'] ?? '',
+          USER: process.env['USER'] ?? '',
+          SHELL: process.env['SHELL'] ?? '/bin/bash',
+          TERM: process.env['TERM'] ?? 'xterm-256color',
+          LANG: process.env['LANG'] ?? 'en_US.UTF-8',
+          TMPDIR: process.env['TMPDIR'] ?? '/tmp',
+        };
+        // Propagate NVM/Node paths if present
+        if (process.env['NVM_DIR']) safeEnv['NVM_DIR'] = process.env['NVM_DIR'];
+        if (process.env['NVM_BIN']) safeEnv['NVM_BIN'] = process.env['NVM_BIN'];
+
         const child = spawn(CLAUDE_BIN, [
           '-p',
           '--output-format', 'json',
@@ -209,7 +229,7 @@ export class ClaudeCliProvider implements LLMProvider {
           '--dangerously-skip-permissions',
           '--tools', '',
         ], {
-          env: { ...process.env, CLAUDECODE: '', ANTHROPIC_API_KEY: '', CLAUDE_CODE_ENTRYPOINT: '' },
+          env: safeEnv,
           timeout: 600_000,
         });
 
@@ -325,7 +345,25 @@ export class ClaudeCliProvider implements LLMProvider {
 
     log.info(`Streaming claude -p (model: ${model}, prompt: ${prompt.length} chars)`);
 
+    // Validate model name
+    if (!ALLOWED_MODELS.has(model)) {
+      yield { type: 'error', error: `Model '${model}' is not in the allowed list for Claude CLI` };
+      return;
+    }
+
     // Spawn claude with stream-json + partial messages for token-by-token output
+    const safeEnv: Record<string, string> = {
+      PATH: process.env['PATH'] ?? '',
+      HOME: process.env['HOME'] ?? '',
+      USER: process.env['USER'] ?? '',
+      SHELL: process.env['SHELL'] ?? '/bin/bash',
+      TERM: process.env['TERM'] ?? 'xterm-256color',
+      LANG: process.env['LANG'] ?? 'en_US.UTF-8',
+      TMPDIR: process.env['TMPDIR'] ?? '/tmp',
+    };
+    if (process.env['NVM_DIR']) safeEnv['NVM_DIR'] = process.env['NVM_DIR'];
+    if (process.env['NVM_BIN']) safeEnv['NVM_BIN'] = process.env['NVM_BIN'];
+
     const child = spawn(CLAUDE_BIN, [
       '-p',
       '--output-format', 'stream-json',
@@ -336,7 +374,7 @@ export class ClaudeCliProvider implements LLMProvider {
       '--dangerously-skip-permissions',
       '--tools', '',
     ], {
-      env: { ...process.env, CLAUDECODE: '', ANTHROPIC_API_KEY: '', CLAUDE_CODE_ENTRYPOINT: '' },
+      env: safeEnv,
       timeout: 600_000,
     });
 

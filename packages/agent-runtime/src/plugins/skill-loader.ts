@@ -89,7 +89,7 @@ export interface SkillLoaderConfig {
 // ─── Cache ────────────────────────────────────────────────────────────
 
 let _cachedSkills: EnhancedSkillDefinition[] | null = null;
-let _watcher: ReturnType<typeof watch> | null = null;
+let _watchers: ReturnType<typeof watch>[] = [];
 
 // ─── Core Functions ───────────────────────────────────────────────────
 
@@ -195,11 +195,12 @@ export function getCachedSkills(): EnhancedSkillDefinition[] {
  * Stop the file watcher.
  */
 export function stopSkillWatcher(): void {
-  if (_watcher) {
-    _watcher.close();
-    _watcher = null;
-    log.info('Skill watcher stopped');
+  for (const w of _watchers) {
+    try { w.close(); } catch { /* ignore */ }
   }
+  const count = _watchers.length;
+  _watchers = [];
+  if (count > 0) log.info(`Skill watcher stopped (${count} watchers closed)`);
 }
 
 // ─── Parsing ──────────────────────────────────────────────────────────
@@ -389,12 +390,21 @@ function checkGating(
  * Caches results for performance.
  */
 const _binCache = new Map<string, boolean>();
+/** Allowed chars for binary names to prevent command injection */
+const SAFE_BIN_NAME = /^[a-zA-Z0-9._-]+$/;
 function binaryExists(name: string): boolean {
   if (_binCache.has(name)) return _binCache.get(name)!;
 
+  // Validate binary name to prevent command injection
+  if (!SAFE_BIN_NAME.test(name)) {
+    log.warn(`Rejected unsafe binary name: ${name}`);
+    _binCache.set(name, false);
+    return false;
+  }
+
   try {
     const cmd = platform() === 'win32' ? `where ${name}` : `which ${name}`;
-    execSync(cmd, { stdio: 'pipe' });
+    execSync(cmd, { stdio: 'pipe', timeout: 3000 });
     _binCache.set(name, true);
     return true;
   } catch {
@@ -409,6 +419,13 @@ function binaryExists(name: string): boolean {
  * Inject skill environment variables for the duration of a function call.
  * Restores original values after execution (OpenClaw per-run env pattern).
  */
+/** Env vars that skills are never allowed to override */
+const BLOCKED_ENV_KEYS = new Set([
+  'PATH', 'HOME', 'USER', 'SHELL', 'LANG', 'TERM',
+  'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'JARVIS_AUTH_TOKEN',
+  'NODE_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES',
+]);
+
 export async function withSkillEnvironment<T>(
   skill: EnhancedSkillDefinition,
   fn: () => T | Promise<T>,
@@ -418,14 +435,28 @@ export async function withSkillEnvironment<T>(
     return fn();
   }
 
+  // Filter out blocked env vars
+  const safeOverrides: Record<string, string> = {};
+  for (const [key, value] of Object.entries(envOverrides)) {
+    if (BLOCKED_ENV_KEYS.has(key)) {
+      log.warn(`Skill ${skill.id} tried to override blocked env var: ${key}`);
+      continue;
+    }
+    safeOverrides[key] = value;
+  }
+
+  if (Object.keys(safeOverrides).length === 0) {
+    return fn();
+  }
+
   // Save original values
   const saved: Record<string, string | undefined> = {};
-  for (const key of Object.keys(envOverrides)) {
+  for (const key of Object.keys(safeOverrides)) {
     saved[key] = process.env[key];
   }
 
   // Inject overrides (with {baseDir} token resolution)
-  for (const [key, value] of Object.entries(envOverrides)) {
+  for (const [key, value] of Object.entries(safeOverrides)) {
     process.env[key] = value.replace(/\{baseDir\}/g, skill.baseDir);
   }
 
@@ -470,9 +501,7 @@ function setupWatcher(
         }, debounceMs);
       });
 
-      // Store the watcher (only keep last one — simple approach)
-      if (_watcher) _watcher.close();
-      _watcher = w;
+      _watchers.push(w);
     } catch (err) {
       log.warn(`Could not watch directory ${dir}: ${(err as Error).message}`);
     }

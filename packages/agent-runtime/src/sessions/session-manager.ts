@@ -1,4 +1,4 @@
-import { readFile, writeFile, appendFile, readdir, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, readdir, mkdir, stat, rename } from 'node:fs/promises';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -247,11 +247,13 @@ export class SessionManager {
       },
     };
 
-    // Rewrite the file
+    // Rewrite the file atomically (write to temp, then rename)
     const filePath = this.getSessionPath(sessionId);
+    const tmpPath = `${filePath}.tmp`;
     const newEntries = [summaryEntry, ...toKeep];
     const content = newEntries.map((e) => JSON.stringify(e)).join('\n') + '\n';
-    await writeFile(filePath, content, 'utf-8');
+    await writeFile(tmpPath, content, 'utf-8');
+    await rename(tmpPath, filePath);
 
     log.info(`Compacted session ${sessionId}: ${entries.length} -> ${newEntries.length} entries`);
   }

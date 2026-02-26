@@ -16,6 +16,7 @@ import { CronSchedulerTool, type CronSchedulerConfig } from './integrations/cron
 import { AppleCalendarTool, type AppleCalendarConfig } from './integrations/apple-calendar.js';
 import { SocialTool, SocialAnalyticsTool, type SocialToolConfig } from './social/social-tool.js';
 import { SocialSchedulerTool } from './social/scheduler.js';
+import { ImageGenTool } from './image-gen.js';
 
 const log = createLogger('tools:registry');
 
@@ -34,6 +35,9 @@ export interface ToolRegistryConfig {
   enableHomeAssistant?: boolean;
   enableCron?: boolean;
   enableCalendar?: boolean;
+  /** Image generation */
+  enableImageGen?: boolean;
+  openaiApiKey?: string;
   /** Social media */
   enableSocial?: boolean;
   braveApiKey?: string;
@@ -121,6 +125,11 @@ export class ToolRegistry {
 
     if (config.enableCalendar && process.platform === 'darwin') {
       this.register(new AppleCalendarTool(config.calendarConfig));
+    }
+
+    // ── Image Generation ──
+    if (config.enableImageGen && config.openaiApiKey) {
+      this.register(new ImageGenTool(config.openaiApiKey));
     }
 
     // ── Social Media ──

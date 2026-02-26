@@ -43,16 +43,23 @@ function stripOldImages(messages: Message[], keepRecentCount = 4): Message[] {
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (i < stripThreshold && msg.role === 'user' && Array.isArray(msg.content)) {
-      // Check if any content block contains image data
+      // Check if any content block contains image data (top-level or inside tool_result)
       const hasImage = (msg.content as Array<{ type: string }>).some(
-        (b) => b.type === 'tool_result' &&
+        (b) => b.type === 'image' || (
+          b.type === 'tool_result' &&
           Array.isArray((b as { content?: unknown }).content) &&
-          ((b as { content: Array<{ type: string }> }).content).some((c) => c.type === 'image'),
+          ((b as { content: Array<{ type: string }> }).content).some((c) => c.type === 'image')
+        ),
       );
 
       if (hasImage) {
-        // Replace image blocks with text placeholders inside tool_result blocks
+        // Replace image blocks with text placeholders
         const stripped = (msg.content as Array<Record<string, unknown>>).map((block) => {
+          // Top-level image blocks
+          if (block.type === 'image') {
+            return { type: 'text', text: '[Screenshot removed to save context]' };
+          }
+          // Images inside tool_result blocks
           if (block.type === 'tool_result' && Array.isArray(block.content)) {
             const newContent = (block.content as Array<Record<string, unknown>>).map((c) => {
               if (c.type === 'image') {
@@ -74,50 +81,167 @@ function stripOldImages(messages: Message[], keepRecentCount = 4): Message[] {
   return result;
 }
 
+/** Max chars for a single tool_use input block (code/text in tool args) */
+const MAX_TOOL_USE_CHARS = 6_000;
+/** Max chars for a single tool_result content */
+const MAX_TOOL_RESULT_CHARS = 8_000;
+/** Max tool_use/tool_result blocks to keep per message after truncation */
+const MAX_BLOCKS_PER_MESSAGE = 12;
+
 /**
- * Trim messages to stay within the prompt size budget.
- * Keeps the first user message (task context) and the most recent messages.
- * Drops middle messages in assistant/user pairs to maintain valid Anthropic format.
+ * Estimate the total character size of a set of messages (including system + tools overhead).
  */
-function trimMessagesToFit(messages: Message[], systemPromptLen: number, toolDefsLen: number): Message[] {
-  const estimateSize = (msgs: Message[]): number => {
-    let size = systemPromptLen + toolDefsLen;
-    for (const m of msgs) {
-      if (typeof m.content === 'string') {
-        size += m.content.length;
-      } else {
-        for (const block of m.content) {
-          if ('text' in block) size += (block as { text: string }).text.length;
-          else if ('content' in block) {
-            const c = (block as { content: unknown }).content;
-            size += typeof c === 'string' ? c.length : JSON.stringify(c).length;
-          } else {
-            size += JSON.stringify(block).length;
-          }
+function estimateMessagesSize(msgs: Message[], systemPromptLen: number, toolDefsLen: number): number {
+  let size = systemPromptLen + toolDefsLen;
+  for (const m of msgs) {
+    if (typeof m.content === 'string') {
+      size += m.content.length;
+    } else {
+      for (const block of m.content) {
+        if ('text' in block) size += (block as { text: string }).text.length;
+        else if ('content' in block) {
+          const c = (block as { content: unknown }).content;
+          size += typeof c === 'string' ? c.length : JSON.stringify(c).length;
+        } else {
+          size += JSON.stringify(block).length;
         }
       }
     }
-    return size;
-  };
+  }
+  return size;
+}
 
-  if (estimateSize(messages) <= MAX_PROMPT_CHARS) return messages;
+/**
+ * Truncate text content within a single block to a max length.
+ */
+function truncateBlockContent(block: Record<string, unknown>, maxLen: number): Record<string, unknown> {
+  // tool_use: truncate input arguments (large code blocks)
+  if (block.type === 'tool_use' && block.input) {
+    const inputStr = JSON.stringify(block.input);
+    if (inputStr.length > maxLen) {
+      const truncInput = inputStr.slice(0, maxLen);
+      return { ...block, input: { _truncated: true, summary: truncInput + '...[truncated]' } };
+    }
+  }
+  // tool_result: truncate content
+  if (block.type === 'tool_result') {
+    const content = block.content;
+    if (typeof content === 'string' && content.length > maxLen) {
+      return { ...block, content: content.slice(0, maxLen) + '\n...[truncated from ' + content.length + ' chars]' };
+    }
+    // Array content (may contain images or text blocks)
+    if (Array.isArray(content)) {
+      const truncated = (content as Array<Record<string, unknown>>).map((c) => {
+        if (c.type === 'image') {
+          return { type: 'text', text: '[Image removed to save context]' };
+        }
+        if (c.type === 'text' && typeof c.text === 'string' && (c.text as string).length > maxLen) {
+          return { type: 'text', text: (c.text as string).slice(0, maxLen) + '...[truncated]' };
+        }
+        return c;
+      });
+      return { ...block, content: truncated };
+    }
+  }
+  return block;
+}
 
-  // Keep first 2 messages (user prompt + first assistant) and trim from the front of the middle
+/**
+ * Shrink a single message by truncating individual blocks and dropping excess blocks.
+ * Preserves assistant/user message structure and tool_use/tool_result pairing.
+ */
+function shrinkMessage(msg: Message, aggressive: boolean): Message {
+  if (typeof msg.content === 'string') {
+    const limit = aggressive ? 2_000 : 6_000;
+    if (msg.content.length > limit) {
+      return { ...msg, content: msg.content.slice(0, limit) + '\n...[truncated]' };
+    }
+    return msg;
+  }
+
+  let blocks = msg.content as Array<Record<string, unknown>>;
+  const maxLen = aggressive ? 2_000 : (msg.role === 'assistant' ? MAX_TOOL_USE_CHARS : MAX_TOOL_RESULT_CHARS);
+  const maxBlocks = aggressive ? 6 : MAX_BLOCKS_PER_MESSAGE;
+
+  // Truncate individual block contents
+  blocks = blocks.map((b) => truncateBlockContent(b, maxLen));
+
+  // Drop excess blocks (keep first few + last few for context)
+  if (blocks.length > maxBlocks) {
+    const keepStart = Math.ceil(maxBlocks / 2);
+    const keepEnd = Math.floor(maxBlocks / 2);
+    const dropped = blocks.length - maxBlocks;
+    blocks = [
+      ...blocks.slice(0, keepStart),
+      { type: msg.role === 'assistant' ? 'text' : 'tool_result', ...(msg.role !== 'assistant' ? { tool_use_id: 'trimmed', is_error: false } : {}), content: `[...${dropped} blocks removed to save context...]` } as Record<string, unknown>,
+      ...blocks.slice(blocks.length - keepEnd),
+    ];
+  }
+
+  return { ...msg, content: blocks as ContentBlock[] };
+}
+
+/**
+ * Trim messages to stay within the prompt size budget.
+ *
+ * Strategy (applied in order until within budget):
+ * 1. Drop middle message pairs (keep front 2 + tail 2)
+ * 2. Shrink remaining messages by truncating large tool blocks
+ * 3. Aggressive truncation — heavily shrink all remaining messages
+ */
+function trimMessagesToFit(messages: Message[], systemPromptLen: number, toolDefsLen: number): Message[] {
+  const estimate = (msgs: Message[]) => estimateMessagesSize(msgs, systemPromptLen, toolDefsLen);
+
+  if (estimate(messages) <= MAX_PROMPT_CHARS) return messages;
+
+  // Phase 1: Drop middle message pairs (validate proper assistant+user pairing)
   const keepFront = Math.min(2, messages.length);
   const front = messages.slice(0, keepFront);
   let tail = messages.slice(keepFront);
 
-  // Drop pairs from the front of tail (assistant + tool_result user) until we fit
-  while (tail.length > 2 && estimateSize([...front, ...tail]) > MAX_PROMPT_CHARS) {
-    // Drop in pairs to maintain valid assistant/user alternation
-    tail = tail.slice(2);
+  while (tail.length > 2 && estimate([...front, ...tail]) > MAX_PROMPT_CHARS) {
+    // Drop in valid pairs: (assistant, user) or (user, assistant)
+    if (tail[0]?.role === 'assistant' && tail[1]?.role === 'user') {
+      tail = tail.slice(2);
+    } else if (tail[0]?.role === 'user' && tail[1]?.role === 'assistant') {
+      tail = tail.slice(2);
+    } else {
+      // Can't safely drop a pair — skip to next phase
+      break;
+    }
   }
 
-  const trimmed = [...front, ...tail];
-  if (trimmed.length < messages.length) {
-    log.info(`Context trimmed: ${messages.length} → ${trimmed.length} messages to fit prompt budget`);
+  let trimmed = [...front, ...tail];
+  if (estimate(trimmed) <= MAX_PROMPT_CHARS) {
+    if (trimmed.length < messages.length) {
+      log.info(`Context trimmed: ${messages.length} → ${trimmed.length} messages (phase 1: drop middle)`);
+    }
+    return trimmed;
   }
-  return trimmed;
+
+  // Phase 2: Shrink individual messages (truncate large tool blocks)
+  trimmed = trimmed.map((m) => shrinkMessage(m, false));
+  if (estimate(trimmed) <= MAX_PROMPT_CHARS) {
+    log.info(`Context trimmed: ${messages.length} → ${trimmed.length} messages (phase 2: shrink blocks)`);
+    return trimmed;
+  }
+
+  // Phase 3: Aggressive truncation — heavily cut all content
+  trimmed = trimmed.map((m) => shrinkMessage(m, true));
+  const finalSize = estimate(trimmed);
+  if (finalSize <= MAX_PROMPT_CHARS) {
+    log.info(`Context trimmed: ${messages.length} → ${trimmed.length} messages (phase 3: aggressive, ${finalSize} chars)`);
+    return trimmed;
+  }
+
+  // Phase 4: Nuclear — keep only the first user message with a summary
+  log.warn(`Context still too large after aggressive trim (${finalSize} chars). Resetting to initial prompt only.`);
+  const firstMsg = messages[0];
+  const summary: Message = {
+    role: 'assistant',
+    content: '[Previous conversation was too large and has been dropped. Continue the task based on the original instructions above.]',
+  };
+  return [firstMsg, summary];
 }
 
 /**
@@ -237,16 +361,28 @@ export class AgentRunner {
     };
 
     try {
-      this.pluginSystem = await loadPlugins({
+      const pluginPromise = loadPlugins({
         runtimeConfig: this.runtimeConfig,
         nasPath: this.config.nasMountPath,
         enableBuiltins: true,
       });
+      // Timeout plugin loading to prevent blocking startup indefinitely
+      this.pluginSystem = await Promise.race([
+        pluginPromise,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Plugin load timeout (30s)')), 30_000)),
+      ]);
       this.hooks = this.pluginSystem.hookRunner;
       this.pluginRegistry = this.pluginSystem.registry;
 
-      // Start plugin services
-      this.serviceStopFns = await this.pluginSystem.registry.startServices();
+      // Start plugin services (with separate timeout)
+      try {
+        this.serviceStopFns = await Promise.race([
+          this.pluginSystem.registry.startServices(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Service start timeout (15s)')), 15_000)),
+        ]);
+      } catch (svcErr) {
+        log.warn(`Plugin services failed to start (plugins still available): ${(svcErr as Error).message}`);
+      }
 
       log.info(`Plugin system ready: ${this.pluginSystem.registry.getSummary()}`);
     } catch (err) {
@@ -335,10 +471,22 @@ export class AgentRunner {
     await this.nats.disconnect();
   }
 
+  /** Pending task queue — tasks that arrive while busy are queued instead of dropped */
+  private taskQueue: TaskAssignment[] = [];
+  private static readonly MAX_QUEUE_SIZE = 5;
+
   /** Handle an incoming task assignment */
   private async handleTask(task: TaskAssignment): Promise<void> {
     if (this.currentTask) {
-      log.warn(`Already processing task ${this.currentTask.taskId}, rejecting ${task.taskId}`);
+      if (this.taskQueue.length < AgentRunner.MAX_QUEUE_SIZE) {
+        this.taskQueue.push(task);
+        log.info(`Queued task ${task.taskId} (queue size: ${this.taskQueue.length})`);
+        // Notify the sender that we queued (not rejected) the task
+        await this.nats.publishProgress(task.taskId, { step: 'queued', log: `Task queued behind ${this.currentTask.taskId}` });
+      } else {
+        log.warn(`Task queue full (${AgentRunner.MAX_QUEUE_SIZE}), rejecting ${task.taskId}`);
+        await this.nats.publishResult(task.taskId, { success: false, output: `Agent ${this.config.agentId} queue full — task rejected` });
+      }
       return;
     }
 
@@ -484,6 +632,15 @@ export class AgentRunner {
       this.currentTask = null;
       this.currentSessionId = null;
       await this.nats.updateStatus('idle');
+
+      // Process next queued task if any
+      if (this.taskQueue.length > 0) {
+        const next = this.taskQueue.shift()!;
+        log.info(`Dequeuing next task: ${next.taskId} (remaining: ${this.taskQueue.length})`);
+        this.handleTask(next).catch((err) => {
+          log.error(`Queued task handler error: ${(err as Error).message}`);
+        });
+      }
     }
   }
 
@@ -828,12 +985,8 @@ export class AgentRunner {
       if (cleanedFinal) content.push({ type: 'text', text: cleanedFinal });
     }
 
-    // Send done delta — important for dashboard to know streaming ended
-    try {
-      await this.nats.sendChatStream({ phase: 'done', sessionId, round });
-    } catch (err) {
-      log.warn(`Failed to send stream done marker: ${(err as Error).message}`);
-    }
+    // NOTE: Do NOT send 'done' here — it kills the stream indicator in the dashboard
+    // while tools are still executing. 'done' is sent at the end of runAgentLoop instead.
 
     return {
       content,
@@ -881,6 +1034,12 @@ export class AgentRunner {
         activeModel = modelResult.modelOverride;
       }
     }
+
+    const sendDone = async () => {
+      try {
+        await this.nats.sendChatStream({ phase: 'done', sessionId: streamSessionId ?? sessionId, round: 0 });
+      } catch { /* non-critical */ }
+    };
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       if (!this.running) break;
@@ -933,7 +1092,10 @@ export class AgentRunner {
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
           throw new Error(`LLM failed ${MAX_CONSECUTIVE_ERRORS} times consecutively`);
         }
-        await new Promise((r) => setTimeout(r, 2000 * consecutiveErrors));
+        // Exponential backoff: 2s, 4s, 8s, 16s, capped at 30s
+        const backoffMs = Math.min(2000 * Math.pow(2, consecutiveErrors - 1), 30_000);
+        log.info(`Retrying in ${backoffMs}ms...`);
+        await new Promise((r) => setTimeout(r, backoffMs));
         continue;
       }
 
@@ -970,12 +1132,31 @@ export class AgentRunner {
       // Log progress
       this.logRound(round, response, usage);
 
+      // Stream: send text content from this round so dashboard shows what agent is saying
+      const roundText = response.content
+        .filter((b): b is TextBlock => b.type === 'text')
+        .map((b) => b.text)
+        .join('\n')
+        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+        .trim();
+      if (roundText) {
+        try {
+          await this.nats.sendChatStream({
+            phase: 'text',
+            text: roundText,
+            sessionId: streamSessionId ?? sessionId,
+            round: round + 1,
+          });
+        } catch { /* non-critical */ }
+      }
+
       // Check if assistant is done (no tool calls)
       if (response.stopReason !== 'tool_use') {
         const textContent = response.content
           .filter((b): b is TextBlock => b.type === 'text')
           .map((b) => b.text)
           .join('\n');
+        await sendDone();
         return {
           output: textContent || '(Task completed with no text output)',
           artifacts,
@@ -990,6 +1171,7 @@ export class AgentRunner {
           .filter((b): b is TextBlock => b.type === 'text')
           .map((b) => b.text)
           .join('\n');
+        await sendDone();
         return {
           output: textContent || '(Task completed)',
           artifacts,
@@ -1026,13 +1208,23 @@ export class AgentRunner {
           }
         }
 
-        // Broadcast tool activity
+        // Broadcast tool activity to dashboard
         await this.nats.broadcastDashboard('agent.activity', {
           agentId: this.config.agentId,
           type: 'tool_call',
           tool: toolUse.name,
           input: JSON.stringify(toolInput).slice(0, 200),
         });
+
+        // Stream event: tool execution start (visible in dashboard chat)
+        try {
+          await this.nats.sendChatStream({
+            phase: 'tool_start',
+            toolName: toolUse.name,
+            sessionId: streamSessionId ?? sessionId,
+            round: round + 1,
+          });
+        } catch { /* non-critical */ }
 
         const startTime = Date.now();
         let result = await this.executeTool(toolUse.name, toolInput, {
@@ -1042,6 +1234,21 @@ export class AgentRunner {
           sessionId,
         });
         const elapsed = Date.now() - startTime;
+
+        // Stream event: tool result summary (visible in dashboard chat)
+        try {
+          const summary = result.type === 'error'
+            ? `❌ ${toolUse.name}: ${result.content.slice(0, 100)}`
+            : result.type === 'image'
+              ? `📸 ${toolUse.name}: screenshot captured`
+              : `✅ ${toolUse.name} (${elapsed}ms)`;
+          await this.nats.sendChatStream({
+            phase: 'text',
+            text: summary,
+            sessionId: streamSessionId ?? sessionId,
+            round: round + 1,
+          });
+        } catch { /* non-critical */ }
 
         // ─── Hook: after_tool_call ───
         if (this.hooks) {
@@ -1103,6 +1310,7 @@ export class AgentRunner {
     }
 
     // Hit max rounds
+    await sendDone();
     const lastText = messages
       .filter((m) => m.role === 'assistant')
       .flatMap((m) => typeof m.content === 'string' ? [m.content] : m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text))

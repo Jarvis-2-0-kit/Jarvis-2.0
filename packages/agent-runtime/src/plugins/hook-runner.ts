@@ -56,6 +56,11 @@ export class HookRunner {
       } catch (err) {
         if (this.options.catchErrors) {
           log.error(`Hook ${name} (plugin: ${hook.pluginId}) error: ${(err as Error).message}`);
+          // Don't silently continue on security-critical hooks
+          const criticalHooks: PluginHookName[] = ['before_tool_call', 'before_model_resolve'];
+          if (criticalHooks.includes(name)) {
+            throw err;
+          }
         } else {
           throw err;
         }

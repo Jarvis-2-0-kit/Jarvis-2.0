@@ -56,6 +56,7 @@ export class NatsHandler {
   private nc: NatsConnection | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private subscriptions: Subscription[] = [];
+  private subscriptionLoops: Promise<void>[] = [];
   private taskCallback: ((task: TaskAssignment) => void) | null = null;
   private chatCallback: ((msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }) => void) | null = null;
   private dmCallback: ((msg: InterAgentMsg) => void) | null = null;
@@ -109,30 +110,34 @@ export class NatsHandler {
 
     log.info(`Connected to NATS (servers: ${servers.join(', ')})`);
 
-    // Monitor connection status
-    void (async () => {
+    // Monitor connection status (tracked for clean shutdown)
+    this.subscriptionLoops.push((async () => {
       if (!this.nc) return;
-      for await (const status of this.nc.status()) {
-        switch (status.type) {
-          case 'reconnecting':
-            log.warn(`NATS reconnecting... (${String(status.data)})`);
-            break;
-          case 'reconnect':
-            log.info(`NATS reconnected successfully`);
-            await this.register();
-            await this.announcePresence('online');
-            break;
-          case 'disconnect':
-            log.warn(`NATS disconnected: ${String(status.data)}`);
-            break;
-          case 'error':
-            log.error(`NATS error: ${String(status.data)}`);
-            break;
-          default:
-            log.info(`NATS status: ${status.type}`, { data: String(status.data) });
+      try {
+        for await (const status of this.nc.status()) {
+          switch (status.type) {
+            case 'reconnecting':
+              log.warn(`NATS reconnecting... (${String(status.data)})`);
+              break;
+            case 'reconnect':
+              log.info(`NATS reconnected successfully`);
+              await this.register();
+              await this.announcePresence('online');
+              break;
+            case 'disconnect':
+              log.warn(`NATS disconnected: ${String(status.data)}`);
+              break;
+            case 'error':
+              log.error(`NATS error: ${String(status.data)}`);
+              break;
+            default:
+              log.info(`NATS status: ${status.type}`, { data: String(status.data) });
+          }
         }
+      } catch (err) {
+        log.warn(`NATS status monitor ended: ${(err as Error).message}`);
       }
-    })();
+    })());
 
     await this.register();
     this.startHeartbeat();
@@ -212,17 +217,21 @@ export class NatsHandler {
     const sub = this.nc.subscribe(NatsSubjects.agentTask(this.config.agentId));
     this.subscriptions.push(sub);
 
-    (async () => {
-      for await (const msg of sub) {
-        try {
-          const data = JSON.parse(sc.decode(msg.data)) as TaskAssignment;
-          log.info(`Received task: ${data.taskId} - ${data.title}`);
-          this.taskCallback?.(data);
-        } catch (err) {
-          log.error(`Failed to parse task message: ${(err as Error).message}`);
+    this.subscriptionLoops.push((async () => {
+      try {
+        for await (const msg of sub) {
+          try {
+            const data = JSON.parse(sc.decode(msg.data)) as TaskAssignment;
+            log.info(`Received task: ${data.taskId} - ${data.title}`);
+            this.taskCallback?.(data);
+          } catch (err) {
+            log.error(`Failed to parse task message: ${(err as Error).message}`);
+          }
         }
+      } catch (err) {
+        log.warn(`Task subscription ended: ${(err as Error).message}`);
       }
-    })();
+    })());
   }
 
   private subscribeToChat(): void {
@@ -230,17 +239,21 @@ export class NatsHandler {
     const sub = this.nc.subscribe(NatsSubjects.chat(this.config.agentId));
     this.subscriptions.push(sub);
 
-    (async () => {
-      for await (const msg of sub) {
-        try {
-          const data = JSON.parse(sc.decode(msg.data)) as { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> };
-          log.info(`Chat from ${data.from}: ${data.content.slice(0, 80)}`);
-          this.chatCallback?.(data);
-        } catch (err) {
-          log.error(`Failed to parse chat message: ${(err as Error).message}`);
+    this.subscriptionLoops.push((async () => {
+      try {
+        for await (const msg of sub) {
+          try {
+            const data = JSON.parse(sc.decode(msg.data)) as { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> };
+            log.info(`Chat from ${data.from}: ${data.content.slice(0, 80)}`);
+            this.chatCallback?.(data);
+          } catch (err) {
+            log.error(`Failed to parse chat message: ${(err as Error).message}`);
+          }
         }
+      } catch (err) {
+        log.warn(`Chat subscription ended: ${(err as Error).message}`);
       }
-    })();
+    })());
   }
 
   // ─── Inter-Agent Communication ────────────────────
@@ -251,40 +264,44 @@ export class NatsHandler {
     const sub = this.nc.subscribe(NatsSubjects.agentsDiscovery);
     this.subscriptions.push(sub);
 
-    (async () => {
-      for await (const msg of sub) {
-        try {
-          const data = JSON.parse(sc.decode(msg.data)) as {
-            agentId: string; role: string; capabilities: string[];
-            machineId: string; hostname: string; status: string; timestamp: number;
-          };
-          if (data.agentId === this.config.agentId) continue; // skip self
+    this.subscriptionLoops.push((async () => {
+      try {
+        for await (const msg of sub) {
+          try {
+            const data = JSON.parse(sc.decode(msg.data)) as {
+              agentId: string; role: string; capabilities: string[];
+              machineId: string; hostname: string; status: string; timestamp: number;
+            };
+            if (data.agentId === this.config.agentId) continue; // skip self
 
-          if (data.status === 'offline') {
-            this.peers.delete(data.agentId);
-            log.info(`Peer ${data.agentId} announced offline`);
-          } else {
-            const isNew = !this.peers.has(data.agentId);
-            this.peers.set(data.agentId, {
-              agentId: data.agentId,
-              role: data.role,
-              capabilities: data.capabilities,
-              machineId: data.machineId,
-              hostname: data.hostname,
-              status: data.status,
-              lastSeen: Date.now(),
-            });
-            if (isNew) {
-              log.info(`Discovered peer: ${data.agentId} (role: ${data.role}, machine: ${data.hostname})`);
-              // Announce back so the new agent knows about us
-              await this.announcePresence('online');
+            if (data.status === 'offline') {
+              this.peers.delete(data.agentId);
+              log.info(`Peer ${data.agentId} announced offline`);
+            } else {
+              const isNew = !this.peers.has(data.agentId);
+              this.peers.set(data.agentId, {
+                agentId: data.agentId,
+                role: data.role,
+                capabilities: data.capabilities,
+                machineId: data.machineId,
+                hostname: data.hostname,
+                status: data.status,
+                lastSeen: Date.now(),
+              });
+              if (isNew) {
+                log.info(`Discovered peer: ${data.agentId} (role: ${data.role}, machine: ${data.hostname})`);
+                // Announce back so the new agent knows about us
+                await this.announcePresence('online');
+              }
             }
+          } catch (err) {
+            log.error(`Discovery parse error: ${(err as Error).message}`);
           }
-        } catch (err) {
-          log.error(`Discovery parse error: ${(err as Error).message}`);
         }
+      } catch (err) {
+        log.warn(`Discovery subscription ended: ${(err as Error).message}`);
       }
-    })();
+    })());
   }
 
   /** Subscribe to direct messages from other agents */
@@ -293,23 +310,27 @@ export class NatsHandler {
     const sub = this.nc.subscribe(NatsSubjects.agentDM(this.config.agentId));
     this.subscriptions.push(sub);
 
-    (async () => {
-      for await (const msg of sub) {
-        try {
-          const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
-          log.info(`DM from ${data.from}: ${(data.content || '').slice(0, 80)}`);
+    this.subscriptionLoops.push((async () => {
+      try {
+        for await (const msg of sub) {
+          try {
+            const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
+            log.info(`DM from ${data.from}: ${(data.content || '').slice(0, 80)}`);
 
-          // Update peer last seen
-          if (this.peers.has(data.from)) {
-            this.peers.get(data.from)!.lastSeen = Date.now();
+            // Update peer last seen
+            if (this.peers.has(data.from)) {
+              this.peers.get(data.from)!.lastSeen = Date.now();
+            }
+
+            this.dmCallback?.(data);
+          } catch (err) {
+            log.error(`DM parse error: ${(err as Error).message}`);
           }
-
-          this.dmCallback?.(data);
-        } catch (err) {
-          log.error(`DM parse error: ${(err as Error).message}`);
         }
+      } catch (err) {
+        log.warn(`DM subscription ended: ${(err as Error).message}`);
       }
-    })();
+    })());
   }
 
   /** Subscribe to shared agents broadcast channel */
@@ -318,24 +339,28 @@ export class NatsHandler {
     const sub = this.nc.subscribe(NatsSubjects.agentsBroadcast);
     this.subscriptions.push(sub);
 
-    (async () => {
-      for await (const msg of sub) {
-        try {
-          const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
-          if (data.from === this.config.agentId) continue; // skip own broadcasts
-          log.info(`Broadcast from ${data.from}: ${data.type} — ${(data.content || '').slice(0, 60)}`);
+    this.subscriptionLoops.push((async () => {
+      try {
+        for await (const msg of sub) {
+          try {
+            const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
+            if (data.from === this.config.agentId) continue; // skip own broadcasts
+            log.info(`Broadcast from ${data.from}: ${data.type} — ${(data.content || '').slice(0, 60)}`);
 
-          // Update peer last seen
-          if (this.peers.has(data.from)) {
-            this.peers.get(data.from)!.lastSeen = Date.now();
+            // Update peer last seen
+            if (this.peers.has(data.from)) {
+              this.peers.get(data.from)!.lastSeen = Date.now();
+            }
+
+            this.broadcastCallback?.(data);
+          } catch (err) {
+            log.error(`Broadcast parse error: ${(err as Error).message}`);
           }
-
-          this.broadcastCallback?.(data);
-        } catch (err) {
-          log.error(`Broadcast parse error: ${(err as Error).message}`);
         }
+      } catch (err) {
+        log.warn(`Broadcast subscription ended: ${(err as Error).message}`);
       }
-    })();
+    })());
   }
 
   /** Subscribe to coordination requests (task delegation) */
@@ -344,21 +369,25 @@ export class NatsHandler {
     const sub = this.nc.subscribe(NatsSubjects.coordinationRequest);
     this.subscriptions.push(sub);
 
-    (async () => {
-      for await (const msg of sub) {
-        try {
-          const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
-          if (data.from === this.config.agentId) continue;
-          // Only handle if directed at us or broadcast
-          if (data.to && data.to !== this.config.agentId) continue;
+    this.subscriptionLoops.push((async () => {
+      try {
+        for await (const msg of sub) {
+          try {
+            const data = JSON.parse(sc.decode(msg.data)) as InterAgentMsg;
+            if (data.from === this.config.agentId) continue;
+            // Only handle if directed at us or broadcast
+            if (data.to && data.to !== this.config.agentId) continue;
 
-          log.info(`Coordination from ${data.from}: ${data.type} — ${(data.content || '').slice(0, 60)}`);
-          this.coordinationCallback?.(data);
-        } catch (err) {
-          log.error(`Coordination parse error: ${(err as Error).message}`);
+            log.info(`Coordination from ${data.from}: ${data.type} — ${(data.content || '').slice(0, 60)}`);
+            this.coordinationCallback?.(data);
+          } catch (err) {
+            log.error(`Coordination parse error: ${(err as Error).message}`);
+          }
         }
+      } catch (err) {
+        log.warn(`Coordination subscription ended: ${(err as Error).message}`);
       }
-    })();
+    })());
   }
 
   // ─── Callbacks ────────────────────────────────────
@@ -552,9 +581,22 @@ export class NatsHandler {
     this.subscriptions = [];
 
     if (this.nc) {
-      await this.nc.drain();
+      // Drain with timeout to prevent hanging on stuck subscriptions
+      try {
+        await Promise.race([
+          this.nc.drain(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Drain timeout')), 5000)),
+        ]);
+      } catch (err) {
+        log.warn(`NATS drain timeout/failed: ${(err as Error).message}`);
+        try { this.nc.close(); } catch { /* ignore */ }
+      }
       this.nc = null;
       log.info('Disconnected from NATS');
     }
+
+    // Wait for subscription loops to finish
+    await Promise.allSettled(this.subscriptionLoops);
+    this.subscriptionLoops = [];
   }
 }

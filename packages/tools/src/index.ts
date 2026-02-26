@@ -18,6 +18,7 @@ export type { SshHostConfig, SshToolConfig } from './ssh.js';
 export { ComputerUseTool } from './computer-use.js';
 export type { ComputerUseConfig, VncHostConfig } from './computer-use.js';
 export { ToolRegistry } from './registry.js';
+export { ImageGenTool } from './image-gen.js';
 
 // Social media
 export { SocialTool, SocialAnalyticsTool, type SocialToolConfig } from './social/social-tool.js';

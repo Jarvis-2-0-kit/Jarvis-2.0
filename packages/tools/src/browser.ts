@@ -336,18 +336,21 @@ export class BrowserTool implements AgentTool {
     if (!text) return createErrorResult('Missing text (option value) for select');
 
     const page = await this.ensureBrowser();
-    await page.evaluate(`
-      const el = document.querySelector('${selector.replace(/'/g, "\\'")}');
-      if (el && el.tagName === 'SELECT') {
-        for (const opt of el.options) {
-          if (opt.value === '${text}' || opt.text === '${text}') {
-            el.value = opt.value;
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            break;
+    // Use page.selectOption with Playwright API to avoid JS injection
+    await page.evaluate(
+      `(function(sel, val) {
+        const el = document.querySelector(sel);
+        if (el && el.tagName === 'SELECT') {
+          for (const opt of el.options) {
+            if (opt.value === val || opt.text === val) {
+              el.value = opt.value;
+              el.dispatchEvent(new Event('change', { bubbles: true }));
+              break;
+            }
           }
         }
-      }
-    `);
+      })(${JSON.stringify(selector)}, ${JSON.stringify(text)})`
+    );
     return createToolResult(`Selected "${text}" in ${selector}`);
   }
 
@@ -356,7 +359,9 @@ export class BrowserTool implements AgentTool {
     if (!selector) return createErrorResult('Missing ref or selector for hover');
 
     const page = await this.ensureBrowser();
-    await page.evaluate(`document.querySelector('${selector.replace(/'/g, "\\'")}')?.scrollIntoView({block:'center'})`);
+    await page.evaluate(
+      `(function(sel) { document.querySelector(sel)?.scrollIntoView({block:'center'}); })(${JSON.stringify(selector)})`
+    );
     return createToolResult(`Hovered: ${selector}`);
   }
 
@@ -412,29 +417,37 @@ export class BrowserTool implements AgentTool {
     if (waitConfig) {
       if (waitConfig['text']) {
         const text = waitConfig['text'];
-        await page.evaluate(`
-          new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout waiting for text')), ${timeout});
-            const check = () => {
-              if (document.body.innerText.includes('${text.replace(/'/g, "\\'")}')) {
-                clearTimeout(timeout);
-                resolve(true);
-              } else {
-                requestAnimationFrame(check);
-              }
-            };
-            check();
-          })
-        `);
+        await page.evaluate(
+          `(function(searchText, ms) {
+            return new Promise((resolve, reject) => {
+              const t = setTimeout(() => reject(new Error('Timeout waiting for text')), ms);
+              const check = () => {
+                if (document.body.innerText.includes(searchText)) {
+                  clearTimeout(t);
+                  resolve(true);
+                } else {
+                  requestAnimationFrame(check);
+                }
+              };
+              check();
+            });
+          })(${JSON.stringify(text)}, ${Math.min(timeout, 30_000)})`
+        );
         return createToolResult(`Text appeared: "${text}"`);
       }
 
       if (waitConfig['fn']) {
+        // Sanitize: only allow simple JS expressions, block dangerous patterns
+        const fn = waitConfig['fn'];
+        const dangerous = /\b(eval|Function|import|require|fetch|XMLHttpRequest|process|child_process|exec)\b/;
+        if (dangerous.test(fn)) {
+          return createErrorResult('JS condition contains disallowed keywords');
+        }
         await page.evaluate(`
           new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout')), ${timeout});
+            const timeout = setTimeout(() => reject(new Error('Timeout')), ${Math.min(timeout, 30_000)});
             const check = () => {
-              if (${waitConfig['fn']}) {
+              if (${fn}) {
                 clearTimeout(timeout);
                 resolve(true);
               } else {

@@ -77,6 +77,7 @@ start_services() {
     else
       nats-server -p "$NATS_PORT" -a 0.0.0.0 &>/dev/null &
     fi
+    echo $! > /tmp/jarvis-nats.pid
     wait_for_port "$NATS_PORT" "NATS" 10
   fi
 
@@ -88,6 +89,9 @@ start_services() {
     redis-server --port "$REDIS_PORT" --daemonize yes \
       --logfile "$NAS_MOUNT/logs/redis.log" 2>/dev/null || \
     redis-server --port "$REDIS_PORT" --daemonize yes 2>/dev/null
+    # Save redis PID from port detection (redis daemonizes itself)
+    REDIS_PID=$(get_pid_on_port "$REDIS_PORT")
+    [[ -n "$REDIS_PID" ]] && echo "$REDIS_PID" > /tmp/jarvis-redis.pid
     wait_for_port "$REDIS_PORT" "Redis" 10
   fi
 
@@ -175,6 +179,7 @@ stop_services() {
   else
     echo -e "  ${DIM}  Redis nie dzialal${RESET}"
   fi
+  rm -f /tmp/jarvis-redis.pid
 
   # NATS
   echo -e "${BOLD}▸ NATS${RESET}"
@@ -187,6 +192,7 @@ stop_services() {
   else
     echo -e "  ${DIM}  NATS nie dzialal${RESET}"
   fi
+  rm -f /tmp/jarvis-nats.pid
 
   echo ""
   echo -e "${GREEN}[JARVIS]${RESET} Wszystkie serwisy zatrzymane"

@@ -305,8 +305,9 @@ export function ChatView() {
   useEffect(() => {
     const handler = (payload: unknown) => {
       const msg = payload as ChatMsg;
-      // Only show messages for current session (or no session filter)
-      if (msg.sessionId && msg.sessionId !== activeSessionId) return;
+      console.log('[chat.message]', msg.from, msg.sessionId, activeSessionId, msg.content?.slice(0, 80));
+      // Filter out messages from other sessions, but always show agent responses
+      if (msg.from === 'user' && msg.sessionId && msg.sessionId !== activeSessionId) return;
 
       // Deduplicate: skip if message with same ID already exists (optimistic append or duplicate WS)
       setMessages((prev) => {
@@ -345,6 +346,7 @@ export function ChatView() {
       };
       const agentId = data.from ?? 'jarvis';
       const phase = data.phase ?? (data.done ? 'done' : 'text');
+      console.log('[chat.stream]', agentId, phase, data.toolName ?? data.text?.slice(0, 40) ?? '');
 
       if (phase === 'done') {
         setAgentStreams((prev) => {

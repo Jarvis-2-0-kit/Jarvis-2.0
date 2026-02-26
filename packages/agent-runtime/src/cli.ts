@@ -214,6 +214,8 @@ async function main(): Promise<void> {
     },
     enableSocial,
     socialConfig,
+    enableImageGen: true,
+    openaiApiKey: process.env['OPENAI_API_KEY'],
   });
 
   // Load model override from NAS config (saved via dashboard)

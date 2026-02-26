@@ -1369,6 +1369,10 @@ export class GatewayServer {
 
     // Chat stream deltas from agents (ephemeral, NOT persisted)
     this.nats.subscribe(NatsSubjects.chatStream, (data) => {
+      const d = data as { from?: string; phase?: string; toolName?: string };
+      if (d.phase === 'tool_start' || d.phase === 'done') {
+        log.info(`Stream relay: ${d.from} → ${d.phase} ${d.toolName ?? ''} (clients: ${this.protocol.clientCount})`);
+      }
       this.protocol.broadcast('chat.stream', data);
     });
 

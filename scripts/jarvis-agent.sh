@@ -153,8 +153,12 @@ do_stop() {
     PID=$(cat "$PID_FILE")
     if kill -0 "$PID" 2>/dev/null; then
       kill "$PID" 2>/dev/null || true
-      sleep 1
-      # Force kill if still running
+      # Wait up to 5s for graceful shutdown (agent may be mid-task)
+      for i in $(seq 1 5); do
+        kill -0 "$PID" 2>/dev/null || break
+        sleep 1
+      done
+      # Force kill if still running after grace period
       kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null || true
       ok "Agent zatrzymany (PID: $PID)"
     else

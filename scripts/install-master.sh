@@ -217,6 +217,17 @@ if [[ "${has_nas,,}" == "y" || "${has_nas,,}" == "tak" ]]; then
     read -rs NAS_PASS
     echo ""
 
+    # Validate inputs to prevent shell injection
+    if [[ "$NAS_USER" =~ [^a-zA-Z0-9._@-] ]]; then
+      fail "NAS user zawiera niedozwolone znaki"; exit 1
+    fi
+    if [[ "$NAS_SHARE" =~ [^a-zA-Z0-9._-] ]]; then
+      fail "NAS share zawiera niedozwolone znaki"; exit 1
+    fi
+    if [[ "$NAS_IP" =~ [^a-zA-Z0-9._:-] ]]; then
+      fail "NAS IP zawiera niedozwolone znaki"; exit 1
+    fi
+
     # --- Montowanie NAS ---
     echo -e "  ${DIM}Montowanie NAS...${RESET}"
     sudo mkdir -p /Volumes/JarvisNAS
@@ -339,7 +350,9 @@ SSH_KEY="$HOME/.ssh/jarvis_ed25519"
 if [[ ! -f "$SSH_KEY" ]]; then
   echo -e "  ${DIM}Generowanie klucza SSH...${RESET}"
   ssh-keygen -t ed25519 -C "jarvis-master-$(date +%Y%m%d)" -f "$SSH_KEY" -N "" -q
-  ok "Klucz SSH wygenerowany: $SSH_KEY"
+  chmod 600 "$SSH_KEY"
+  chmod 644 "${SSH_KEY}.pub"
+  ok "Klucz SSH wygenerowany: $SSH_KEY (permissions: 600)"
 else
   ok "Klucz SSH juz istnieje: $SSH_KEY"
 fi
