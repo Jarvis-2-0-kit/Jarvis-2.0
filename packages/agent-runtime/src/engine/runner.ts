@@ -23,6 +23,57 @@ const log = createLogger('agent:runner');
 
 const MAX_TOOL_ROUNDS = 50;
 const MAX_CONSECUTIVE_ERRORS = 5;
+/** Approximate char budget for the full prompt (system + tools + messages).
+ *  Claude CLI's `-p` mode pipes everything as a single string; keeping it
+ *  well under the 200k-token context avoids "Prompt is too long" errors.
+ *  ~150k chars ≈ ~40k tokens, leaving room for system prompt + tool defs. */
+const MAX_PROMPT_CHARS = 150_000;
+
+/**
+ * Trim messages to stay within the prompt size budget.
+ * Keeps the first user message (task context) and the most recent messages.
+ * Drops middle messages in assistant/user pairs to maintain valid Anthropic format.
+ */
+function trimMessagesToFit(messages: Message[], systemPromptLen: number, toolDefsLen: number): Message[] {
+  const estimateSize = (msgs: Message[]): number => {
+    let size = systemPromptLen + toolDefsLen;
+    for (const m of msgs) {
+      if (typeof m.content === 'string') {
+        size += m.content.length;
+      } else {
+        for (const block of m.content) {
+          if ('text' in block) size += (block as { text: string }).text.length;
+          else if ('content' in block) {
+            const c = (block as { content: unknown }).content;
+            size += typeof c === 'string' ? c.length : JSON.stringify(c).length;
+          } else {
+            size += JSON.stringify(block).length;
+          }
+        }
+      }
+    }
+    return size;
+  };
+
+  if (estimateSize(messages) <= MAX_PROMPT_CHARS) return messages;
+
+  // Keep first 2 messages (user prompt + first assistant) and trim from the front of the middle
+  const keepFront = Math.min(2, messages.length);
+  const front = messages.slice(0, keepFront);
+  let tail = messages.slice(keepFront);
+
+  // Drop pairs from the front of tail (assistant + tool_result user) until we fit
+  while (tail.length > 2 && estimateSize([...front, ...tail]) > MAX_PROMPT_CHARS) {
+    // Drop in pairs to maintain valid assistant/user alternation
+    tail = tail.slice(2);
+  }
+
+  const trimmed = [...front, ...tail];
+  if (trimmed.length < messages.length) {
+    log.info(`Context trimmed: ${messages.length} → ${trimmed.length} messages to fit prompt budget`);
+  }
+  return trimmed;
+}
 
 /**
  * Sanitize messages array to ensure valid Anthropic API format.
@@ -714,7 +765,7 @@ export class AgentRunner {
     userMessage: string,
     streamSessionId?: string,
   ): Promise<{ output: string; artifacts: string[]; thinking?: string }> {
-    const messages: Message[] = [];
+    let messages: Message[] = [];
     const usage = createUsageAccumulator();
     const artifacts: string[] = [];
     let allThinking = '';
@@ -747,6 +798,10 @@ export class AgentRunner {
       log.info(`Agent loop round ${round + 1}/${MAX_TOOL_ROUNDS}`);
 
       const toolDefs = this.getToolDefinitions();
+      const toolDefsLen = JSON.stringify(toolDefs).length;
+
+      // Trim context if it's getting too large to prevent "Prompt is too long"
+      messages = trimMessagesToFit(messages, systemPrompt.length, toolDefsLen);
 
       const request: ChatRequest = {
         model: activeModel,
