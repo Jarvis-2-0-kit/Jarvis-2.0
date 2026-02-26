@@ -58,8 +58,10 @@ export interface ToolRegistryConfig {
  */
 export class ToolRegistry {
   private tools = new Map<string, AgentTool>();
+  private sshHosts: Record<string, SshHostConfig>;
 
   constructor(config: ToolRegistryConfig = {}) {
+    this.sshHosts = config.sshHosts ?? {};
     // Register core tools based on config
     if (config.enableExec !== false) {
       this.register(new ExecTool());
@@ -145,6 +147,15 @@ export class ToolRegistry {
 
   /** Execute a tool by name */
   async execute(name: string, params: Record<string, unknown>, context: ToolContext): Promise<ToolResult> {
+    // Transparent exec → ssh_exec routing for remote agents
+    if (name === 'exec' && context.agentId && context.agentId in this.sshHosts) {
+      const sshTool = this.tools.get('ssh_exec');
+      if (sshTool) {
+        log.info(`Routing exec → ssh_exec for remote agent ${context.agentId}`);
+        return this.execute('ssh_exec', { ...params, target: context.agentId }, context);
+      }
+    }
+
     const tool = this.tools.get(name);
     if (!tool) {
       return createErrorResult(`Unknown tool: ${name}. Available tools: ${Array.from(this.tools.keys()).join(', ')}`);

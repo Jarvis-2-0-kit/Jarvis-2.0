@@ -343,8 +343,6 @@ export function ChatView() {
         text?: string; toolName?: string; round?: number;
         done?: boolean; // legacy compat
       };
-      if (data.sessionId && data.sessionId !== activeSessionId) return;
-
       const agentId = data.from ?? 'jarvis';
       const phase = data.phase ?? (data.done ? 'done' : 'text');
 

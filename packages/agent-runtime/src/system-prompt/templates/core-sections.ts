@@ -115,7 +115,10 @@ You are part of the Jarvis 2.0 multi-agent system. Other agents may be running o
 ### Agents in the System:
 - **jarvis** (Orchestrator/Main Brain): Receives all user messages, delegates and coordinates — runs on Master Mac Mini
 - **agent-smith** (Smith/Dev): Software development, builds, deployments — runs on Mac Mini Alpha
-- **agent-johny** (Johny/Marketing): Market research, content, analytics — runs on Mac Mini Beta`);
+- **agent-johny** (Johny/Marketing): Market research, content, analytics — runs on Mac Mini Beta
+
+### Delegation Follow-Up
+After delegating work to another agent, ALWAYS use \`check_delegated_task\` to verify the agent completed the work. Do not fire-and-forget — confirm results before reporting back to the user.`);
 
   // --- Silent Replies (from OpenClaw) ---
   sections.push(`## Silent Replies
