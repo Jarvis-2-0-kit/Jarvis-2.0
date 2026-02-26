@@ -9,7 +9,7 @@
 #    ./install-agent.sh
 #
 #  Lub z parametrami:
-#    ./install-agent.sh --agent-id agent-alpha --role dev --master-host 192.168.1.100
+#    ./install-agent.sh --agent-id agent-smith --role dev --master-host 192.168.1.100
 ###############################################################################
 
 set -euo pipefail
@@ -34,7 +34,7 @@ while [[ $# -gt 0 ]]; do
     --auth-token)  AUTH_TOKEN="$2"; shift 2 ;;
     -h|--help)
       echo "Uzycie: $0 [opcje]"
-      echo "  --agent-id      agent-alpha | agent-beta"
+      echo "  --agent-id      agent-smith | agent-johny"
       echo "  --role          dev | marketing"
       echo "  --master-host   IP/hostname Master"
       echo "  --nas-mount     Sciezka NAS"
@@ -149,26 +149,26 @@ if [[ -z "$AGENT_ID" ]]; then
 
   case "${role_choice}" in
     1|alpha|dev)
-      AGENT_ID="agent-alpha"
+      AGENT_ID="agent-smith"
       ROLE="dev"
       ;;
     2|beta|marketing)
-      AGENT_ID="agent-beta"
+      AGENT_ID="agent-johny"
       ROLE="marketing"
       ;;
     *)
-      AGENT_ID="agent-alpha"
+      AGENT_ID="agent-smith"
       ROLE="dev"
       warn "Domyslnie: Alpha (Dev)"
       ;;
   esac
 fi
 
-[[ -z "$ROLE" && "$AGENT_ID" == "agent-alpha" ]] && ROLE="dev"
-[[ -z "$ROLE" && "$AGENT_ID" == "agent-beta" ]] && ROLE="marketing"
+[[ -z "$ROLE" && "$AGENT_ID" == "agent-smith" ]] && ROLE="dev"
+[[ -z "$ROLE" && "$AGENT_ID" == "agent-johny" ]] && ROLE="marketing"
 
 # Websockify port per agent: 6080 alpha, 6081 beta
-[[ "$AGENT_ID" == "agent-beta" ]] && WSOCK_PORT=6081 || WSOCK_PORT=6080
+[[ "$AGENT_ID" == "agent-johny" ]] && WSOCK_PORT=6081 || WSOCK_PORT=6080
 
 ROLE_LABEL=""; [[ "$ROLE" == "dev" ]] && ROLE_LABEL="DEVELOPER" || ROLE_LABEL="MARKETING"
 
@@ -384,7 +384,7 @@ TB_MASTER_IP="169.254.100.1"
 TB_NATS_PORT=4223
 
 # Determine expected TB IP based on role
-if [[ "$AGENT_ID" == "agent-alpha" ]]; then
+if [[ "$AGENT_ID" == "agent-smith" ]]; then
   TB_AGENT_IP="169.254.100.2"
 else
   TB_AGENT_IP="169.254.100.3"

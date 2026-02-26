@@ -37,7 +37,7 @@ import { DependencyOrchestrator } from './orchestration/dependency-orchestrator.
 
 const log = createLogger('gateway:server');
 
-const ALL_AGENTS = ['jarvis', 'agent-alpha', 'agent-beta'] as const;
+const ALL_AGENTS = ['jarvis', 'agent-smith', 'agent-johny'] as const;
 
 // Rate limiters
 const wsRateLimiter = new RateLimiter(30);   // 30 msgs/min per WS connection
@@ -2499,14 +2499,14 @@ export class GatewayServer {
       const idleAgent = allAgents.find((a) => a.status === 'idle');
 
       if (idleAgent) {
-        const agentId = idleAgent.identity?.agentId ?? 'agent-alpha';
+        const agentId = idleAgent.identity?.agentId ?? 'agent-smith';
 
         // Get system context for Jarvis personality
         const health = await this.getHealthData();
         const agentCount = allAgents.length;
         const onlineAgents = allAgents.filter((a) => {
           const elapsed = Date.now() - (a.lastHeartbeat ?? 0);
-          return elapsed < 30_000;
+          return elapsed < HEARTBEAT_TIMEOUT;
         }).length;
 
         const context = `${onlineAgents}/${agentCount} agents online. System: ${health.status}. Uptime: ${Math.floor(health.uptime / 60)}min.`;
@@ -2551,7 +2551,7 @@ export class GatewayServer {
       if (lower.includes('status') || lower.includes('jak') && lower.includes('system'))
         return 'Wszystko działa, gateway stoi, oba agenty online.';
       if (lower.includes('agenci') || lower.includes('agent'))
-        return 'Masz Alpha na devie i Beta na marketingu, oba aktywne.';
+        return 'Masz Smitha na devie i Johny\'ego na marketingu, oba aktywne.';
       if (lower.includes('czas') || lower.includes('godzina') || lower.includes('która'))
         return `Jest ${new Date().toLocaleTimeString('pl-PL')}.`;
       if (lower.includes('dzień dobry') || lower.includes('cześć') || lower.includes('hej') || lower.includes('siema') || lower.includes('yo'))
@@ -2573,7 +2573,7 @@ export class GatewayServer {
     if (lower.includes('status') || (lower.includes('how') && lower.includes('system')))
       return 'Everything\'s running, gateway up, both agents online.';
     if (lower.includes('agents') || lower.includes('agent'))
-      return 'Alpha\'s on dev, Beta\'s on marketing. Both active.';
+      return 'Smith\'s on dev, Johny\'s on marketing. Both active.';
     if (lower.includes('time'))
       return `It's ${new Date().toLocaleTimeString('en-US')}.`;
     if (lower.includes('hello') || lower.includes('hey') || lower.includes('hi') || lower.includes('yo'))

@@ -30,7 +30,7 @@ GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:18900}"
 NAS_MOUNT="${JARVIS_NAS_MOUNT:-$JARVIS_DIR/../jarvis-nas}"
 
 # Port websockify: 6080 dla alpha, 6081 dla beta
-if [[ "$AGENT_ID" == "agent-beta" ]]; then
+if [[ "$AGENT_ID" == "agent-johny" ]]; then
   WSOCK_PORT=6081
 else
   WSOCK_PORT=6080

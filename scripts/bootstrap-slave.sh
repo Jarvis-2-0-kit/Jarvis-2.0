@@ -125,17 +125,17 @@ read -r role_choice
 
 case "${role_choice}" in
   1|alpha|dev)
-    AGENT_ID="agent-alpha"
+    AGENT_ID="agent-smith"
     ROLE="dev"
     ROLE_LABEL="DEVELOPER"
     ;;
   2|beta|marketing)
-    AGENT_ID="agent-beta"
+    AGENT_ID="agent-johny"
     ROLE="marketing"
     ROLE_LABEL="MARKETING"
     ;;
   *)
-    AGENT_ID="agent-alpha"
+    AGENT_ID="agent-smith"
     ROLE="dev"
     ROLE_LABEL="DEVELOPER"
     warn "Domyslnie: Alpha (Dev)"
@@ -320,7 +320,7 @@ ok "Storage lokalny"
 step "8/8  Uruchamianie"
 
 # Websockify port per agent: 6080 alpha, 6081 beta
-if [[ "$AGENT_ID" == "agent-beta" ]]; then
+if [[ "$AGENT_ID" == "agent-johny" ]]; then
   WSOCK_PORT=6081
 else
   WSOCK_PORT=6080

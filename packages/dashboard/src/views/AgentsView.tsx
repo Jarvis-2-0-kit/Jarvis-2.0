@@ -69,8 +69,8 @@ const ROLE_COLORS: Record<string, string> = {
 
 const AGENT_NAMES: Record<string, string> = {
   jarvis: 'JARVIS',
-  'agent-alpha': 'SMITH',
-  'agent-beta': 'JOHNY',
+  'agent-smith': 'SMITH',
+  'agent-johny': 'JOHNY',
 };
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string; Icon: typeof Play }> = {

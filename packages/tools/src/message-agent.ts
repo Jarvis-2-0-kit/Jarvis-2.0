@@ -25,7 +25,7 @@ export class MessageAgentTool implements AgentTool {
       properties: {
         to: {
           type: 'string',
-          enum: ['jarvis', 'agent-alpha', 'agent-beta'],
+          enum: ['jarvis', 'agent-smith', 'agent-johny'],
           description: 'The target agent ID',
         },
         type: {

@@ -172,7 +172,7 @@ export function ProvidersView() {
 
   const loadAuthMode = async () => {
     try {
-      const result = await gateway.request('config.agent.get', { agentId: 'agent-alpha' }) as {
+      const result = await gateway.request('config.agent.get', { agentId: 'agent-smith' }) as {
         config?: { authMode?: string };
       };
       if (result?.config?.authMode === 'claude-cli' || result?.config?.authMode === 'api-key') {
@@ -187,7 +187,7 @@ export function ProvidersView() {
     setAuthSaved(false);
     try {
       // Save for all agents
-      for (const agentId of ['jarvis', 'agent-alpha', 'agent-beta']) {
+      for (const agentId of ['jarvis', 'agent-smith', 'agent-johny']) {
         await gateway.request('config.set', {
           agentId,
           config: { authMode: mode },

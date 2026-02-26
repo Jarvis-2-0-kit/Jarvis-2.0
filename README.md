@@ -362,7 +362,7 @@ brew services start redis
 pnpm --filter @jarvis/gateway start
 
 # ── Start an Agent ─────────────────────────────────────────────
-pnpm --filter @jarvis/agent-runtime dev -- --agent agent-alpha
+pnpm --filter @jarvis/agent-runtime dev -- --agent agent-smith
 
 # ── Open Dashboard ─────────────────────────────────────────────
 open http://localhost:18900
@@ -421,13 +421,13 @@ jarvis/
 ```json
 {
   "agents": {
-    "agent-alpha": {
+    "agent-smith": {
       "role": "dev",
       "model": "claude-opus-4-6",
       "capabilities": ["code", "build", "deploy", "imessage", "spotify"],
       "machine": "mac-mini-master"
     },
-    "agent-beta": {
+    "agent-johny": {
       "role": "marketing",
       "model": "claude-opus-4-6",
       "capabilities": ["research", "social-media", "imessage"],
@@ -459,7 +459,7 @@ jarvis/
 # ── Dev Mode (hot reload) ──────────────────────────────────────
 pnpm --filter @jarvis/dashboard dev          # Vite dev server
 pnpm --filter @jarvis/gateway dev            # tsx watch
-pnpm --filter @jarvis/agent-runtime dev -- --agent agent-alpha
+pnpm --filter @jarvis/agent-runtime dev -- --agent agent-smith
 
 # ── Build ──────────────────────────────────────────────────────
 pnpm build                                   # Build all packages

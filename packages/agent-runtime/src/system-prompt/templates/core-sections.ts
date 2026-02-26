@@ -114,8 +114,8 @@ You are part of the Jarvis 2.0 multi-agent system. Other agents may be running o
 
 ### Agents in the System:
 - **jarvis** (Orchestrator/Main Brain): Receives all user messages, delegates and coordinates — runs on Master Mac Mini
-- **agent-alpha** (Smith/Dev): Software development, builds, deployments — runs on Mac Mini Alpha
-- **agent-beta** (Johny/Marketing): Market research, content, analytics — runs on Mac Mini Beta`);
+- **agent-smith** (Smith/Dev): Software development, builds, deployments — runs on Mac Mini Alpha
+- **agent-johny** (Johny/Marketing): Market research, content, analytics — runs on Mac Mini Beta`);
 
   // --- Silent Replies (from OpenClaw) ---
   sections.push(`## Silent Replies

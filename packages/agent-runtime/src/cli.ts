@@ -2,8 +2,8 @@
  * CLI entry point for starting an agent on a Mac Mini worker.
  *
  * Usage:
- *   AGENT_ID=agent-alpha AGENT_ROLE=dev tsx packages/agent-runtime/src/cli.ts
- *   AGENT_ID=agent-beta AGENT_ROLE=marketing tsx packages/agent-runtime/src/cli.ts
+ *   AGENT_ID=agent-smith AGENT_ROLE=dev tsx packages/agent-runtime/src/cli.ts
+ *   AGENT_ID=agent-johny AGENT_ROLE=marketing tsx packages/agent-runtime/src/cli.ts
  */
 
 import { config as dotenvConfig } from 'dotenv';
@@ -35,7 +35,7 @@ import { join } from 'node:path';
 
 const log = createLogger('agent:cli');
 
-const agentId = (process.env['JARVIS_AGENT_ID'] ?? process.env['AGENT_ID'] ?? 'agent-alpha') as AgentId;
+const agentId = (process.env['JARVIS_AGENT_ID'] ?? process.env['AGENT_ID'] ?? 'agent-smith') as AgentId;
 const role = (process.env['JARVIS_AGENT_ROLE'] ?? process.env['AGENT_ROLE'] ?? 'dev') as AgentRole;
 const machineId = process.env['JARVIS_MACHINE_ID'] ?? process.env['MACHINE_ID'] ?? hostname();
 const host = process.env['AGENT_HOSTNAME'] ?? hostname();
@@ -58,10 +58,10 @@ const sshBetaPass = process.env['SSH_BETA_PASSWORD'] ?? process.env['VNC_BETA_PA
 // Build SSH hosts map
 const sshHosts: Record<string, { host: string; username: string; password?: string }> = {};
 if (sshAlphaHost && sshAlphaUser) {
-  sshHosts['agent-alpha'] = { host: sshAlphaHost, username: sshAlphaUser, password: sshAlphaPass };
+  sshHosts['agent-smith'] = { host: sshAlphaHost, username: sshAlphaUser, password: sshAlphaPass };
 }
 if (sshBetaHost && sshBetaUser) {
-  sshHosts['agent-beta'] = { host: sshBetaHost, username: sshBetaUser, password: sshBetaPass };
+  sshHosts['agent-johny'] = { host: sshBetaHost, username: sshBetaUser, password: sshBetaPass };
 }
 
 // VNC host config for computer use (screenshots + mouse/keyboard via VNC protocol)
@@ -72,19 +72,19 @@ const vncBetaPass = process.env['VNC_BETA_PASSWORD'];
 
 const vncHosts: Record<string, { host: string; vncPort: number; vncPassword: string; ssh?: { host: string; username: string; password?: string } }> = {};
 if (vncAlphaHost && vncAlphaPass) {
-  vncHosts['agent-alpha'] = {
+  vncHosts['agent-smith'] = {
     host: vncAlphaHost,
     vncPort: 5900,
     vncPassword: vncAlphaPass,
-    ssh: sshHosts['agent-alpha'],
+    ssh: sshHosts['agent-smith'],
   };
 }
 if (vncBetaHost && vncBetaPass) {
-  vncHosts['agent-beta'] = {
+  vncHosts['agent-johny'] = {
     host: vncBetaHost,
     vncPort: 5900,
     vncPassword: vncBetaPass,
-    ssh: sshHosts['agent-beta'],
+    ssh: sshHosts['agent-johny'],
   };
 }
 

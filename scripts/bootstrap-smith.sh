@@ -10,7 +10,7 @@
 #  5. Uruchamia agent-runtime + websockify
 #
 #  URUCHOM NA MAC MINI ALPHA (Agent_Smith):
-#    curl -fsSL http://169.254.220.252:9876/bootstrap-alpha.sh | bash
+#    curl -fsSL http://169.254.220.252:9876/bootstrap-smith.sh | bash
 ###############################################################################
 
 set -euo pipefail
@@ -184,7 +184,7 @@ cat > "$JARVIS_DIR/.env" << ENVEOF
 # ═══════════════════════════════════════════════════════════
 
 # Agent Identity
-JARVIS_AGENT_ID=agent-alpha
+JARVIS_AGENT_ID=agent-smith
 JARVIS_AGENT_ROLE=dev
 JARVIS_MACHINE_ID=mac-mini-alpha
 
@@ -249,17 +249,17 @@ TSX_BIN="$JARVIS_DIR/node_modules/.pnpm/node_modules/.bin/tsx"
 [[ ! -f "$TSX_BIN" ]] && TSX_BIN="$(npm root -g 2>/dev/null)/tsx/dist/cli.mjs"
 
 if [[ -n "$TSX_BIN" && -f "$TSX_BIN" ]]; then
-  nohup "$TSX_BIN" packages/agent-runtime/src/cli.ts >> /tmp/jarvis-agent-alpha.log 2>&1 &
+  nohup "$TSX_BIN" packages/agent-runtime/src/cli.ts >> /tmp/jarvis-agent-smith.log 2>&1 &
   AGENT_PID=$!
-  echo $AGENT_PID > /tmp/jarvis-agent-alpha.pid
+  echo $AGENT_PID > /tmp/jarvis-agent-smith.pid
   sleep 3
   if kill -0 "$AGENT_PID" 2>/dev/null; then
     ok "Agent Runtime uruchomiony (PID: $AGENT_PID)"
   else
-    warn "Agent nie startowal - sprawdz: tail -50 /tmp/jarvis-agent-alpha.log"
+    warn "Agent nie startowal - sprawdz: tail -50 /tmp/jarvis-agent-smith.log"
   fi
 else
-  nohup npx tsx packages/agent-runtime/src/cli.ts >> /tmp/jarvis-agent-alpha.log 2>&1 &
+  nohup npx tsx packages/agent-runtime/src/cli.ts >> /tmp/jarvis-agent-smith.log 2>&1 &
   ok "Agent Runtime startuje (npx tsx)"
 fi
 
@@ -274,7 +274,7 @@ echo -e "${GREEN}║${RESET}  ${BOLD}${CYAN}✓ AGENT ALPHA (DEV) ZAINSTALOWANY!
 echo -e "${GREEN}║${RESET}                                                         ${GREEN}║${RESET}"
 echo -e "${GREEN}╠═══════════════════════════════════════════════════════════╣${RESET}"
 echo -e "${GREEN}║${RESET}                                                         ${GREEN}║${RESET}"
-echo -e "${GREEN}║${RESET}  Agent ID:    agent-alpha                                ${GREEN}║${RESET}"
+echo -e "${GREEN}║${RESET}  Agent ID:    agent-smith                                ${GREEN}║${RESET}"
 echo -e "${GREEN}║${RESET}  Rola:        DEVELOPER                                  ${GREEN}║${RESET}"
 echo -e "${GREEN}║${RESET}  WiFi IP:     ${MY_WIFI_IP:-?}                                  ${GREEN}║${RESET}"
 echo -e "${GREEN}║${RESET}  USB-C IP:    ${MY_USB_IP:-?}                             ${GREEN}║${RESET}"
@@ -282,8 +282,8 @@ echo -e "${GREEN}║${RESET}  Master:      ${MASTER_USB_IP} (USB-C)             
 echo -e "${GREEN}║${RESET}  NATS:        ${MASTER_USB_IP}:4222 (USB-C priority)      ${GREEN}║${RESET}"
 echo -e "${GREEN}║${RESET}  VNC Proxy:   port 6080                                  ${GREEN}║${RESET}"
 echo -e "${GREEN}║${RESET}                                                         ${GREEN}║${RESET}"
-echo -e "${GREEN}║${RESET}  ${DIM}Logi:  tail -f /tmp/jarvis-agent-alpha.log${RESET}            ${GREEN}║${RESET}"
-echo -e "${GREEN}║${RESET}  ${DIM}Stop:  kill \$(cat /tmp/jarvis-agent-alpha.pid)${RESET}        ${GREEN}║${RESET}"
+echo -e "${GREEN}║${RESET}  ${DIM}Logi:  tail -f /tmp/jarvis-agent-smith.log${RESET}            ${GREEN}║${RESET}"
+echo -e "${GREEN}║${RESET}  ${DIM}Stop:  kill \$(cat /tmp/jarvis-agent-smith.pid)${RESET}        ${GREEN}║${RESET}"
 echo -e "${GREEN}║${RESET}                                                         ${GREEN}║${RESET}"
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${RESET}"
 echo ""

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const AgentId = z.enum(['jarvis', 'agent-alpha', 'agent-beta']);
+export const AgentId = z.enum(['jarvis', 'agent-smith', 'agent-johny']);
 export type AgentId = z.infer<typeof AgentId>;
 
 export const AgentRole = z.enum(['orchestrator', 'dev', 'marketing']);
@@ -77,14 +77,14 @@ export const AGENT_DEFAULTS: Record<AgentId, { role: AgentRole; capabilities: Ag
       'analytics', 'finance', 'pr', 'exec', 'file-ops', 'web-search', 'web-fetch',
     ],
   },
-  'agent-alpha': {
+  'agent-smith': {
     role: 'dev',
     capabilities: [
       'code', 'build', 'deploy', 'browser', 'app-store', 'google-play',
       'web-maintenance', 'exec', 'file-ops', 'web-search', 'web-fetch',
     ],
   },
-  'agent-beta': {
+  'agent-johny': {
     role: 'marketing',
     capabilities: [
       'social-media', 'market-research', 'content-creation', 'analytics',

@@ -121,7 +121,7 @@ export interface SshToolConfig {
 
 /**
  * SSH Tool - Execute commands on remote machines via SSH.
- * Each agent is mapped to a target machine (e.g., agent-alpha -> Agent Smith Mac Mini).
+ * Each agent is mapped to a target machine (e.g., agent-smith -> Agent Smith Mac Mini).
  * Uses ssh2 library for password-based authentication.
  */
 export class SshTool implements AgentTool {
@@ -137,7 +137,7 @@ export class SshTool implements AgentTool {
         },
         target: {
           type: 'string',
-          description: 'Optional: specific target host ID (e.g., "agent-alpha", "agent-beta"). Defaults to the current agent\'s assigned machine.',
+          description: 'Optional: specific target host ID (e.g., "agent-smith", "agent-johny"). Defaults to the current agent\'s assigned machine.',
         },
         timeout: {
           type: 'number',

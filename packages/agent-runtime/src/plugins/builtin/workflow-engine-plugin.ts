@@ -306,7 +306,7 @@ const stepExecutors: Record<string, StepExecutor> = {
     // Create a delegation request for the task planner plugin
     return {
       action: 'delegate',
-      targetAgent: params.targetAgent as string || 'agent-alpha',
+      targetAgent: params.targetAgent as string || 'agent-smith',
       title: params.title as string || '',
       description: params.description as string || '',
       priority: params.priority as string || 'normal',
@@ -479,7 +479,7 @@ export function createWorkflowEnginePlugin(): JarvisPluginDefinition {
             '  log         — Log a message (params: { message: "...", level: "info" })',
             '  notify      — Send notification (params: { title: "...", message: "..." })',
             '  wait        — Pause execution (params: { duration: 5000 })',
-            '  delegate    — Delegate to another agent (params: { targetAgent: "agent-beta", title: "...", description: "..." })',
+            '  delegate    — Delegate to another agent (params: { targetAgent: "agent-johny", title: "...", description: "..." })',
             '  http        — Make HTTP request (params: { url: "...", method: "GET", headers: {}, body: "..." })',
             '  script      — Data manipulation (params: { operation: "concat|split|math|regex_match|template|pick|length", ... })',
             '',

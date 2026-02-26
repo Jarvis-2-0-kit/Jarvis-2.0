@@ -303,13 +303,13 @@ export function SettingsPanel({ visible, onClose }: SettingsPanelProps) {
                       onClick={() => void handleSave('deploy_alpha', {})}
                       style={{ fontSize: 11, padding: '6px 16px' }}
                     >
-                      DEPLOY ALPHA
+                      DEPLOY SMITH
                     </button>
                     <button
                       onClick={() => void handleSave('deploy_beta', {})}
                       style={{ fontSize: 11, padding: '6px 16px' }}
                     >
-                      DEPLOY BETA
+                      DEPLOY JOHNY
                     </button>
                     <button
                       className="primary"
@@ -344,7 +344,7 @@ export function SettingsPanel({ visible, onClose }: SettingsPanelProps) {
   ┌──── USB-C ──── MASTER ──── USB-C ────┐
   │            (2-3 porty TB)             │
 ┌─▼──────┐                         ┌─────▼──┐
-│ ALPHA  │                         │  BETA  │
+│ SMITH  │                         │ JOHNY  │
 └─┬──────┘                         └─┬──────┘
   └──────── WiFi/ETH (internet) ─────┘`}
                   </div>

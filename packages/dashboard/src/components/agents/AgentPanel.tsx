@@ -8,8 +8,8 @@ const ROLE_LABELS: Record<string, string> = {
 
 const AGENT_NAMES: Record<string, string> = {
   jarvis: 'JARVIS',
-  'agent-alpha': 'SMITH',
-  'agent-beta': 'JOHNY',
+  'agent-smith': 'SMITH',
+  'agent-johny': 'JOHNY',
 };
 
 const STATUS_LABELS: Record<string, { label: string; class: string }> = {

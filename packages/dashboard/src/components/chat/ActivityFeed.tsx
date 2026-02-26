@@ -17,8 +17,8 @@ import { formatTime } from '../../utils/formatters.js';
 
 const AGENT_COLORS: Record<string, { color: string; label: string }> = {
   jarvis:        { color: '#fbbf24', label: 'JARVIS' },
-  'agent-alpha': { color: '#00ff41', label: 'SMITH' },
-  'agent-beta':  { color: '#c084fc', label: 'JOHNY' },
+  'agent-smith': { color: '#00ff41', label: 'SMITH' },
+  'agent-johny':  { color: '#c084fc', label: 'JOHNY' },
 };
 
 function agentColor(id: string): string {

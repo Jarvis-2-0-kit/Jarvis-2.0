@@ -26,7 +26,7 @@ export class StateStore {
 
   async getAllAgentStates(): Promise<AgentState[]> {
     const states: AgentState[] = [];
-    for (const id of ['jarvis', 'agent-alpha', 'agent-beta']) {
+    for (const id of ['jarvis', 'agent-smith', 'agent-johny']) {
       const state = await this.getAgentState(id);
       if (state) states.push(state);
     }

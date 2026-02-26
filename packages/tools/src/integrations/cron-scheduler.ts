@@ -473,7 +473,7 @@ export class CronSchedulerTool implements AgentTool {
         },
         target_agent: {
           type: 'string',
-          description: 'Agent to handle the task (e.g., agent-alpha, agent-beta)',
+          description: 'Agent to handle the task (e.g., agent-smith, agent-johny)',
         },
         task_instruction: {
           type: 'string',

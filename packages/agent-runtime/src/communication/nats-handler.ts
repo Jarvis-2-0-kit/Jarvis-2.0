@@ -1,5 +1,5 @@
 import { connect, StringCodec, type NatsConnection, type Subscription } from 'nats';
-import { createLogger, NatsSubjects, HEARTBEAT_INTERVAL, type AgentId, type AgentState, type AgentRole, type ChatStreamDelta } from '@jarvis/shared';
+import { createLogger, NatsSubjects, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, type AgentId, type AgentState, type AgentRole, type ChatStreamDelta } from '@jarvis/shared';
 
 const log = createLogger('agent:nats');
 const sc = StringCodec();
@@ -188,10 +188,13 @@ export class NatsHandler {
         const state = this.buildAgentState();
         await this.publish(NatsSubjects.agentStatus(this.config.agentId), state);
 
-        // Prune stale peers (not seen for 60s)
+        // Re-announce presence so peers refresh lastSeen
+        await this.announcePresence('online');
+
+        // Prune stale peers
         const now = Date.now();
         for (const [id, peer] of this.peers) {
-          if (now - peer.lastSeen > 60_000) {
+          if (now - peer.lastSeen > HEARTBEAT_TIMEOUT) {
             this.peers.delete(id);
             log.info(`Peer ${id} went offline (timeout)`);
           }
@@ -522,7 +525,7 @@ export class NatsHandler {
   /** Check if a specific agent is online */
   isPeerOnline(agentId: string): boolean {
     const peer = this.peers.get(agentId);
-    return !!peer && (Date.now() - peer.lastSeen) < 60_000;
+    return !!peer && (Date.now() - peer.lastSeen) < HEARTBEAT_TIMEOUT;
   }
 
   // ─── Low-level ────────────────────────────────────

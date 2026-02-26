@@ -613,8 +613,8 @@ function MetricCard({ icon, title, color, mainValue, mainLabel, bar, items }: {
 
 const AGENT_DISPLAY_NAMES: Record<string, string> = {
   jarvis: 'JARVIS',
-  'agent-alpha': 'SMITH',
-  'agent-beta': 'JOHNY',
+  'agent-smith': 'SMITH',
+  'agent-johny': 'JOHNY',
 };
 
 function AgentCard({ agent, storeAgent }: {

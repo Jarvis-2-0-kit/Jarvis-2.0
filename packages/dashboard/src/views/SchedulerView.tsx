@@ -290,8 +290,8 @@ export function SchedulerView() {
                 }}
               >
                 <option value="">Any available</option>
-                <option value="agent-alpha">agent-alpha (dev)</option>
-                <option value="agent-beta">agent-beta (marketing)</option>
+                <option value="agent-smith">agent-smith (dev)</option>
+                <option value="agent-johny">agent-johny (marketing)</option>
               </select>
             </div>
             <FormField label="PRIORITY (1-10)" value={String(newJob.priority)} onChange={v => setNewJob({ ...newJob, priority: Number(v) || 5 })} placeholder="5" />

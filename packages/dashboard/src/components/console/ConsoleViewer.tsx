@@ -40,10 +40,10 @@ export function ConsoleViewer() {
               wordBreak: 'break-all',
             }}>
               <span style={{
-                color: line.agentId === 'agent-alpha' ? 'var(--cyan-muted)' : 'var(--purple)',
+                color: line.agentId === 'agent-smith' ? 'var(--cyan-muted)' : 'var(--purple)',
                 fontSize: 10,
               }}>
-                [{line.agentId === 'agent-alpha' ? 'ALPHA' : 'BETA'}]
+                [{line.agentId === 'agent-smith' ? 'SMITH' : 'JOHNY'}]
               </span>
               {' '}
               <span style={{ color: 'var(--green-secondary)' }}>{line.line}</span>

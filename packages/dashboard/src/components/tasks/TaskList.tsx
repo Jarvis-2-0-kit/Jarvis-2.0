@@ -80,7 +80,7 @@ export function TaskList() {
                   fontSize: 9,
                   color: 'var(--cyan-dim)',
                 }}>
-                  {task.assignedAgent === 'agent-alpha' ? 'A' : 'B'}
+                  {task.assignedAgent === 'agent-smith' ? 'A' : 'B'}
                 </span>
               )}
             </div>

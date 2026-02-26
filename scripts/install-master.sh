@@ -650,8 +650,8 @@ AGENTENVEOF
   ok "$agent_name zainstalowany!"
 }
 
-deploy_to_agent "$ALPHA_IP" "$ALPHA_USER" "agent-alpha" "dev" "jarvis-alpha"
-deploy_to_agent "$BETA_IP" "$BETA_USER" "agent-beta" "marketing" "jarvis-beta"
+deploy_to_agent "$ALPHA_IP" "$ALPHA_USER" "agent-smith" "dev" "jarvis-alpha"
+deploy_to_agent "$BETA_IP" "$BETA_USER" "agent-johny" "marketing" "jarvis-beta"
 
 # ═════════════════════════════════════════════════════════════════════════
 #  FAZA 7: URUCHAMIANIE SERWISOW
