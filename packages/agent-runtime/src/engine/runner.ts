@@ -29,7 +29,50 @@ const MAX_CONSECUTIVE_ERRORS = 5;
  *  Claude CLI's `-p` mode pipes everything as a single string; keeping it
  *  well under the 200k-token context avoids "Prompt is too long" errors.
  *  ~150k chars ≈ ~40k tokens, leaving room for system prompt + tool defs. */
-const MAX_PROMPT_CHARS = 150_000;
+const MAX_PROMPT_CHARS = 100_000;
+
+/**
+ * Replace base64 image data in older tool results with a short text placeholder.
+ * Keeps only the most recent N messages with images intact (for the current round).
+ * This prevents VNC screenshots from blowing up the context window.
+ */
+function stripOldImages(messages: Message[], keepRecentCount = 4): Message[] {
+  const result: Message[] = [];
+  const stripThreshold = messages.length - keepRecentCount;
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (i < stripThreshold && msg.role === 'user' && Array.isArray(msg.content)) {
+      // Check if any content block contains image data
+      const hasImage = (msg.content as Array<{ type: string }>).some(
+        (b) => b.type === 'tool_result' &&
+          Array.isArray((b as { content?: unknown }).content) &&
+          ((b as { content: Array<{ type: string }> }).content).some((c) => c.type === 'image'),
+      );
+
+      if (hasImage) {
+        // Replace image blocks with text placeholders inside tool_result blocks
+        const stripped = (msg.content as Array<Record<string, unknown>>).map((block) => {
+          if (block.type === 'tool_result' && Array.isArray(block.content)) {
+            const newContent = (block.content as Array<Record<string, unknown>>).map((c) => {
+              if (c.type === 'image') {
+                return { type: 'text', text: '[Screenshot removed to save context]' };
+              }
+              return c;
+            });
+            return { ...block, content: newContent };
+          }
+          return block;
+        });
+        result.push({ role: msg.role, content: stripped as ContentBlock[] });
+        continue;
+      }
+    }
+    result.push(msg);
+  }
+
+  return result;
+}
 
 /**
  * Trim messages to stay within the prompt size budget.
@@ -847,6 +890,8 @@ export class AgentRunner {
       const toolDefs = this.getToolDefinitions();
       const toolDefsLen = JSON.stringify(toolDefs).length;
 
+      // Strip base64 images from older messages before trimming
+      messages = stripOldImages(messages);
       // Trim context if it's getting too large to prevent "Prompt is too long"
       messages = trimMessagesToFit(messages, systemPrompt.length, toolDefsLen);
 
@@ -1028,7 +1073,10 @@ export class AgentRunner {
           ];
           log.info(`Tool ${toolUse.name} returned image (${(result.content.length / 1024).toFixed(0)}KB)`);
         } else {
-          toolResultContent = result.content;
+          // Cap text tool results at 10k chars to prevent context bloat
+          toolResultContent = typeof result.content === 'string' && result.content.length > 10_000
+            ? result.content.slice(0, 10_000) + '\n...[truncated, output was ' + result.content.length + ' chars]'
+            : result.content;
         }
 
         const toolResultBlock: ToolResultBlock = {

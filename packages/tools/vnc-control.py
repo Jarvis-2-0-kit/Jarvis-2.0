@@ -289,12 +289,20 @@ class VNCConnection:
                 rgba[i + 2] = framebuffer[i]
                 rgba[i + 3] = 255
             img = Image.frombytes('RGBA', (self.width, self.height), bytes(rgba))
+            # Resize to max 768px wide for context-friendly base64 output
+            max_w = 768
+            if img.width > max_w:
+                ratio = max_w / img.width
+                new_h = int(img.height * ratio)
+                img = img.resize((max_w, new_h), Image.LANCZOS)
             if output_file and output_file != '-b64':
                 img.save(output_file, 'PNG')
                 return f"OK:{self.width}x{self.height}"
             else:
+                # Convert RGBA→RGB and save as JPEG for much smaller base64
+                rgb = img.convert('RGB')
                 buf = io.BytesIO()
-                img.save(buf, 'PNG')
+                rgb.save(buf, 'JPEG', quality=60, optimize=True)
                 return base64.b64encode(buf.getvalue()).decode('ascii')
 
         return base64.b64encode(bytes(framebuffer)).decode('ascii')

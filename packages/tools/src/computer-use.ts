@@ -261,13 +261,25 @@ KEY COMBOS: Use key_combo with format like "cmd+c", "cmd+shift+s", "ctrl+a"`,
 
         // Handle screenshot (output is base64 PNG)
         if (action === 'screenshot') {
-          // Output is base64 encoded PNG
-          log.info(`Screenshot captured: ${(output.length / 1024).toFixed(0)}KB base64`);
+          const sizeKB = output.length / 1024;
+          log.info(`Screenshot captured: ${sizeKB.toFixed(0)}KB base64`);
+
+          // Safety cap: if base64 still > 500KB after Python resize, replace with text
+          if (sizeKB > 500) {
+            log.warn(`Screenshot too large (${sizeKB.toFixed(0)}KB), returning text description instead`);
+            resolve(createToolResult(
+              `Screenshot captured but too large to display (${sizeKB.toFixed(0)}KB). ` +
+              `Screen size: the image was captured successfully. ` +
+              `Try performing the action and take another screenshot to verify.`,
+            ));
+            return;
+          }
+
           resolve({
             type: 'image',
             content: output,
             metadata: {
-              mediaType: 'image/png',
+              mediaType: 'image/jpeg',
             },
           });
           return;

@@ -22,8 +22,8 @@ export function buildDevAgentPrompt(context: {
 
 ### Machine Context
 - \`exec\` → runs on **Mac Mini Alpha** automatically (SSH-routed by the tool registry)
-- \`computer\` → controls **Mac Mini Alpha** via VNC
-- \`browser\` → runs on **master** (NOT your machine) — for browser tasks on YOUR machine, use \`computer\` to open a browser via VNC instead
+- \`computer\` → controls **Mac Mini Alpha** via VNC — use this for ALL browser/GUI tasks
+- **NEVER use \`browser\`** — it runs on master, not your machine, and will be blocked. Always use \`computer\` with action "open_url" instead.
 
 ## Capabilities
 You are an expert full-stack developer specializing in:

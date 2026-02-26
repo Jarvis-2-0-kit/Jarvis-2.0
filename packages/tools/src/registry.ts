@@ -156,6 +156,16 @@ export class ToolRegistry {
       }
     }
 
+    // Block browser tool for remote agents — they must use computer (VNC) instead
+    if (name === 'browser' && context.agentId && context.agentId in this.sshHosts) {
+      log.warn(`Blocked browser tool for remote agent ${context.agentId} — use computer tool instead`);
+      return createErrorResult(
+        `The browser tool runs on master, not on your machine. ` +
+        `Use the \`computer\` tool instead to open a browser on your machine via VNC. ` +
+        `Example: computer with action "open_url" and url "https://youtube.com"`,
+      );
+    }
+
     const tool = this.tools.get(name);
     if (!tool) {
       return createErrorResult(`Unknown tool: ${name}. Available tools: ${Array.from(this.tools.keys()).join(', ')}`);
