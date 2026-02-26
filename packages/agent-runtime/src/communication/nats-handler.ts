@@ -428,7 +428,7 @@ export class NatsHandler {
   }
 
   /** Request task delegation to another agent */
-  async delegateTask(toAgentId: string, task: { title: string; description: string; priority?: string }): Promise<void> {
+  async delegateTask(toAgentId: string, task: { taskId?: string; title: string; description: string; priority?: string }): Promise<void> {
     const msg: InterAgentMsg = {
       id: `del-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       type: 'delegation',

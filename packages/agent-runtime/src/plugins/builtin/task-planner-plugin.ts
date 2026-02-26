@@ -436,6 +436,7 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
           // Delegate via NATS if available, otherwise fall back to file-based delegation
           if (api.config.delegateTask) {
             await api.config.delegateTask(targetAgent, {
+              taskId,
               title: params.title as string,
               description: params.description as string,
               priority: (params.priority as string) || 'normal',
@@ -513,21 +514,30 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
           }
 
           const task = delegatedTasks.get(params.taskId as string);
-          if (!task) {
-            // Try loading from result file on NAS
-            const resultFile = join(nasPath, 'plans', `result-${params.taskId}.json`);
-            if (existsSync(resultFile)) {
+
+          // Check NAS result file (written by the target agent on completion)
+          const resultFile = join(nasPath, 'plans', `result-${params.taskId}.json`);
+          if (existsSync(resultFile)) {
+            try {
               const result = JSON.parse(readFileSync(resultFile, 'utf-8'));
+              // Update in-memory state if we have it
+              if (task) {
+                task.status = result.status ?? 'completed';
+                task.result = result.output;
+              }
               return {
                 type: 'text',
                 content: [
-                  `Task: ${result.title ?? params.taskId}`,
-                  `Status: ${result.status ?? 'unknown'}`,
-                  `Agent: ${result.agentId ?? 'unknown'}`,
+                  `Task: ${result.title ?? task?.title ?? params.taskId}`,
+                  `Status: ${result.status ?? 'completed'}`,
+                  `Agent: ${result.agentId ?? task?.targetAgent ?? 'unknown'}`,
                   `Result: ${result.output ?? '(no output)'}`,
                 ].join('\n'),
               };
-            }
+            } catch { /* ignore parse errors, fall through */ }
+          }
+
+          if (!task) {
             return { type: 'error', content: `Delegated task not found: ${params.taskId}` };
           }
 

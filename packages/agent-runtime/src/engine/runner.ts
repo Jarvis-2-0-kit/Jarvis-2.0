@@ -18,6 +18,8 @@ import {
   type PluginRegistry as PluginReg,
 } from '../plugins/index.js';
 import type { PluginRuntimeConfig } from '../plugins/types.js';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 const log = createLogger('agent:runner');
 
@@ -352,6 +354,28 @@ export class AgentRunner {
         artifacts: result.artifacts,
       });
 
+      // Write result file to NAS so the delegating agent can check status
+      if (task.taskId.startsWith('delegated-')) {
+        try {
+          const plansDir = join(this.config.nasMountPath, 'plans');
+          mkdirSync(plansDir, { recursive: true });
+          writeFileSync(
+            join(plansDir, `result-${task.taskId}.json`),
+            JSON.stringify({
+              taskId: task.taskId,
+              title: task.title,
+              status: 'completed',
+              agentId: this.config.agentId,
+              output: result.output.slice(0, 5000),
+              artifacts: result.artifacts,
+              completedAt: Date.now(),
+            }, null, 2),
+          );
+        } catch (err) {
+          log.warn(`Failed to write delegation result file: ${(err as Error).message}`);
+        }
+      }
+
       this.nats.trackTaskComplete(true);
 
       // Fire task_completed hook
@@ -384,6 +408,27 @@ export class AgentRunner {
         success: false,
         output: `Error: ${(err as Error).message}`,
       });
+
+      // Write failure result file to NAS for delegating agent
+      if (task.taskId.startsWith('delegated-')) {
+        try {
+          const plansDir = join(this.config.nasMountPath, 'plans');
+          mkdirSync(plansDir, { recursive: true });
+          writeFileSync(
+            join(plansDir, `result-${task.taskId}.json`),
+            JSON.stringify({
+              taskId: task.taskId,
+              title: task.title,
+              status: 'failed',
+              agentId: this.config.agentId,
+              output: (err as Error).message,
+              completedAt: Date.now(),
+            }, null, 2),
+          );
+        } catch (writeErr) {
+          log.warn(`Failed to write delegation result file: ${(writeErr as Error).message}`);
+        }
+      }
 
       this.nats.trackTaskComplete(false);
 
@@ -486,11 +531,13 @@ export class AgentRunner {
     }
 
     // Accept delegation and process as task
-    const payload = msg.payload as { title?: string; description?: string; priority?: string } | undefined;
+    const payload = msg.payload as { taskId?: string; title?: string; description?: string; priority?: string } | undefined;
     if (payload?.title) {
+      // Use the originator's taskId if provided, otherwise generate one
+      const taskId = payload.taskId || `delegated-${msg.id}`;
       await this.nats.respondCoordination(msg.id, true);
       await this.handleTask({
-        taskId: `delegated-${msg.id}`,
+        taskId,
         title: payload.title,
         description: payload.description || payload.title,
         priority: payload.priority || 'normal',
