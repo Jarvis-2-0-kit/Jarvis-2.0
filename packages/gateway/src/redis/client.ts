@@ -1,5 +1,5 @@
 import IORedis from 'ioredis';
-import { createLogger } from '@jarvis/shared';
+import { createLogger, DEFAULT_REDIS_URL } from '@jarvis/shared';
 
 // ioredis default export is the Redis class in CJS, namespace in ESM
 const Redis = IORedis as unknown as typeof IORedis.default extends undefined ? typeof IORedis : typeof IORedis.default;
@@ -10,9 +10,9 @@ const log = createLogger('gateway:redis');
 export class RedisClient {
   private client: RedisInstance | null = null;
   private subscriber: RedisInstance | null = null;
-  private pubsubHandlers: Map<string, Set<(message: string) => void>> = new Map();
+  private readonly pubsubHandlers: Map<string, Set<(message: string) => void>> = new Map();
 
-  constructor(private readonly url: string = 'redis://localhost:6379') {}
+  constructor(private readonly url: string = DEFAULT_REDIS_URL) {}
 
   async connect(): Promise<void> {
     try {
@@ -22,12 +22,14 @@ export class RedisClient {
         lazyConnect: false,
       });
 
-      this.client.on('connect', () => log.info(`Connected to Redis at ${this.url}`));
+      const safeUrl = (() => { try { const u = new URL(this.url); u.password = '***'; u.username = '***'; return u.toString(); } catch { return '[invalid url]'; } })();
+      this.client.on('connect', () => log.info(`Connected to Redis at ${safeUrl}`));
       this.client.on('error', (err: Error) => log.error('Redis error', { error: String(err) }));
       this.client.on('reconnecting', () => log.warn('Redis reconnecting...'));
 
       // Separate connection for pub/sub
       this.subscriber = this.client.duplicate();
+      this.subscriber.on('error', (err: Error) => log.error('Redis subscriber error', { error: String(err) }));
       this.subscriber.on('message', (channel: string, message: string) => {
         const handlers = this.pubsubHandlers.get(channel);
         if (handlers) {
@@ -105,7 +107,8 @@ export class RedisClient {
     if (!raw) return null;
     try {
       return JSON.parse(raw) as T;
-    } catch {
+    } catch (err) {
+      log.warn(`Failed to parse JSON for key`, { error: String(err) });
       return null;
     }
   }
@@ -139,11 +142,11 @@ export class RedisClient {
   /** Close all connections */
   async close(): Promise<void> {
     if (this.subscriber) {
-      this.subscriber.disconnect();
+      await this.subscriber.quit();
       this.subscriber = null;
     }
     if (this.client) {
-      this.client.disconnect();
+      await this.client.quit();
       this.client = null;
     }
     this.pubsubHandlers.clear();

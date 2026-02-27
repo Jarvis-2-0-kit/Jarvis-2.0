@@ -14,6 +14,7 @@
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { createLogger } from '@jarvis/shared';
 import { PluginRegistry } from './registry.js';
 import type { JarvisPluginDefinition, JarvisPluginModule, PluginRuntimeConfig } from './types.js';
@@ -32,6 +33,7 @@ import { createHealthCheckPlugin } from './builtin/health-check-plugin.js';
 import { createRateLimiterPlugin } from './builtin/rate-limiter-plugin.js';
 import { createVoicePlugin } from './builtin/voice-plugin.js';
 import { createObsidianPlugin } from './builtin/obsidian-plugin.js';
+import { createSocialSchedulerPlugin } from './builtin/social-scheduler-plugin.js';
 
 const log = createLogger('plugins:loader');
 
@@ -70,6 +72,7 @@ export async function loadPlugins(config: PluginLoaderConfig): Promise<LoadedPlu
       createRateLimiterPlugin(),
       createVoicePlugin(),
       createObsidianPlugin(),
+      createSocialSchedulerPlugin(),
     ];
 
     for (const plugin of builtins) {
@@ -100,6 +103,18 @@ export async function loadPlugins(config: PluginLoaderConfig): Promise<LoadedPlu
           const entryPath = findPluginEntry(pluginDir);
 
           if (entryPath) {
+            // Integrity check: verify checksum if present in manifest
+            if (manifest.checksum) {
+              const entryContents = readFileSync(entryPath);
+              const actualChecksum = createHash('sha256').update(entryContents).digest('hex');
+              if (actualChecksum !== manifest.checksum) {
+                log.error(`Checksum mismatch for plugin ${entry.name}: expected ${manifest.checksum}, got ${actualChecksum}. Skipping plugin.`);
+                continue;
+              }
+            } else {
+              log.warn(`Plugin ${entry.name} has no checksum in manifest — loading without integrity verification`);
+            }
+
             // Dynamic import of plugin
             const module = await import(entryPath) as { default?: JarvisPluginModule };
             const pluginModule = module.default ?? module;

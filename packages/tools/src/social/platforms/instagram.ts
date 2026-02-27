@@ -1,14 +1,13 @@
 import { createLogger } from '@jarvis/shared';
 import type { ToolResult } from '../../base.js';
 import { createToolResult, createErrorResult } from '../../base.js';
+import { GRAPH_API_URL } from './constants.js';
 
 const log = createLogger('tool:social:instagram');
 
-const GRAPH_API_URL = 'https://graph.facebook.com/v21.0';
-
 export interface InstagramConfig {
-  accessToken: string;
-  businessAccountId: string;
+  readonly accessToken: string;
+  readonly businessAccountId: string;
 }
 
 /**
@@ -22,36 +21,17 @@ export class InstagramClient {
   async publishPhoto(imageUrl: string, caption: string): Promise<ToolResult> {
     try {
       // Step 1: Create media container
-      const containerUrl = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media`);
-      containerUrl.searchParams.set('image_url', imageUrl);
-      containerUrl.searchParams.set('caption', caption);
-      containerUrl.searchParams.set('access_token', this.config.accessToken);
-
-      const containerRes = await fetch(containerUrl.toString(), { method: 'POST' });
-      if (!containerRes.ok) {
-        const err = await containerRes.text();
-        return createErrorResult(`Container creation failed: ${err}`);
-      }
-
-      const container = await containerRes.json() as { id?: string };
+      const container = await this.createMediaContainer({
+        image_url: imageUrl,
+        caption,
+      });
       if (!container.id) return createErrorResult('No container ID returned');
 
-      // Step 2: Publish
-      const publishUrl = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media_publish`);
-      publishUrl.searchParams.set('creation_id', container.id);
-      publishUrl.searchParams.set('access_token', this.config.accessToken);
+      // Step 2: Wait for processing (photos are usually instant but can take a moment)
+      await this.waitForMedia(container.id, 30_000);
 
-      const publishRes = await fetch(publishUrl.toString(), { method: 'POST' });
-      if (!publishRes.ok) {
-        const err = await publishRes.text();
-        return createErrorResult(`Publish failed: ${err}`);
-      }
-
-      const result = await publishRes.json() as { id?: string };
-      return createToolResult(
-        `Photo published to Instagram.\nMedia ID: ${result.id}`,
-        { mediaId: result.id },
-      );
+      // Step 3: Publish
+      return await this.publishContainer(container.id);
     } catch (err) {
       return createErrorResult(`Instagram publish failed: ${(err as Error).message}`);
     }
@@ -63,47 +43,30 @@ export class InstagramClient {
       // Create containers for each image
       const childIds: string[] = [];
       for (const item of items) {
-        const url = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media`);
-        url.searchParams.set('image_url', item.imageUrl);
-        url.searchParams.set('is_carousel_item', 'true');
-        url.searchParams.set('access_token', this.config.accessToken);
+        const child = await this.createMediaContainer({
+          image_url: item.imageUrl,
+          is_carousel_item: 'true',
+        });
+        if (child.id) childIds.push(child.id);
+      }
 
-        const res = await fetch(url.toString(), { method: 'POST' });
-        if (!res.ok) {
-          const err = await res.text();
-          return createErrorResult(`Carousel item failed: ${err}`);
-        }
-        const data = await res.json() as { id?: string };
-        if (data.id) childIds.push(data.id);
+      if (childIds.length === 0) {
+        return createErrorResult('No carousel items were created successfully');
       }
 
       // Create carousel container
-      const containerUrl = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media`);
-      containerUrl.searchParams.set('media_type', 'CAROUSEL');
-      containerUrl.searchParams.set('children', childIds.join(','));
-      containerUrl.searchParams.set('caption', caption);
-      containerUrl.searchParams.set('access_token', this.config.accessToken);
+      const container = await this.createMediaContainer({
+        media_type: 'CAROUSEL',
+        children: childIds.join(','),
+        caption,
+      });
+      if (!container.id) return createErrorResult('No carousel container ID returned');
 
-      const containerRes = await fetch(containerUrl.toString(), { method: 'POST' });
-      if (!containerRes.ok) {
-        const err = await containerRes.text();
-        return createErrorResult(`Carousel container failed: ${err}`);
-      }
-
-      const container = await containerRes.json() as { id?: string };
+      // Wait for processing
+      await this.waitForMedia(container.id, 60_000);
 
       // Publish
-      const publishUrl = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media_publish`);
-      publishUrl.searchParams.set('creation_id', container.id!);
-      publishUrl.searchParams.set('access_token', this.config.accessToken);
-
-      const publishRes = await fetch(publishUrl.toString(), { method: 'POST' });
-      const result = await publishRes.json() as { id?: string };
-
-      return createToolResult(
-        `Carousel published (${items.length} images).\nMedia ID: ${result.id}`,
-        { mediaId: result.id },
-      );
+      return await this.publishContainer(container.id, `Carousel published (${items.length} images)`);
     } catch (err) {
       return createErrorResult(`Carousel publish failed: ${(err as Error).message}`);
     }
@@ -112,36 +75,20 @@ export class InstagramClient {
   /** Publish a reel (video) */
   async publishReel(videoUrl: string, caption: string, coverUrl?: string): Promise<ToolResult> {
     try {
-      const containerUrl = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media`);
-      containerUrl.searchParams.set('media_type', 'REELS');
-      containerUrl.searchParams.set('video_url', videoUrl);
-      containerUrl.searchParams.set('caption', caption);
-      if (coverUrl) containerUrl.searchParams.set('cover_url', coverUrl);
-      containerUrl.searchParams.set('access_token', this.config.accessToken);
+      const params: Record<string, string> = {
+        media_type: 'REELS',
+        video_url: videoUrl,
+        caption,
+      };
+      if (coverUrl) params['cover_url'] = coverUrl;
 
-      const containerRes = await fetch(containerUrl.toString(), { method: 'POST' });
-      if (!containerRes.ok) {
-        const err = await containerRes.text();
-        return createErrorResult(`Reel container failed: ${err}`);
-      }
+      const container = await this.createMediaContainer(params);
+      if (!container.id) return createErrorResult('No reel container ID returned');
 
-      const container = await containerRes.json() as { id?: string };
+      // Reels need more time for video processing
+      await this.waitForMedia(container.id, 90_000);
 
-      // Wait for processing (reels can take time)
-      await this.waitForMedia(container.id!);
-
-      // Publish
-      const publishUrl = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media_publish`);
-      publishUrl.searchParams.set('creation_id', container.id!);
-      publishUrl.searchParams.set('access_token', this.config.accessToken);
-
-      const publishRes = await fetch(publishUrl.toString(), { method: 'POST' });
-      const result = await publishRes.json() as { id?: string };
-
-      return createToolResult(
-        `Reel published.\nMedia ID: ${result.id}`,
-        { mediaId: result.id },
-      );
+      return await this.publishContainer(container.id, 'Reel published');
     } catch (err) {
       return createErrorResult(`Reel publish failed: ${(err as Error).message}`);
     }
@@ -203,22 +150,79 @@ export class InstagramClient {
     }
   }
 
-  /** Wait for media container to finish processing */
-  private async waitForMedia(containerId: string, maxAttempts = 30): Promise<void> {
-    for (let i = 0; i < maxAttempts; i++) {
+  /** Create a media container with given params */
+  private async createMediaContainer(params: Record<string, string>): Promise<{ id?: string }> {
+    const url = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media`);
+    for (const [key, value] of Object.entries(params)) {
+      url.searchParams.set(key, value);
+    }
+    url.searchParams.set('access_token', this.config.accessToken);
+
+    const res = await fetch(url.toString(), { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Container creation failed: ${err}`);
+    }
+    return await res.json() as { id?: string };
+  }
+
+  /** Publish a media container by its creation_id */
+  private async publishContainer(creationId: string, successPrefix = 'Published'): Promise<ToolResult> {
+    const url = new URL(`${GRAPH_API_URL}/${this.config.businessAccountId}/media_publish`);
+    url.searchParams.set('creation_id', creationId);
+    url.searchParams.set('access_token', this.config.accessToken);
+
+    const res = await fetch(url.toString(), { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.text();
+      return createErrorResult(`Publish failed: ${err}`);
+    }
+
+    const result = await res.json() as { id?: string };
+    log.info({ mediaId: result.id }, successPrefix);
+    return createToolResult(
+      `${successPrefix}.\nMedia ID: ${result.id}`,
+      { mediaId: result.id },
+    );
+  }
+
+  /**
+   * Wait for media container to finish processing.
+   * Uses exponential backoff: 2s, 4s, 8s, 10s, 10s... (capped at 10s)
+   * Default timeout: 60s total (not 2.5 min like before)
+   */
+  private async waitForMedia(containerId: string, timeoutMs = 60_000): Promise<void> {
+    const startTime = Date.now();
+    let attempt = 0;
+
+    while (Date.now() - startTime < timeoutMs) {
       const url = new URL(`${GRAPH_API_URL}/${containerId}`);
-      url.searchParams.set('fields', 'status_code');
+      url.searchParams.set('fields', 'status_code,status');
       url.searchParams.set('access_token', this.config.accessToken);
 
       const res = await fetch(url.toString());
-      const data = await res.json() as { status_code?: string };
+      if (!res.ok) {
+        log.warn({ containerId, status: res.status }, 'Media status check failed, retrying');
+      } else {
+        const data = await res.json() as { status_code?: string; status?: string };
+        log.debug({ containerId, status_code: data.status_code, attempt }, 'Media processing status');
 
-      if (data.status_code === 'FINISHED') return;
-      if (data.status_code === 'ERROR') throw new Error('Media processing failed');
+        if (data.status_code === 'FINISHED') return;
+        if (data.status_code === 'ERROR') {
+          throw new Error(`Media processing failed: ${data.status ?? 'unknown error'}`);
+        }
+        if (data.status_code === 'EXPIRED') {
+          throw new Error('Media container expired — re-upload required');
+        }
+      }
 
-      await new Promise((r) => setTimeout(r, 5000));
+      // Exponential backoff: 2s, 4s, 8s, then cap at 10s
+      const delay = Math.min(2000 * Math.pow(2, attempt), 10_000);
+      await new Promise((r) => setTimeout(r, delay));
+      attempt++;
     }
-    throw new Error('Media processing timeout');
+
+    throw new Error(`Media processing timeout after ${Math.round(timeoutMs / 1000)}s`);
   }
 }
 

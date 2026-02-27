@@ -9,16 +9,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Cpu,
-  Plus,
-  X,
   Check,
   ChevronDown,
   ChevronUp,
-  RefreshCw,
   Zap,
   AlertCircle,
-  Edit3,
-  Trash2,
   ArrowDown,
   Shield,
   DollarSign,
@@ -158,7 +153,6 @@ const PROVIDER_COLORS: Record<string, string> = {
 export function ProvidersView() {
   const [providers, setProviders] = useState<ModelProvider[]>(DEFAULT_PROVIDERS);
   const [chains, setChains] = useState<FailoverChain[]>(DEFAULT_CHAINS);
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
   const [expandedChain, setExpandedChain] = useState<string | null>('default');
   const [authMode, setAuthMode] = useState<'api-key' | 'claude-cli'>('api-key');
   const [authSaving, setAuthSaving] = useState(false);
@@ -195,8 +189,8 @@ export function ProvidersView() {
       }
       setAuthSaved(true);
       setTimeout(() => setAuthSaved(false), 3000);
-    } catch (err) {
-      console.error('Failed to save auth mode:', err);
+    } catch {
+      /* save failed — config will be stale until next attempt */
     } finally {
       setAuthSaving(false);
     }
@@ -262,8 +256,6 @@ export function ProvidersView() {
     providerName: p.name,
     providerEnabled: p.enabled,
   })));
-
-  const activeChain = chains.find((c) => c.active);
 
   return (
     <div style={{ height: '100%', overflowY: 'auto', padding: 20 }}>

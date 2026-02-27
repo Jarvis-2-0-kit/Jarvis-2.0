@@ -34,6 +34,13 @@ import { NasPaths } from './nas/paths.js';
 import { AuthManager } from './auth/auth.js';
 import { ProtocolHandler } from './protocol/handler.js';
 import { DependencyOrchestrator } from './orchestration/dependency-orchestrator.js';
+import { maskSecret, isSecretKey, stripHtml, formatDuration } from './utils.js';
+import {
+  getChannelConfig as _getChannelConfig,
+  setChannelConfig as _setChannelConfig,
+  getChannelMessages as _getChannelMessages,
+  appendChannelMessage as _appendChannelMessage,
+} from './channels/config.js';
 
 const log = createLogger('gateway:server');
 
@@ -55,22 +62,7 @@ const chatSendSchema = z.object({
   metadata: z.record(z.unknown()).optional(),
 });
 
-/** Mask a secret string: show first 4 + last 4 chars */
-function maskSecret(value: string): string {
-  if (value.length <= 12) return '****';
-  return `${value.slice(0, 4)}${'*'.repeat(Math.min(value.length - 8, 20))}${value.slice(-4)}`;
-}
-
-/** Check if an env var key looks like a secret */
-function isSecretKey(key: string): boolean {
-  const upper = key.toUpperCase();
-  return /(?:KEY|SECRET|PASSWORD|TOKEN|CREDENTIAL|PASS)/.test(upper);
-}
-
-/** Strip HTML tags for basic sanitization */
-function stripHtml(str: string): string {
-  return str.replace(/<[^>]*>/g, '');
-}
+// Utility functions moved to ./utils.ts
 
 export interface GatewayConfig {
   port: number;
@@ -98,7 +90,32 @@ export class GatewayServer {
   constructor(private readonly config: GatewayConfig) {
     this.app = express();
     this.httpServer = createServer(this.app);
-    this.wss = new WebSocketServer({ server: this.httpServer });
+    this.wss = new WebSocketServer({
+      server: this.httpServer,
+      maxPayload: 64 * 1024, // 64 KB max message size
+      verifyClient: ({ req }) => {
+        // Allow loopback connections unconditionally
+        const ip = req.socket.remoteAddress ?? '';
+        if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
+        // Reject if origin header is set and doesn't match a trusted pattern
+        const origin = req.headers.origin;
+        if (origin) {
+          try {
+            const url = new URL(origin);
+            const allowed = url.hostname === 'localhost'
+              || url.hostname === '127.0.0.1'
+              || url.hostname.endsWith('.local');
+            if (!allowed) {
+              log.warn(`WebSocket rejected origin: ${origin} from ${ip}`);
+              return false;
+            }
+          } catch {
+            return false;
+          }
+        }
+        return true;
+      },
+    });
     this.protocol = new ProtocolHandler();
     this.nats = new NatsClient(config.natsUrl, config.natsUrlThunderbolt);
     this.redis = new RedisClient(config.redisUrl);
@@ -163,7 +180,25 @@ export class GatewayServer {
     log.info('Shutting down gateway...');
     if (this.healthInterval) clearInterval(this.healthInterval);
     this.orchestrator.stop();
-    this.httpServer.close();
+
+    // Close all WebSocket connections gracefully
+    for (const client of this.wss.clients) {
+      try { client.close(1001, 'Server shutting down'); } catch { /* ignore */ }
+    }
+
+    // Close the WebSocket server
+    await new Promise<void>((resolve) => {
+      this.wss.close(() => resolve());
+    });
+
+    // Close HTTP server and await completion
+    await new Promise<void>((resolve) => {
+      this.httpServer.close((err) => {
+        if (err) { log.warn('HTTP server close error', { error: String(err) }); }
+        resolve();
+      });
+    });
+
     await this.nats.close();
     await this.redis.close();
     log.info('Gateway stopped');
@@ -172,7 +207,7 @@ export class GatewayServer {
   // --- HTTP Routes ---
 
   private setupHttpRoutes(): void {
-    this.app.use(express.json());
+    this.app.use(express.json({ limit: '1mb' }));
 
     // Security headers
     this.app.use((_req, res, next) => {
@@ -351,7 +386,8 @@ export class GatewayServer {
           });
         }
       } catch (err) {
-        res.status(500).json({ error: String(err) });
+        log.error('Failed to load config', { error: String(err) });
+        res.status(500).json({ error: 'Failed to load configuration' });
       }
     });
 
@@ -391,7 +427,8 @@ export class GatewayServer {
         writeFileSync(configPath, JSON.stringify(data, null, 2));
         res.json({ success: true });
       } catch (err) {
-        res.status(500).json({ error: String(err) });
+        log.error('Failed to save config', { error: String(err) });
+        res.status(500).json({ error: 'Failed to save configuration' });
       }
     });
 
@@ -567,7 +604,9 @@ export class GatewayServer {
 
     this.protocol.registerMethod('chat.history', async (params) => {
       const { sessionId = 'default', limit = 200 } = params as { sessionId?: string; limit?: number };
-      return { messages: this.getChatHistory(sessionId, limit) };
+      // Cap limit to a safe upper bound
+      const cappedLimit = Math.min(Math.max(1, limit), 2000);
+      return { messages: this.getChatHistory(sessionId, cappedLimit) };
     });
 
     this.protocol.registerMethod('chat.sessions', async () => {
@@ -612,7 +651,9 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('config.get', async () => {
-      return this.config;
+      // Never expose authToken or sensitive connection strings to the dashboard
+      const { authToken, ...safeConfig } = this.config;
+      return safeConfig;
     });
 
     this.protocol.registerMethod('config.set', async (params) => {
@@ -646,7 +687,7 @@ export class GatewayServer {
         return { success: true };
       } catch (err) {
         log.error(`Failed to save agent config: ${(err as Error).message}`);
-        return { success: false, message: (err as Error).message };
+        return { success: false, message: 'Failed to save agent configuration' };
       }
     });
 
@@ -890,8 +931,7 @@ export class GatewayServer {
     this.protocol.registerMethod('notifications.test', async () => {
       // Trigger macOS native test notification
       try {
-        const { execSync: exec } = await import('node:child_process');
-        exec(`osascript -e 'display notification "Test from Jarvis Dashboard" with title "🔔 Jarvis Test" sound name "Glass"'`, { timeout: 5000 });
+        execSync(`osascript -e 'display notification "Test from Jarvis Dashboard" with title "🔔 Jarvis Test" sound name "Glass"'`, { timeout: 5000 });
         return { success: true, message: 'Test notification sent' };
       } catch {
         return { success: false, message: 'Failed to send test notification' };
@@ -1638,6 +1678,8 @@ export class GatewayServer {
   // --- Logs ---
 
   private getLogLines(maxLines: number): string[] {
+    // Cap to a reasonable upper bound to prevent excessive memory use
+    const cappedMax = Math.min(Math.max(1, maxLines), 5000);
     const logFiles = [
       '/tmp/jarvis-gateway.log',
       '/tmp/jarvis-nats.log',
@@ -1658,7 +1700,7 @@ export class GatewayServer {
 
     // Sort by timestamp if possible, otherwise keep order
     // Return last N lines
-    return allLines.slice(-maxLines);
+    return allLines.slice(-cappedMax);
   }
 
   // --- Workflows ---
@@ -1778,8 +1820,7 @@ export class GatewayServer {
   private listScheduledJobs(): Array<Record<string, unknown>> {
     const results: Array<Record<string, unknown>> = [];
     try {
-      const cronDir = this.nas.resolve('config');
-      const jobsDir = join(cronDir, '..', 'cron-jobs');
+      const jobsDir = this.nas.resolve('cron-jobs');
       if (!existsSync(jobsDir)) return results;
 
       const files = readdirSync(jobsDir).filter(f => f.endsWith('.json') && f !== 'history.json');
@@ -1795,8 +1836,7 @@ export class GatewayServer {
 
   private getSchedulerHistory(): Array<Record<string, unknown>> {
     try {
-      const cronDir = this.nas.resolve('config');
-      const histPath = join(cronDir, '..', 'cron-jobs', 'history.json');
+      const histPath = this.nas.resolve('cron-jobs', 'history.json');
       if (existsSync(histPath)) {
         const data = JSON.parse(readFileSync(histPath, 'utf-8'));
         return Array.isArray(data) ? data.slice(-100).reverse() : [];
@@ -1823,10 +1863,8 @@ export class GatewayServer {
     };
 
     try {
-      const cronDir = this.nas.resolve('config');
-      const jobsDir = join(cronDir, '..', 'cron-jobs');
+      const jobsDir = this.nas.resolve('cron-jobs');
       if (!existsSync(jobsDir)) {
-        const { mkdirSync } = require('node:fs');
         mkdirSync(jobsDir, { recursive: true });
       }
       writeFileSync(join(jobsDir, `${id}.json`), JSON.stringify(job, null, 2));
@@ -1839,10 +1877,8 @@ export class GatewayServer {
 
   private deleteScheduledJob(jobId: string): { success: boolean } {
     try {
-      const cronDir = this.nas.resolve('config');
-      const filePath = join(cronDir, '..', 'cron-jobs', `${jobId}.json`);
+      const filePath = this.nas.resolve('cron-jobs', `${jobId}.json`);
       if (existsSync(filePath)) {
-        const { unlinkSync } = require('node:fs');
         unlinkSync(filePath);
         return { success: true };
       }
@@ -1852,8 +1888,7 @@ export class GatewayServer {
 
   private toggleScheduledJob(jobId: string, enabled: boolean): { success: boolean } {
     try {
-      const cronDir = this.nas.resolve('config');
-      const filePath = join(cronDir, '..', 'cron-jobs', `${jobId}.json`);
+      const filePath = this.nas.resolve('cron-jobs', `${jobId}.json`);
       if (existsSync(filePath)) {
         const data = JSON.parse(readFileSync(filePath, 'utf-8'));
         data.enabled = enabled;
@@ -1866,8 +1901,7 @@ export class GatewayServer {
 
   private runJobNow(jobId: string): { success: boolean; message: string } {
     try {
-      const cronDir = this.nas.resolve('config');
-      const filePath = join(cronDir, '..', 'cron-jobs', `${jobId}.json`);
+      const filePath = this.nas.resolve('cron-jobs', `${jobId}.json`);
       if (existsSync(filePath)) {
         const data = JSON.parse(readFileSync(filePath, 'utf-8'));
         data.lastRun = new Date().toISOString();
@@ -1887,7 +1921,7 @@ export class GatewayServer {
         void this.assignTask(task as any);
 
         // Log to history
-        const histPath = join(cronDir, '..', 'cron-jobs', 'history.json');
+        const histPath = this.nas.resolve('cron-jobs', 'history.json');
         let hist: Array<Record<string, unknown>> = [];
         try {
           if (existsSync(histPath)) hist = JSON.parse(readFileSync(histPath, 'utf-8'));
@@ -1904,14 +1938,16 @@ export class GatewayServer {
         return { success: true, message: `Job "${data.name}" fired` };
       }
     } catch (err) {
-      return { success: false, message: String(err) };
+      log.error('Failed to run job', { error: String(err) });
+      return { success: false, message: 'Failed to execute job' };
     }
     return { success: false, message: 'Job not found' };
   }
 
   // --- API Keys ---
 
-  private getApiKeys(): { keys: Array<{ id: string; name: string; provider: string; key: string; addedAt: number; lastUsed?: number }> } {
+  /** Load raw (unmasked) API keys — for internal use only */
+  private loadRawApiKeys(): { keys: Array<{ id: string; name: string; provider: string; key: string; addedAt: number; lastUsed?: number }> } {
     const configPath = this.nas.resolve('config', 'api-keys.json');
     let data: { keys: Array<{ id: string; name: string; provider: string; key: string; addedAt: number; lastUsed?: number }> } = { keys: [] };
 
@@ -1938,7 +1974,12 @@ export class GatewayServer {
       }
     }
 
-    // SECURITY: Mask all key values before returning
+    return data;
+  }
+
+  /** Get API keys with masked values — safe to return to dashboard */
+  private getApiKeys(): { keys: Array<{ id: string; name: string; provider: string; key: string; addedAt: number; lastUsed?: number }> } {
+    const data = this.loadRawApiKeys();
     return {
       keys: data.keys.map(k => ({
         ...k,
@@ -1977,7 +2018,7 @@ export class GatewayServer {
 
   private addApiKey(params: { name: string; provider: string; key: string }): { success: boolean; id: string } {
     const configPath = this.nas.resolve('config', 'api-keys.json');
-    let data = this.getApiKeys();
+    const data = this.loadRawApiKeys();
 
     const id = `key-${shortId()}`;
     data.keys.push({
@@ -2003,7 +2044,7 @@ export class GatewayServer {
     }
 
     const configPath = this.nas.resolve('config', 'api-keys.json');
-    let data = this.getApiKeys();
+    const data = this.loadRawApiKeys();
     data.keys = data.keys.filter(k => k.id !== keyId);
 
     try {
@@ -2330,7 +2371,7 @@ export class GatewayServer {
 
     // Also read custom env from NAS config
     try {
-      const envPath = this.nas.resolve('config/environment.json');
+      const envPath = this.nas.resolve('config', 'environment.json');
       if (existsSync(envPath)) {
         const custom = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, string>;
         for (const [key, value] of Object.entries(custom)) {
@@ -2344,13 +2385,36 @@ export class GatewayServer {
     return relevant;
   }
 
-  private setEnvironmentVar(key: string, value: string): { success: boolean } {
+  // Keys that must NEVER be modified via the dashboard
+  private static readonly BLOCKED_ENV_KEYS = new Set([
+    'JARVIS_AUTH_TOKEN', 'NATS_TOKEN', 'NATS_USER', 'NATS_PASS',
+    'REDIS_URL', 'NATS_URL', 'NODE_TLS_REJECT_UNAUTHORIZED',
+    'NODE_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES',
+  ]);
+
+  private static readonly BLOCKED_ENV_PREFIXES = [
+    'JARVIS_AUTH', 'STRIPE_', 'JWT_SECRET',
+  ];
+
+  private setEnvironmentVar(key: string, value: string): { success: boolean; message?: string } {
+    // Block security-critical keys
+    if (GatewayServer.BLOCKED_ENV_KEYS.has(key)) {
+      log.warn(`Blocked attempt to set protected env var: ${key}`);
+      return { success: false, message: `Cannot modify protected variable: ${key}` };
+    }
+    for (const prefix of GatewayServer.BLOCKED_ENV_PREFIXES) {
+      if (key.startsWith(prefix)) {
+        log.warn(`Blocked attempt to set protected env var: ${key}`);
+        return { success: false, message: `Cannot modify protected variable: ${key}` };
+      }
+    }
+
     // Set in process env
     process.env[key] = value;
 
     // Persist to NAS config
     try {
-      const envPath = this.nas.resolve('config/environment.json');
+      const envPath = this.nas.resolve('config', 'environment.json');
       let existing: Record<string, string> = {};
       if (existsSync(envPath)) {
         existing = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, string>;
@@ -2369,6 +2433,18 @@ export class GatewayServer {
   }
 
   private deleteEnvironmentVar(key: string): { success: boolean; message?: string } {
+    // Block deletion of security-critical keys (same denylist as setEnvironmentVar)
+    if (GatewayServer.BLOCKED_ENV_KEYS.has(key)) {
+      log.warn(`Blocked attempt to delete protected env var: ${key}`);
+      return { success: false, message: `Cannot delete protected variable: ${key}` };
+    }
+    for (const prefix of GatewayServer.BLOCKED_ENV_PREFIXES) {
+      if (key.startsWith(prefix)) {
+        log.warn(`Blocked attempt to delete protected env var: ${key}`);
+        return { success: false, message: `Cannot delete protected variable: ${key}` };
+      }
+    }
+
     // Don't allow deleting runtime env vars
     if (process.env[key] !== undefined) {
       delete process.env[key];
@@ -2376,7 +2452,7 @@ export class GatewayServer {
 
     // Remove from NAS config
     try {
-      const envPath = this.nas.resolve('config/environment.json');
+      const envPath = this.nas.resolve('config', 'environment.json');
       if (existsSync(envPath)) {
         const existing = JSON.parse(readFileSync(envPath, 'utf-8')) as Record<string, string>;
         delete existing[key];
@@ -2432,7 +2508,7 @@ export class GatewayServer {
   private async getPluginsList(): Promise<{ agents: Array<Record<string, unknown>> }> {
     const agents: Array<Record<string, unknown>> = [];
     try {
-      const allAgents = await this.store.getAllAgents();
+      const allAgents = await this.store.getAllAgentStates();
       for (const agent of allAgents) {
         const agentId = agent.identity?.agentId ?? 'unknown';
         // Try to get capabilities from NATS
@@ -2499,7 +2575,7 @@ export class GatewayServer {
 
     // Try to route to an available agent
     try {
-      const allAgents = await this.store.getAllAgents();
+      const allAgents = await this.store.getAllAgentStates();
       const idleAgent = allAgents.find((a) => a.status === 'idle');
 
       if (idleAgent) {
@@ -2596,7 +2672,7 @@ export class GatewayServer {
   private getVoiceSettings(): Record<string, unknown> {
     // Load voice settings from NAS config
     try {
-      const settingsPath = this.nas.resolve('config/voice-settings.json');
+      const settingsPath = this.nas.resolve('config', 'voice-settings.json');
       if (existsSync(settingsPath)) {
         return JSON.parse(readFileSync(settingsPath, 'utf-8'));
       }
@@ -2628,12 +2704,29 @@ export class GatewayServer {
 
   // --- File Manager ---
 
+  /** Validate that a resolved path is within the NAS base directory (prevents path traversal) */
+  private assertPathWithinNas(fullPath: string): void {
+    const nasBase = resolve(this.nas.getBasePath());
+    const resolved = resolve(fullPath);
+    if (!resolved.startsWith(nasBase + '/') && resolved !== nasBase) {
+      throw new Error('Path traversal detected: path escapes NAS directory');
+    }
+  }
+
+  /** Validate that a session ID contains only safe characters */
+  private assertSafeSessionId(sessionId: string): void {
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      throw new Error('Invalid session ID: contains unsafe characters');
+    }
+  }
+
   private listFiles(reqPath: string): { entries: Array<Record<string, unknown>>; path: string } {
     const entries: Array<Record<string, unknown>> = [];
     try {
       // Resolve relative to NAS root
       const cleanPath = reqPath === '/' ? '' : reqPath.replace(/^\/+/, '');
-      const fullPath = cleanPath ? this.nas.resolve(cleanPath) : this.nas.resolve('.');
+      const fullPath = cleanPath ? join(this.nas.getBasePath(), cleanPath) : this.nas.getBasePath();
+      this.assertPathWithinNas(fullPath);
       const resolvedPath = cleanPath || '/';
 
       if (!existsSync(fullPath)) {
@@ -2678,7 +2771,8 @@ export class GatewayServer {
   private readFile(reqPath: string): Record<string, unknown> {
     try {
       const cleanPath = reqPath.replace(/^\/+/, '');
-      const fullPath = this.nas.resolve(cleanPath);
+      const fullPath = join(this.nas.getBasePath(), cleanPath);
+      this.assertPathWithinNas(fullPath);
 
       if (!existsSync(fullPath)) {
         throw new Error(`File not found: ${reqPath}`);
@@ -2716,102 +2810,24 @@ export class GatewayServer {
   // Inspired by OpenClaw multi-channel architecture
   // ==========================================================================
 
-  // --- Channel Config (shared) ---
+  // --- Channel Config (delegated to channels/config.ts) ---
 
   private getChannelConfig(channel: string): Record<string, unknown> {
-    const configPath = this.nas.resolve('config', `${channel}.json`);
-    try {
-      if (existsSync(configPath)) {
-        return JSON.parse(readFileSync(configPath, 'utf-8'));
-      }
-    } catch { /* ignore */ }
-
-    // Defaults per channel
-    const defaults: Record<string, Record<string, unknown>> = {
-      whatsapp: {
-        autoReplyEnabled: false,
-        autoReplyLanguage: 'pl',
-        jarvisMode: true,
-        notifyOnMessage: true,
-        autoConnect: false,
-      },
-      telegram: {
-        botToken: process.env['TELEGRAM_BOT_TOKEN'] ?? '',
-        chatId: process.env['TELEGRAM_CHAT_ID'] ?? '',
-        webhookUrl: '',
-        autoReplyEnabled: false,
-        autoReplyLanguage: 'pl',
-        jarvisMode: true,
-        allowedUsers: [],
-        notifyOnMessage: true,
-      },
-      discord: {
-        botToken: process.env['DISCORD_BOT_TOKEN'] ?? '',
-        applicationId: process.env['DISCORD_APP_ID'] ?? '',
-        guildId: process.env['DISCORD_GUILD_ID'] ?? '',
-        channelId: process.env['DISCORD_CHANNEL_ID'] ?? '',
-        webhookUrl: process.env['DISCORD_WEBHOOK_URL'] ?? '',
-        autoReplyEnabled: false,
-        autoReplyLanguage: 'pl',
-        jarvisMode: true,
-        notifyOnMessage: true,
-      },
-    };
-
-    return defaults[channel] ?? {};
+    return _getChannelConfig(this.nas, channel);
   }
 
   private setChannelConfig(channel: string, updates: Record<string, unknown>): { success: boolean; config: Record<string, unknown> } {
-    const configPath = this.nas.resolve('config', `${channel}.json`);
-    let config = this.getChannelConfig(channel);
-    config = { ...config, ...updates, updatedAt: new Date().toISOString() };
-
-    try {
-      const configDir = this.nas.resolve('config');
-      if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
-      writeFileSync(configPath, JSON.stringify(config, null, 2));
-      log.info(`${channel} config updated`);
-      return { success: true, config };
-    } catch (err) {
-      log.error(`Failed to save ${channel} config`, { error: String(err) });
-      return { success: false, config };
-    }
+    return _setChannelConfig(this.nas, channel, updates);
   }
 
-  // --- Channel Messages (shared NAS storage) ---
+  // --- Channel Messages (delegated to channels/config.ts) ---
 
   private getChannelMessages(channel: string, limit: number): { messages: Array<Record<string, unknown>> } {
-    const dir = this.nas.resolve('channels', channel);
-    // Try JSONL first (new format), then fall back to JSON (legacy)
-    const jsonlPath = join(dir, 'messages.jsonl');
-    const jsonPath = join(dir, 'messages.json');
-    try {
-      if (existsSync(jsonlPath)) {
-        const content = readFileSync(jsonlPath, 'utf-8');
-        const lines = content.trim().split('\n').filter(Boolean);
-        const messages = lines
-          .map((l) => { try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; } })
-          .filter(Boolean) as Array<Record<string, unknown>>;
-        return { messages: messages.slice(-limit) };
-      }
-      // Legacy: read from messages.json
-      if (existsSync(jsonPath)) {
-        const all = JSON.parse(readFileSync(jsonPath, 'utf-8')) as Array<Record<string, unknown>>;
-        return { messages: all.slice(-limit) };
-      }
-    } catch { /* ignore */ }
-    return { messages: [] };
+    return _getChannelMessages(this.nas, channel, limit);
   }
 
   private appendChannelMessage(channel: string, message: Record<string, unknown>): void {
-    const dir = this.nas.resolve('channels', channel);
-    const file = join(dir, 'messages.jsonl');
-    try {
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      appendFileSync(file, JSON.stringify(message) + '\n', 'utf-8');
-    } catch (err) {
-      log.error(`Failed to save ${channel} message`, { error: String(err) });
-    }
+    _appendChannelMessage(this.nas, channel, message);
   }
 
   // --- WhatsApp (Baileys — QR Code Login) ---
@@ -3453,7 +3469,8 @@ export class GatewayServer {
       else if (channel === 'discord') connected = !!(config.botToken || config.webhookUrl);
       else if (channel === 'imessage') connected = process.platform === 'darwin';
 
-      const allMsgs = this.getChannelMessages(channel, 99999);
+      // Read a reasonable upper bound of messages for counting (avoid loading huge files)
+      const allMsgs = this.getChannelMessages(channel, 10_000);
 
       channels.push({
         id: channel,
@@ -3952,6 +3969,7 @@ end tell`;
 
   private persistChatMessage(sessionId: string, msg: ChatMessage): void {
     try {
+      this.assertSafeSessionId(sessionId);
       const chatDir = this.nas.resolve('chat');
       if (!existsSync(chatDir)) mkdirSync(chatDir, { recursive: true });
 
@@ -3968,7 +3986,8 @@ end tell`;
 
   private getChatHistory(sessionId: string, limit: number): ChatMessage[] {
     try {
-      const sessionFile = this.nas.resolve(`chat/${sessionId}.jsonl`);
+      this.assertSafeSessionId(sessionId);
+      const sessionFile = join(this.nas.resolve('chat'), `${sessionId}.jsonl`);
       if (!existsSync(sessionFile)) return [];
 
       const content = readFileSync(sessionFile, 'utf-8');
@@ -4040,7 +4059,8 @@ end tell`;
 
   private deleteChatSession(sessionId: string): { success: boolean } {
     try {
-      const sessionFile = this.nas.resolve(`chat/${sessionId}.jsonl`);
+      if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) throw new Error('Invalid session ID');
+      const sessionFile = this.nas.resolve('chat', `${sessionId}.jsonl`);
       if (existsSync(sessionFile)) unlinkSync(sessionFile);
       return { success: true };
     } catch {
@@ -4136,7 +4156,7 @@ end tell`;
   }
 
   private readMemoryFile(file: string): { content: string; file: string; lines: number; sizeBytes: number } | { error: string } {
-    const safeName = file.replace(/\.\./g, '').replace(/^\//, '');
+    const safeName = file.replace(/^\//, '');
     const knowledgeDir = this.nas.resolve('knowledge');
     let filePath: string;
 
@@ -4144,6 +4164,13 @@ end tell`;
       filePath = join(knowledgeDir, 'MEMORY.md');
     } else {
       filePath = join(knowledgeDir, 'memory', safeName);
+    }
+
+    // Validate resolved path stays within knowledge directory
+    const resolvedPath = resolve(filePath);
+    const resolvedKnowledgeDir = resolve(knowledgeDir);
+    if (!resolvedPath.startsWith(resolvedKnowledgeDir + '/') && resolvedPath !== resolvedKnowledgeDir) {
+      return { error: 'Invalid file path: path traversal detected' };
     }
 
     if (!existsSync(filePath)) {
@@ -4179,7 +4206,8 @@ end tell`;
         return { success: true, file: 'MEMORY.md', message: 'Saved to core memory' };
       }
     } catch (err) {
-      return { success: false, file: '', message: String(err) };
+      log.error('Failed to save memory', { error: String(err) });
+      return { success: false, file: '', message: 'Failed to save memory entry' };
     }
   }
 
@@ -4209,8 +4237,14 @@ end tell`;
 
   private deleteMemoryFile(file: string): { success: boolean } {
     if (file === 'MEMORY.md') return { success: false };
-    const safeName = file.replace(/\.\./g, '').replace(/^\//, '');
-    const filePath = join(this.nas.resolve('knowledge', 'memory'), safeName);
+    // Only allow safe filenames (no path separators, no traversal)
+    if (!/^[a-zA-Z0-9_.\-]+$/.test(file)) return { success: false };
+    const memoryDir = this.nas.resolve('knowledge', 'memory');
+    const filePath = join(memoryDir, file);
+    // Verify the resolved path stays within the memory directory
+    const resolvedPath = resolve(filePath);
+    const resolvedMemoryDir = resolve(memoryDir);
+    if (!resolvedPath.startsWith(resolvedMemoryDir + '/')) return { success: false };
     try {
       if (existsSync(filePath)) { unlinkSync(filePath); return { success: true }; }
       return { success: false };
@@ -4330,7 +4364,7 @@ end tell`;
     const approval = this.pendingApprovals[idx];
     this.pendingApprovals.splice(idx, 1);
 
-    // Save to history
+    // Save to history (cap in-memory array to prevent unbounded growth)
     this.approvalHistory.push({
       id: approval.id,
       agentId: approval.agentId,
@@ -4341,6 +4375,9 @@ end tell`;
       decidedAt: Date.now(),
       denyReason: reason,
     });
+    if (this.approvalHistory.length > 1000) {
+      this.approvalHistory = this.approvalHistory.slice(-500);
+    }
 
     // Persist history to NAS
     try {
@@ -4406,11 +4443,4 @@ end tell`;
   }
 }
 
-// --- Module-level helpers ---
-
-function formatDuration(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
+// Module-level helpers moved to ./utils.ts

@@ -95,11 +95,8 @@ export function useVoiceRecognition() {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          // @ts-expect-error - experimental constraint for advanced noise reduction
           googNoiseSuppression: true,
-          // @ts-expect-error - experimental
           googHighpassFilter: true,
-          // @ts-expect-error - experimental
           googAutoGainControl: true,
         },
       });
@@ -238,7 +235,6 @@ export function useVoiceRecognition() {
         // Deduplicate: prevent the same transcript from firing twice rapidly
         const now = Date.now();
         if (trimmed === lastFinalResultRef.current && now - lastFinalTimeRef.current < 3000) {
-          console.log('[Voice] Skipping duplicate recognition result:', trimmed);
           return;
         }
         lastFinalResultRef.current = trimmed;

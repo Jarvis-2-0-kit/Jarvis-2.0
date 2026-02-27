@@ -15,8 +15,16 @@
 import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
+import { isPrivateUrl } from './ssrf.js';
 
 const log = createLogger('tool:browser');
+
+const MAX_TEXT_CONTENT = 50_000; // 50KB page text cap
+const MAX_SNAPSHOT_SIZE = 30_000; // 30KB accessibility tree cap
+const DEFAULT_BROWSER_TIMEOUT = 10_000; // 10s default action timeout
+const DEFAULT_NAV_TIMEOUT = 30_000; // 30s default navigation timeout
+const DEFAULT_SCROLL_PX = 500; // default scroll amount in pixels
+const MAX_WAIT_TIMEOUT = 30_000; // 30s max wait timeout
 
 // ─── Ref tracking ─────────────────────────────────────────────────────
 
@@ -173,10 +181,10 @@ export class BrowserTool implements AgentTool {
   private async navigate(params: Record<string, unknown>): Promise<ToolResult> {
     const url = params['url'] as string;
     if (!url) return createErrorResult('Missing url for navigate action');
-    const timeout = (params['timeout'] as number) || 30_000;
+    const timeout = (params['timeout'] as number) || DEFAULT_NAV_TIMEOUT;
 
     // SSRF protection: block private/internal URLs
-    if (this.isPrivateUrl(url)) {
+    if (isPrivateUrl(url)) {
       return createErrorResult(`Navigation blocked: private/internal URLs are not allowed (${url})`);
     }
 
@@ -186,7 +194,7 @@ export class BrowserTool implements AgentTool {
     const currentUrl = await page.evaluate('window.location.href');
 
     // Post-redirect SSRF check
-    if (typeof currentUrl === 'string' && this.isPrivateUrl(currentUrl)) {
+    if (typeof currentUrl === 'string' && isPrivateUrl(currentUrl)) {
       await page.goto('about:blank');
       return createErrorResult(`Navigation blocked: redirected to private URL (${currentUrl})`);
     }
@@ -296,7 +304,7 @@ export class BrowserTool implements AgentTool {
     }
   }
 
-  private async screenshot(params: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
+  private async screenshot(_params: Record<string, unknown>, _context: ToolContext): Promise<ToolResult> {
     const page = await this.ensureBrowser();
     const buffer = await page.screenshot({ type: 'png', fullPage: false });
     const base64 = Buffer.from(buffer).toString('base64');
@@ -310,7 +318,7 @@ export class BrowserTool implements AgentTool {
   private async click(params: Record<string, unknown>): Promise<ToolResult> {
     const selector = this.resolveTarget(params);
     if (!selector) return createErrorResult('Missing ref or selector for click');
-    const timeout = (params['timeout'] as number) || 10_000;
+    const timeout = (params['timeout'] as number) || DEFAULT_BROWSER_TIMEOUT;
 
     const page = await this.ensureBrowser();
     await page.click(selector, { timeout });
@@ -367,7 +375,7 @@ export class BrowserTool implements AgentTool {
 
   private async scroll(params: Record<string, unknown>): Promise<ToolResult> {
     const direction = params['direction'] as string ?? 'down';
-    const amount = (params['amount'] as number) || 500;
+    const amount = (params['amount'] as number) || DEFAULT_SCROLL_PX;
 
     const page = await this.ensureBrowser();
     const deltaX = direction === 'left' ? -amount : direction === 'right' ? amount : 0;
@@ -386,8 +394,8 @@ export class BrowserTool implements AgentTool {
     }
 
     const text = await page.evaluate('document.body.innerText');
-    const truncated = typeof text === 'string' && text.length > 50_000
-      ? text.slice(0, 50_000) + '\n\n[Content truncated]'
+    const truncated = typeof text === 'string' && text.length > MAX_TEXT_CONTENT
+      ? text.slice(0, MAX_TEXT_CONTENT) + '\n\n[Content truncated]'
       : text;
     return createToolResult(typeof truncated === 'string' ? truncated : JSON.stringify(truncated));
   }
@@ -402,7 +410,7 @@ export class BrowserTool implements AgentTool {
   }
 
   private async waitFor(params: Record<string, unknown>): Promise<ToolResult> {
-    const timeout = (params['timeout'] as number) || 10_000;
+    const timeout = (params['timeout'] as number) || DEFAULT_BROWSER_TIMEOUT;
     const waitConfig = params['waitFor'] as Record<string, string> | undefined;
     const selector = this.resolveTarget(params);
     const page = await this.ensureBrowser();
@@ -431,7 +439,7 @@ export class BrowserTool implements AgentTool {
               };
               check();
             });
-          })(${JSON.stringify(text)}, ${Math.min(timeout, 30_000)})`
+          })(${JSON.stringify(text)}, ${Math.min(timeout, MAX_WAIT_TIMEOUT)})`
         );
         return createToolResult(`Text appeared: "${text}"`);
       }
@@ -445,7 +453,7 @@ export class BrowserTool implements AgentTool {
         }
         await page.evaluate(`
           new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Timeout')), ${Math.min(timeout, 30_000)});
+            const timeout = setTimeout(() => reject(new Error('Timeout')), ${Math.min(timeout, MAX_WAIT_TIMEOUT)});
             const check = () => {
               if (${fn}) {
                 clearTimeout(timeout);
@@ -467,7 +475,7 @@ export class BrowserTool implements AgentTool {
     }
 
     // Plain timeout
-    const ms = Math.min(timeout, 30_000);
+    const ms = Math.min(timeout, MAX_WAIT_TIMEOUT);
     await new Promise((r) => setTimeout(r, ms));
     return createToolResult(`Waited ${ms}ms`);
   }
@@ -523,6 +531,13 @@ export class BrowserTool implements AgentTool {
 
     this.tabs.delete(tabId);
 
+    // Actually close the page to release browser resources
+    try {
+      await page.evaluate('window.close()');
+    } catch {
+      // Page may already be closed
+    }
+
     if (tabId === this.activeTabId) {
       const first = this.tabs.entries().next().value;
       if (first) {
@@ -557,31 +572,6 @@ export class BrowserTool implements AgentTool {
     return createToolResult('Browser closed');
   }
 
-  // ─── SSRF Protection ──────────────────────────────────────────────
-
-  private isPrivateUrl(url: string): boolean {
-    try {
-      const parsed = new URL(url);
-      const hostname = parsed.hostname;
-
-      // Block localhost variants
-      if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
-      if (hostname === '0.0.0.0') return true;
-
-      // Block private IP ranges
-      if (hostname.match(/^10\./)) return true;
-      if (hostname.match(/^172\.(1[6-9]|2[0-9]|3[01])\./)) return true;
-      if (hostname.match(/^192\.168\./)) return true;
-      if (hostname.match(/^169\.254\./)) return true; // Link-local
-
-      // Block internal protocols
-      if (parsed.protocol === 'file:') return true;
-
-      return false;
-    } catch {
-      return false;
-    }
-  }
 }
 
 // ─── Minimal Playwright type stubs ────────────────────────────────────

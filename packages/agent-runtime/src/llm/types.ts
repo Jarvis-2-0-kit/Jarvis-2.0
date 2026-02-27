@@ -104,8 +104,8 @@ export interface ModelInfo {
 }
 
 export interface LLMProvider {
-  id: string;
-  name: string;
+  readonly id: string;
+  readonly name: string;
 
   /** Send a chat request and get a complete response */
   chat(request: ChatRequest): Promise<ChatResponse>;

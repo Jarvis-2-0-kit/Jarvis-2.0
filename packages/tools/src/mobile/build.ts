@@ -1,9 +1,6 @@
-import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from '../base.js';
 import { createToolResult, createErrorResult } from '../base.js';
 import { ExecTool } from '../exec.js';
-
-const log = createLogger('tool:mobile:build');
 
 const exec = new ExecTool();
 
@@ -37,6 +34,16 @@ export class MobileBuildTool implements AgentTool {
     const profile = (params['profile'] as string) || 'production';
     const platform = (params['platform'] as string) || 'all';
 
+    // Validate parameters to prevent shell injection
+    const validPlatforms = ['ios', 'android', 'all'];
+    if (!validPlatforms.includes(platform)) {
+      return createErrorResult(`Invalid platform: "${platform}". Must be one of: ${validPlatforms.join(', ')}`);
+    }
+    const validProfiles = ['development', 'preview', 'production'];
+    if (!validProfiles.includes(profile)) {
+      return createErrorResult(`Invalid profile: "${profile}". Must be one of: ${validProfiles.join(', ')}`);
+    }
+
     const ctx = { ...context, cwd: projectPath };
 
     switch (action) {
@@ -60,7 +67,7 @@ export class MobileBuildTool implements AgentTool {
 
       case 'eas_build':
         return exec.execute({
-          command: `cd "${projectPath}" && npx eas-cli build --platform ${platform} --profile ${profile} --non-interactive`,
+          command: `cd "${projectPath}" && npx eas-cli build --platform "${platform}" --profile "${profile}" --non-interactive`,
           timeout: 300_000, // 5 min (starts remote build)
         }, ctx);
 
@@ -119,22 +126,28 @@ export class MobileSubmitTool implements AgentTool {
     const profile = (params['profile'] as string) || 'production';
     const ctx = { ...context, cwd: projectPath };
 
+    // Validate profile to prevent shell injection
+    const validProfiles = ['production', 'preview'];
+    if (!validProfiles.includes(profile)) {
+      return createErrorResult(`Invalid profile: "${profile}". Must be one of: ${validProfiles.join(', ')}`);
+    }
+
     switch (action) {
       case 'submit_ios':
         return exec.execute({
-          command: `cd "${projectPath}" && npx eas-cli submit --platform ios --profile ${profile} --non-interactive`,
+          command: `cd "${projectPath}" && npx eas-cli submit --platform ios --profile "${profile}" --non-interactive`,
           timeout: 300_000,
         }, ctx);
 
       case 'submit_android':
         return exec.execute({
-          command: `cd "${projectPath}" && npx eas-cli submit --platform android --profile ${profile} --non-interactive`,
+          command: `cd "${projectPath}" && npx eas-cli submit --platform android --profile "${profile}" --non-interactive`,
           timeout: 300_000,
         }, ctx);
 
       case 'submit_both':
         return exec.execute({
-          command: `cd "${projectPath}" && npx eas-cli submit --platform all --profile ${profile} --non-interactive`,
+          command: `cd "${projectPath}" && npx eas-cli submit --platform all --profile "${profile}" --non-interactive`,
           timeout: 300_000,
         }, ctx);
 
@@ -155,8 +168,17 @@ export class MobileSubmitTool implements AgentTool {
         const platform = params['platform'] as string ?? 'ios';
         if (!lane) return createErrorResult('Fastlane action requires: lane');
 
+        // Validate lane and platform to prevent shell injection
+        if (!/^[a-zA-Z0-9_-]+$/.test(lane)) {
+          return createErrorResult('Invalid lane: only alphanumeric characters, underscores, and hyphens are allowed');
+        }
+        const validPlatforms = ['ios', 'android'];
+        if (!validPlatforms.includes(platform)) {
+          return createErrorResult(`Invalid platform: "${platform}". Must be one of: ${validPlatforms.join(', ')}`);
+        }
+
         return exec.execute({
-          command: `cd "${projectPath}" && bundle exec fastlane ${platform} ${lane}`,
+          command: `cd "${projectPath}" && bundle exec fastlane "${platform}" "${lane}"`,
           timeout: 600_000,
         }, ctx);
       }

@@ -18,7 +18,7 @@ export class GatewayClient {
   private _connected = false;
 
   constructor(
-    private url: string = `ws://${window.location.host}/ws`,
+    private url: string = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`,
     private token: string = '',
   ) {}
 

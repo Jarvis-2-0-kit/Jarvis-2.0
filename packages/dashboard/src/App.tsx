@@ -1,5 +1,5 @@
-import { useEffect, lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import React, { useEffect, lazy, Suspense } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useGatewayStore } from './store/gateway-store.js';
 import { DashboardLayout } from './layouts/DashboardLayout.js';
 import { Sidebar } from './components/nav/Sidebar.js';
@@ -42,6 +42,38 @@ const ConfigView = lazy(() => import('./views/ConfigView.js').then((m) => ({ def
 const DebugView = lazy(() => import('./views/DebugView.js').then((m) => ({ default: m.DebugView })));
 const SocialMediaView = lazy(() => import('./views/SocialMediaView.js').then((m) => ({ default: m.SocialMediaView })));
 
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '2rem', textAlign: 'center' }}>
+          <h2>Something went wrong</h2>
+          <p style={{ color: '#888' }}>{this.state.error?.message}</p>
+          <button
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.reload(); }}
+            style={{ marginTop: '1rem', padding: '0.5rem 1.5rem', cursor: 'pointer' }}
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export function App() {
   const init = useGatewayStore((s) => s.init);
   useGatewayToasts();
@@ -60,43 +92,46 @@ export function App() {
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
           <Sidebar />
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <Suspense fallback={<ViewLoader />}>
-              <Routes>
-                <Route path="/" element={<DashboardLayout />} />
-                <Route path="/chat" element={<ChatView />} />
-                <Route path="/overview" element={<OverviewView />} />
-                <Route path="/agents" element={<AgentsView />} />
-                <Route path="/sessions" element={<SessionsView />} />
-                <Route path="/tasks" element={<TasksView />} />
-                <Route path="/usage" element={<UsageView />} />
-                <Route path="/logs" element={<LogsView />} />
-                <Route path="/workflows" element={<WorkflowsView />} />
-                <Route path="/integrations" element={<IntegrationsView />} />
-                <Route path="/notifications" element={<NotificationsView />} />
-                <Route path="/api-keys" element={<ApiKeysView />} />
-                <Route path="/scheduler" element={<SchedulerView />} />
-                <Route path="/environment" element={<EnvironmentView />} />
-                <Route path="/timeline" element={<TimelineView />} />
-                <Route path="/plugins" element={<PluginsView />} />
-                <Route path="/voice" element={<VoiceView />} />
-                <Route path="/files" element={<FileManagerView />} />
-                <Route path="/channels" element={<ChannelsView />} />
-                <Route path="/whatsapp" element={<WhatsAppView />} />
-                <Route path="/telegram" element={<TelegramView />} />
-                <Route path="/discord" element={<DiscordView />} />
-                <Route path="/slack" element={<SlackView />} />
-                <Route path="/imessage" element={<IMessageView />} />
-                <Route path="/skills" element={<SkillsView />} />
-                <Route path="/providers" element={<ProvidersView />} />
-                <Route path="/memory" element={<MemoryView />} />
-                <Route path="/approvals" element={<ApprovalsView />} />
-                <Route path="/instances" element={<InstancesView />} />
-                <Route path="/orchestrator" element={<OrchestratorView />} />
-                <Route path="/config" element={<ConfigView />} />
-                <Route path="/social" element={<SocialMediaView />} />
-                <Route path="/debug" element={<DebugView />} />
-              </Routes>
-            </Suspense>
+            <ErrorBoundary>
+              <Suspense fallback={<ViewLoader />}>
+                <Routes>
+                  <Route path="/" element={<DashboardLayout />} />
+                  <Route path="/chat" element={<ChatView />} />
+                  <Route path="/overview" element={<OverviewView />} />
+                  <Route path="/agents" element={<AgentsView />} />
+                  <Route path="/sessions" element={<SessionsView />} />
+                  <Route path="/tasks" element={<TasksView />} />
+                  <Route path="/usage" element={<UsageView />} />
+                  <Route path="/logs" element={<LogsView />} />
+                  <Route path="/workflows" element={<WorkflowsView />} />
+                  <Route path="/integrations" element={<IntegrationsView />} />
+                  <Route path="/notifications" element={<NotificationsView />} />
+                  <Route path="/api-keys" element={<ApiKeysView />} />
+                  <Route path="/scheduler" element={<SchedulerView />} />
+                  <Route path="/environment" element={<EnvironmentView />} />
+                  <Route path="/timeline" element={<TimelineView />} />
+                  <Route path="/plugins" element={<PluginsView />} />
+                  <Route path="/voice" element={<VoiceView />} />
+                  <Route path="/files" element={<FileManagerView />} />
+                  <Route path="/channels" element={<ChannelsView />} />
+                  <Route path="/whatsapp" element={<WhatsAppView />} />
+                  <Route path="/telegram" element={<TelegramView />} />
+                  <Route path="/discord" element={<DiscordView />} />
+                  <Route path="/slack" element={<SlackView />} />
+                  <Route path="/imessage" element={<IMessageView />} />
+                  <Route path="/skills" element={<SkillsView />} />
+                  <Route path="/providers" element={<ProvidersView />} />
+                  <Route path="/memory" element={<MemoryView />} />
+                  <Route path="/approvals" element={<ApprovalsView />} />
+                  <Route path="/instances" element={<InstancesView />} />
+                  <Route path="/orchestrator" element={<OrchestratorView />} />
+                  <Route path="/config" element={<ConfigView />} />
+                  <Route path="/social" element={<SocialMediaView />} />
+                  <Route path="/debug" element={<DebugView />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </Suspense>
+            </ErrorBoundary>
           </div>
         </div>
 

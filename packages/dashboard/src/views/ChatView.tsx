@@ -305,7 +305,6 @@ export function ChatView() {
   useEffect(() => {
     const handler = (payload: unknown) => {
       const msg = payload as ChatMsg;
-      console.log('[chat.message]', msg.from, msg.sessionId, activeSessionId, msg.content?.slice(0, 80));
       // Filter out messages from other sessions, but always show agent responses
       if (msg.from === 'user' && msg.sessionId && msg.sessionId !== activeSessionId) return;
 
@@ -346,15 +345,14 @@ export function ChatView() {
       };
       const agentId = data.from ?? 'jarvis';
       const phase = data.phase ?? (data.done ? 'done' : 'text');
-      console.log('[chat.stream]', agentId, phase, data.toolName ?? data.text?.slice(0, 40) ?? '');
 
       if (phase === 'done') {
         setAgentStreams((prev) => {
           const next = new Map(prev);
           next.delete(agentId);
+          if (next.size === 0) setIsAgentRunning(false);
           return next;
         });
-        if (agentStreams.size <= 1) setIsAgentRunning(false);
       } else {
         setAgentStreams((prev) => {
           const next = new Map(prev);

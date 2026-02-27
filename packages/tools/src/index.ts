@@ -6,6 +6,9 @@
 export type { ToolDefinition, ToolResult, AgentTool, ToolContext } from './base.js';
 export { createToolResult, createErrorResult } from './base.js';
 
+// Shared utilities
+export { isPrivateUrl } from './ssrf.js';
+
 // Core tools
 export { ExecTool } from './exec.js';
 export { ReadTool, WriteTool, EditTool, ListTool, SearchTool } from './file-ops.js';
@@ -22,7 +25,8 @@ export { ImageGenTool } from './image-gen.js';
 
 // Social media
 export { SocialTool, SocialAnalyticsTool, type SocialToolConfig } from './social/social-tool.js';
-export { SocialSchedulerTool, type ScheduledPost } from './social/scheduler.js';
+export { SocialSchedulerTool, ScheduledPostExecutor, type ScheduledPost } from './social/scheduler.js';
+export { SocialContentGeneratorTool, type ContentGeneratorConfig } from './social/content-generator.js';
 export { TwitterClient, type TwitterConfig } from './social/platforms/twitter.js';
 export { InstagramClient, type InstagramConfig } from './social/platforms/instagram.js';
 export { FacebookClient, type FacebookConfig } from './social/platforms/meta.js';

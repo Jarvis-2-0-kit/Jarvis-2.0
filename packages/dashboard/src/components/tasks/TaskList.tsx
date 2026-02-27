@@ -73,7 +73,7 @@ export function TaskList() {
                 letterSpacing: 1,
                 color: PRIORITY_COLORS[task.priority] ?? 'var(--text-muted)',
               }}>
-                {task.priority.toUpperCase()}
+                {(task.priority ?? 'normal').toUpperCase()}
               </span>
               {task.assignedAgent && (
                 <span style={{

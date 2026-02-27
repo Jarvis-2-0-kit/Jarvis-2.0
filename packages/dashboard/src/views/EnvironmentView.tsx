@@ -7,7 +7,6 @@ import {
   Trash2,
   Eye,
   EyeOff,
-  Save,
   RefreshCw,
   Search,
   Shield,
@@ -15,7 +14,6 @@ import {
   Edit3,
   Check,
   X,
-  AlertTriangle,
   Server,
   Bot,
   Database,
@@ -131,8 +129,10 @@ export function EnvironmentView() {
     });
   };
 
-  const copyValue = (value: string) => {
-    void navigator.clipboard.writeText(value);
+  const copyValue = (env: EnvVar) => {
+    const isRevealed = revealedKeys.has(env.key);
+    const text = env.sensitive && !isRevealed ? maskValue(env.value) : env.value;
+    void navigator.clipboard.writeText(text);
   };
 
   const startEdit = (env: EnvVar) => {
@@ -147,14 +147,11 @@ export function EnvironmentView() {
       setEnvVars((prev) =>
         prev.map((v) => (v.key === editingKey ? { ...v, value: editValue } : v))
       );
+      setEditingKey(null);
+      setEditValue('');
     } catch {
-      // silently fail - still update UI
-      setEnvVars((prev) =>
-        prev.map((v) => (v.key === editingKey ? { ...v, value: editValue } : v))
-      );
+      /* save failed */
     }
-    setEditingKey(null);
-    setEditValue('');
   };
 
   const addVar = async () => {
@@ -188,7 +185,6 @@ export function EnvironmentView() {
   };
 
   // Filter
-  const categories = ['all', ...new Set(envVars.map((v) => v.category))];
   const filtered = envVars.filter((v) => {
     if (categoryFilter !== 'all' && v.category !== categoryFilter) return false;
     if (search && !v.key.toLowerCase().includes(search.toLowerCase()) && !v.value.toLowerCase().includes(search.toLowerCase())) return false;
@@ -461,7 +457,7 @@ export function EnvironmentView() {
                     </button>
                   )}
                   <button
-                    onClick={() => copyValue(env.value)}
+                    onClick={() => copyValue(env)}
                     style={{
                       all: 'unset',
                       cursor: 'pointer',

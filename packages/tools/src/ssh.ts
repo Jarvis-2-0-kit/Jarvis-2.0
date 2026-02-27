@@ -10,6 +10,7 @@ const log = createLogger('tool:ssh');
 
 const MAX_OUTPUT_SIZE = 200_000; // 200KB max output
 const DEFAULT_TIMEOUT = 120_000; // 2 minutes
+const SSH_READY_TIMEOUT = 10_000; // 10s SSH connection handshake timeout
 
 const KNOWN_HOSTS_PATH = join(process.env['HOME'] || '~', '.ssh', 'known_hosts');
 
@@ -107,16 +108,28 @@ function createHostVerifier(hostname: string): (key: Buffer) => boolean {
 }
 
 export interface SshHostConfig {
-  host: string;
-  port?: number;
-  username: string;
-  password?: string;
-  privateKeyPath?: string;
+  readonly host: string;
+  readonly port?: number;
+  readonly username: string;
+  readonly password?: string;
+  readonly privateKeyPath?: string;
+}
+
+/** Build the ssh2 connection config from a SshHostConfig */
+function buildConnectConfig(host: SshHostConfig): Record<string, unknown> {
+  return {
+    host: host.host,
+    port: host.port || 22,
+    username: host.username,
+    password: host.password,
+    hostVerifier: createHostVerifier(host.host),
+    readyTimeout: SSH_READY_TIMEOUT,
+  };
 }
 
 export interface SshToolConfig {
   /** Map of agentId -> SSH host config for target machines */
-  hosts: Record<string, SshHostConfig>;
+  readonly hosts: Record<string, SshHostConfig>;
 }
 
 /**
@@ -167,8 +180,7 @@ export class SshTool implements AgentTool {
     log.info(`SSH exec on ${hostConfig.host} (target: ${target}): ${command.slice(0, 100)}`);
 
     try {
-      const result = await this.sshExec(hostConfig, command, timeout);
-      return result;
+      return await this.sshExec(hostConfig, command, timeout);
     } catch (err) {
       log.error(`SSH exec failed: ${(err as Error).message}`);
       return createErrorResult(`SSH execution failed: ${(err as Error).message}`);
@@ -223,11 +235,15 @@ export class SshTool implements AgentTool {
           });
 
           stream.on('data', (data: Buffer) => {
-            stdout += data.toString();
+            if (stdout.length < MAX_OUTPUT_SIZE) {
+              stdout += data.toString();
+            }
           });
 
           stream.stderr.on('data', (data: Buffer) => {
-            stderr += data.toString();
+            if (stderr.length < MAX_OUTPUT_SIZE) {
+              stderr += data.toString();
+            }
           });
         });
       });
@@ -249,15 +265,7 @@ export class SshTool implements AgentTool {
         );
       }
 
-      // Connect
-      conn.connect({
-        host: host.host,
-        port: host.port || 22,
-        username: host.username,
-        password: host.password,
-        hostVerifier: createHostVerifier(host.host),
-        readyTimeout: 10000,
-      } as unknown as Record<string, unknown>);
+      conn.connect(buildConnectConfig(host) as unknown as Record<string, unknown>);
     });
   }
 }
@@ -305,11 +313,15 @@ export async function sshExecSimple(
         });
 
         stream.on('data', (data: Buffer) => {
-          stdout += data.toString();
+          if (stdout.length < MAX_OUTPUT_SIZE) {
+            stdout += data.toString();
+          }
         });
 
         stream.stderr.on('data', (data: Buffer) => {
-          stderr += data.toString();
+          if (stderr.length < MAX_OUTPUT_SIZE) {
+            stderr += data.toString();
+          }
         });
       });
     });
@@ -322,20 +334,15 @@ export async function sshExecSimple(
       }
     });
 
-    conn.connect({
-      host: host.host,
-      port: host.port || 22,
-      username: host.username,
-      password: host.password,
-      hostVerifier: createHostVerifier(host.host),
-      readyTimeout: 10000,
-    } as unknown as Record<string, unknown>);
+    conn.connect(buildConnectConfig(host) as unknown as Record<string, unknown>);
   });
 }
 
 /**
  * Helper: Execute SSH command and get raw binary stdout (for screenshots).
  */
+const MAX_BINARY_SIZE = 10_000_000; // 10MB max binary output
+
 export async function sshExecBinary(
   host: SshHostConfig,
   command: string,
@@ -344,6 +351,7 @@ export async function sshExecBinary(
   return new Promise((resolve, reject) => {
     const conn = new Client();
     const chunks: Buffer[] = [];
+    let totalSize = 0;
     let resolved = false;
 
     const timer = setTimeout(() => {
@@ -378,7 +386,10 @@ export async function sshExecBinary(
         });
 
         stream.on('data', (data: Buffer) => {
-          chunks.push(data);
+          if (totalSize < MAX_BINARY_SIZE) {
+            chunks.push(data);
+            totalSize += data.length;
+          }
         });
 
         stream.stderr.on('data', (data: Buffer) => {
@@ -396,13 +407,6 @@ export async function sshExecBinary(
       }
     });
 
-    conn.connect({
-      host: host.host,
-      port: host.port || 22,
-      username: host.username,
-      password: host.password,
-      hostVerifier: createHostVerifier(host.host),
-      readyTimeout: 10000,
-    } as unknown as Record<string, unknown>);
+    conn.connect(buildConnectConfig(host) as unknown as Record<string, unknown>);
   });
 }

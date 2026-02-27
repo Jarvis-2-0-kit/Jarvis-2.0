@@ -87,13 +87,13 @@ export function OrchestratorView() {
 
   // Inject CSS
   useEffect(() => {
-    const id = 'orch-css';
-    if (!document.getElementById(id)) {
-      const s = document.createElement('style');
-      s.id = id;
-      s.textContent = CSS;
-      document.head.appendChild(s);
-    }
+    const styleId = 'orchestrator-dag-styles';
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = CSS;
+    document.head.appendChild(style);
+    return () => { style.remove(); };
   }, []);
 
   const loadData = useCallback(async () => {

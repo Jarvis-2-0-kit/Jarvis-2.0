@@ -7,8 +7,8 @@ import { BrowserTool } from './browser.js';
 import { WebFetchTool } from './web-fetch.js';
 import { WebSearchTool } from './web-search.js';
 import { MessageAgentTool } from './message-agent.js';
-import { SshTool, type SshToolConfig, type SshHostConfig } from './ssh.js';
-import { ComputerUseTool, type ComputerUseConfig, type VncHostConfig } from './computer-use.js';
+import { SshTool, type SshHostConfig } from './ssh.js';
+import { ComputerUseTool, type VncHostConfig } from './computer-use.js';
 import { IMessageTool, type IMessageConfig } from './integrations/imessage.js';
 import { SpotifyTool, type SpotifyConfig } from './integrations/spotify.js';
 import { HomeAssistantTool, type HomeAssistantConfig } from './integrations/homeassistant.js';
@@ -16,6 +16,7 @@ import { CronSchedulerTool, type CronSchedulerConfig } from './integrations/cron
 import { AppleCalendarTool, type AppleCalendarConfig } from './integrations/apple-calendar.js';
 import { SocialTool, SocialAnalyticsTool, type SocialToolConfig } from './social/social-tool.js';
 import { SocialSchedulerTool } from './social/scheduler.js';
+import { SocialContentGeneratorTool } from './social/content-generator.js';
 import { ImageGenTool } from './image-gen.js';
 
 const log = createLogger('tools:registry');
@@ -40,6 +41,7 @@ export interface ToolRegistryConfig {
   openaiApiKey?: string;
   /** Social media */
   enableSocial?: boolean;
+  anthropicApiKey?: string;
   braveApiKey?: string;
   perplexityApiKey?: string;
   natsPublishFn?: (subject: string, data: string) => Promise<void>;
@@ -137,6 +139,9 @@ export class ToolRegistry {
       this.register(new SocialTool(config.socialConfig));
       this.register(new SocialAnalyticsTool(config.socialConfig));
       this.register(new SocialSchedulerTool());
+      if (config.anthropicApiKey) {
+        this.register(new SocialContentGeneratorTool({ anthropicApiKey: config.anthropicApiKey }));
+      }
     }
 
     log.info(`Initialized with ${this.tools.size} tools: ${Array.from(this.tools.keys()).join(', ')}`);

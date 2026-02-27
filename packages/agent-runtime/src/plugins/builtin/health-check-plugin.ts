@@ -38,12 +38,25 @@ interface HealthCheckResult {
   eventLoopLagMs: number;
 }
 
+/** Heap usage in MB above which health is 'fail' */
+const HEAP_CRITICAL_MB = 500;
+/** Heap usage in MB above which health is 'warn' */
+const HEAP_WARNING_MB = 300;
+/** Event loop lag in ms above which health is 'warn' */
+const EVENT_LOOP_LAG_WARN_MS = 100;
+/** Active handles count above which health is 'warn' */
+const ACTIVE_HANDLES_WARN = 100;
+/** Memory growth percentage above which a trend warning is raised */
+const MEMORY_GROWTH_WARN_PCT = 100;
+/** Health check interval in the background service (ms) */
+const HEALTH_CHECK_INTERVAL_MS = 60_000;
+
 export function createHealthCheckPlugin(): JarvisPluginDefinition {
   const history: HealthCheckResult[] = [];
   const MAX_HISTORY = 60; // Keep 1 hour at 60s intervals
   let baselineMemory = 0;
 
-  function runHealthCheck(nasPath: string): HealthCheckResult {
+  async function runHealthCheck(nasPath: string): Promise<HealthCheckResult> {
     const checks: HealthCheckResult['checks'] = [];
 
     // 1. Memory check
@@ -52,9 +65,9 @@ export function createHealthCheckPlugin(): JarvisPluginDefinition {
     const heapTotalMB = Math.round(memUsage.heapTotal / 1024 / 1024);
     const rssMB = Math.round(memUsage.rss / 1024 / 1024);
 
-    if (heapMB > 500) {
+    if (heapMB > HEAP_CRITICAL_MB) {
       checks.push({ name: 'memory', status: 'fail', value: `${heapMB}MB heap`, message: 'Heap usage critically high' });
-    } else if (heapMB > 300) {
+    } else if (heapMB > HEAP_WARNING_MB) {
       checks.push({ name: 'memory', status: 'warn', value: `${heapMB}MB heap`, message: 'Heap usage elevated' });
     } else {
       checks.push({ name: 'memory', status: 'pass', value: `${heapMB}/${heapTotalMB}MB heap, ${rssMB}MB RSS` });
@@ -64,20 +77,21 @@ export function createHealthCheckPlugin(): JarvisPluginDefinition {
     if (baselineMemory > 0) {
       const growth = heapMB - baselineMemory;
       const growthPct = (growth / baselineMemory) * 100;
-      if (growthPct > 100) {
+      if (growthPct > MEMORY_GROWTH_WARN_PCT) {
         checks.push({ name: 'memory-trend', status: 'warn', value: `+${growth}MB (+${growthPct.toFixed(0)}%)`, message: 'Significant memory growth since start' });
       } else {
         checks.push({ name: 'memory-trend', status: 'pass', value: `+${growth}MB since start` });
       }
     }
 
-    // 3. Event loop lag
-    const lagStart = Date.now();
-    // Synchronous approximation
-    const lagMs = Date.now() - lagStart;
+    // 3. Event loop lag — use setTimeout to measure actual event loop delay
+    const lagMs = await new Promise<number>((resolve) => {
+      const start = Date.now();
+      setTimeout(() => resolve(Date.now() - start), 0);
+    });
     checks.push({
       name: 'event-loop',
-      status: lagMs > 100 ? 'warn' : 'pass',
+      status: lagMs > EVENT_LOOP_LAG_WARN_MS ? 'warn' : 'pass',
       value: `${lagMs}ms lag`,
     });
 
@@ -104,7 +118,7 @@ export function createHealthCheckPlugin(): JarvisPluginDefinition {
     // 6. Active handles/requests (sign of resource leaks)
     const activeHandles = (process as unknown as { _getActiveHandles?: () => unknown[] })._getActiveHandles?.()?.length ?? -1;
     const activeRequests = (process as unknown as { _getActiveRequests?: () => unknown[] })._getActiveRequests?.()?.length ?? -1;
-    if (activeHandles > 100) {
+    if (activeHandles > ACTIVE_HANDLES_WARN) {
       checks.push({ name: 'handles', status: 'warn', value: `${activeHandles} active handles`, message: 'High number of active handles' });
     } else if (activeHandles >= 0) {
       checks.push({ name: 'handles', status: 'pass', value: `${activeHandles} handles, ${activeRequests} requests` });
@@ -160,7 +174,7 @@ export function createHealthCheckPlugin(): JarvisPluginDefinition {
           properties: {},
         },
         execute: async () => {
-          const result = runHealthCheck(api.config.nasPath);
+          const result = await runHealthCheck(api.config.nasPath);
 
           const statusEmoji = result.status === 'healthy' ? '[OK]' : result.status === 'degraded' ? '[WARN]' : '[FAIL]';
           const lines = [
@@ -225,13 +239,13 @@ export function createHealthCheckPlugin(): JarvisPluginDefinition {
 
       // --- Hooks ---
 
-      api.on('agent_start', () => {
+      api.on('agent_start', async () => {
         const memUsage = process.memoryUsage();
         baselineMemory = Math.round(memUsage.heapUsed / 1024 / 1024);
         log.info(`Health baseline set: ${baselineMemory}MB heap`);
 
         // Run initial check
-        const initial = runHealthCheck(api.config.nasPath);
+        const initial = await runHealthCheck(api.config.nasPath);
         log.info(`Initial health: ${initial.status}`, {
           memoryMB: initial.memoryMB,
           checks: initial.checks.length,
@@ -243,8 +257,8 @@ export function createHealthCheckPlugin(): JarvisPluginDefinition {
       api.registerService({
         name: 'health-monitor',
         start: async () => {
-          const interval = setInterval(() => {
-            const result = runHealthCheck(api.config.nasPath);
+          const interval = setInterval(async () => {
+            const result = await runHealthCheck(api.config.nasPath);
             if (result.status === 'unhealthy') {
               log.error(`Health check UNHEALTHY`, {
                 memoryMB: result.memoryMB,
@@ -256,7 +270,7 @@ export function createHealthCheckPlugin(): JarvisPluginDefinition {
                 warnChecks: result.checks.filter((c) => c.status === 'warn').map((c) => c.name),
               });
             }
-          }, 60_000); // Check every 60 seconds
+          }, HEALTH_CHECK_INTERVAL_MS);
 
           return () => clearInterval(interval);
         },

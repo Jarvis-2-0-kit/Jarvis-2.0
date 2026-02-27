@@ -17,9 +17,9 @@ import { createToolResult, createErrorResult } from '../base.js';
 
 export interface HomeAssistantConfig {
   /** Home Assistant base URL (e.g., http://192.168.1.100:8123) */
-  url?: string;
+  readonly url?: string;
   /** Long-lived access token */
-  token?: string;
+  readonly token?: string;
 }
 
 type HassAction =
@@ -58,14 +58,20 @@ class HassAPI {
   }
 
   private async fetch(endpoint: string, options: RequestInit = {}): Promise<unknown> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30_000);
+
     const res = await fetch(`${this.url}/api${endpoint}`, {
       ...options,
+      signal: controller.signal,
       headers: {
         Authorization: `Bearer ${this.token}`,
         'Content-Type': 'application/json',
         ...((options.headers as Record<string, string>) || {}),
       },
     });
+
+    clearTimeout(timeoutId);
 
     if (!res.ok) {
       const text = await res.text();
@@ -425,6 +431,13 @@ export class HomeAssistantTool implements AgentTool {
     const entityId = params['entity_id'] as string;
     const data = params['data'] as Record<string, unknown>;
 
+    // Validate entity_id format to prevent path traversal in API URLs
+    if (entityId && !/^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$/.test(entityId)) {
+      return createErrorResult(
+        `Invalid entity_id format: "${entityId}". Expected format: domain.name (e.g., light.living_room)`
+      );
+    }
+
     try {
       switch (action) {
         case 'status':
@@ -458,6 +471,13 @@ export class HomeAssistantTool implements AgentTool {
           const domain = params['domain'] as string;
           const service = params['service'] as string;
           if (!domain || !service) return createErrorResult('call_service requires domain and service');
+          // Validate domain and service to prevent path traversal in API URL
+          if (!/^[a-zA-Z0-9_]+$/.test(domain)) {
+            return createErrorResult(`Invalid domain: "${domain}". Only alphanumeric and underscores allowed.`);
+          }
+          if (!/^[a-zA-Z0-9_]+$/.test(service)) {
+            return createErrorResult(`Invalid service: "${service}". Only alphanumeric and underscores allowed.`);
+          }
           return createToolResult(await this.api.callService(domain, service, data));
         }
 
@@ -479,7 +499,7 @@ export class HomeAssistantTool implements AgentTool {
 
         case 'history': {
           if (!entityId) return createErrorResult('history requires entity_id');
-          const hours = (params['hours'] as number) || 24;
+          const hours = Math.max(1, Math.min(720, (params['hours'] as number) || 24)); // Cap at 30 days
           return createToolResult(await this.api.getHistory(entityId, hours));
         }
 

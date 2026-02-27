@@ -1,11 +1,9 @@
 import { readFile, writeFile, readdir, stat, mkdir } from 'node:fs/promises';
 import { join, dirname, resolve, relative } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
-import { createLogger, getAuditLogger } from '@jarvis/shared';
+import { getAuditLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
-
-const log = createLogger('tool:file');
 
 const MAX_FILE_SIZE = 1_000_000; // 1MB read limit
 const MAX_LINES = 5000;
@@ -377,8 +375,11 @@ function resolvePath(rawPath: string, context: ToolContext, operation: 'read' | 
   return resolved;
 }
 
+const BYTES_PER_KB = 1024;
+const BYTES_PER_MB = 1024 * 1024;
+
 function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / 1048576).toFixed(1)}MB`;
+  if (bytes < BYTES_PER_KB) return `${bytes}B`;
+  if (bytes < BYTES_PER_MB) return `${(bytes / BYTES_PER_KB).toFixed(1)}KB`;
+  return `${(bytes / BYTES_PER_MB).toFixed(1)}MB`;
 }

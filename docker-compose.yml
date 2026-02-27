@@ -10,6 +10,9 @@ services:
       --http_port 8222
       --max_payload 8MB
       --max_connections 100
+      --auth ${NATS_TOKEN}
+    environment:
+      - NATS_TOKEN=${NATS_TOKEN}
     restart: unless-stopped
 
   redis:

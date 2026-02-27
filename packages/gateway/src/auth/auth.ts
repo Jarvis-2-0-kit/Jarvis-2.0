@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createHash } from 'node:crypto';
 import { createLogger, sha256, generateToken } from '@jarvis/shared';
 
 const log = createLogger('gateway:auth');
@@ -11,7 +11,7 @@ export interface AuthConfig {
 }
 
 export class AuthManager {
-  private config: AuthConfig;
+  private readonly config: AuthConfig;
 
   constructor(dashboardToken: string) {
     if (!dashboardToken) {
@@ -45,11 +45,8 @@ export class AuthManager {
 
   /** Verify dashboard token (timing-safe) */
   verifyDashboardToken(token: string): boolean {
-    const a = Buffer.from(token);
-    const b = Buffer.from(this.config.dashboardToken);
-    if (a.length !== b.length) {
-      return false;
-    }
+    const a = createHash('sha256').update(token).digest();
+    const b = createHash('sha256').update(this.config.dashboardToken).digest();
     return timingSafeEqual(a, b);
   }
 

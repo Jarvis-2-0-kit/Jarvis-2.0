@@ -64,6 +64,10 @@ function genId(): string {
 
 // Keep last N entries in memory
 const MAX_ENTRIES = 500;
+/** Stale tool-call timer threshold (10 minutes) */
+const STALE_TIMER_MS = 600_000;
+/** Interval for cleaning stale tool-call timers (5 minutes) */
+const TIMER_CLEANUP_INTERVAL_MS = 300_000;
 
 // ─── Plugin ───────────────────────────────────────────────────────────
 
@@ -342,6 +346,24 @@ export function createActivityTimelinePlugin(): JarvisPluginDefinition {
       // Messages
       api.on('message_received', (event) => {
         addEntry(api.config.agentId, 'message', 'message_in', `[${event.source}] ${event.content.slice(0, 100)}${event.content.length > 100 ? '...' : ''}`);
+      });
+
+      // ─── Service: stale timer cleanup ──────────────────────
+
+      api.registerService({
+        name: 'timeline-timer-cleanup',
+        start: async () => {
+          const interval = setInterval(() => {
+            const now = Date.now();
+            for (const [key, startTime] of toolCallTimers) {
+              if (now - startTime > STALE_TIMER_MS) {
+                toolCallTimers.delete(key);
+              }
+            }
+          }, TIMER_CLEANUP_INTERVAL_MS);
+          interval.unref();
+          return () => clearInterval(interval);
+        },
       });
 
       // Add prompt section

@@ -9,7 +9,7 @@ export const DEFAULT_WEBSOCKIFY_PORT = 6080;
 export const HEARTBEAT_INTERVAL = 10_000;
 
 /** Agent considered dead after this many missed heartbeats */
-export const HEARTBEAT_TIMEOUT = 35_000;
+export const HEARTBEAT_TIMEOUT = 30_000;
 
 /** Max tool result text length before truncation */
 export const MAX_TOOL_RESULT_LENGTH = 8_000;
@@ -34,6 +34,7 @@ export const NAS_DIRS = {
   media: 'media',
   config: 'config',
   channels: 'channels',
+  chat: 'chat',
   'whatsapp-auth': 'whatsapp-auth',
   'cron-jobs': 'cron-jobs',
   workflows: 'workflows',
@@ -52,6 +53,18 @@ export const TB_MASTER_IP = `${TB_IP_PREFIX}.1`;
 export const TB_ALPHA_IP = `${TB_IP_PREFIX}.2`;
 export const TB_BETA_IP = `${TB_IP_PREFIX}.3`;
 export const TB_SUBNET_MASK = '255.255.0.0';
+
+/** Default NATS connection URL */
+export const DEFAULT_NATS_URL = `nats://localhost:${DEFAULT_NATS_PORT}`;
+
+/** Default Redis connection URL */
+export const DEFAULT_REDIS_URL = `redis://localhost:${DEFAULT_REDIS_PORT}`;
+
+/** Default channel message fetch limit */
+export const DEFAULT_MESSAGE_LIMIT = 200;
+
+/** Max file size (bytes) for preview reads */
+export const MAX_FILE_PREVIEW_BYTES = 1_048_576; // 1 MB
 
 /** Project name */
 export const PROJECT_NAME = 'Jarvis 2.0';

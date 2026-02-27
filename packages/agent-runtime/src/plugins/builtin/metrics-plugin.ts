@@ -8,7 +8,7 @@
  * - session_end hook: Save session metrics to NAS
  */
 
-import { existsSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { JarvisPluginDefinition } from '../types.js';
 
@@ -88,8 +88,8 @@ export function createMetricsPlugin(): JarvisPluginDefinition {
         const dailyPath = join(metricsDir, `${dateStr}.jsonl`);
 
         try {
-          const existing = existsSync(dailyPath) ? readFileSync(dailyPath, 'utf-8') : '';
-          writeFileSync(dailyPath, existing + JSON.stringify(metricsData) + '\n');
+          if (!existsSync(metricsDir)) mkdirSync(metricsDir, { recursive: true });
+          appendFileSync(dailyPath, JSON.stringify(metricsData) + '\n');
           api.logger.info(`Session metrics saved: ${sessionMetrics.llmCalls} LLM calls, ${sessionMetrics.toolCalls} tools, ${sessionMetrics.totalTokens} tokens`);
         } catch (err) {
           api.logger.error(`Failed to save metrics: ${(err as Error).message}`);

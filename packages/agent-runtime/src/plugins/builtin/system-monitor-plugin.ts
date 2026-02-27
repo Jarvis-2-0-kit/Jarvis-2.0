@@ -23,6 +23,21 @@ import { execSync } from 'node:child_process';
 import { cpus, totalmem, freemem, uptime, hostname, platform, arch, loadavg, networkInterfaces } from 'node:os';
 import type { JarvisPluginDefinition } from '../types.js';
 
+/** Timeout for shell commands (e.g. df, ps, sysctl) in milliseconds */
+const EXEC_TIMEOUT_MS = 5000;
+/** CPU load threshold multiplier — critical */
+const CPU_LOAD_CRITICAL = 0.9;
+/** CPU load threshold multiplier — warning */
+const CPU_LOAD_WARNING = 0.7;
+/** Memory usage threshold — critical (percent) */
+const MEMORY_CRITICAL_PCT = 90;
+/** Memory usage threshold — warning (percent) */
+const MEMORY_WARNING_PCT = 75;
+/** Disk usage threshold — critical (percent) */
+const DISK_CRITICAL_PCT = 90;
+/** Disk usage threshold — warning (percent) */
+const DISK_WARNING_PCT = 80;
+
 // ─── Types ────────────────────────────────────────────────────────────
 
 interface CpuMetrics {
@@ -130,7 +145,7 @@ function getMemoryMetrics(): MemoryMetrics {
   let swapUsed = 0;
   if (platform() === 'darwin') {
     try {
-      const swapInfo = execSync('sysctl -n vm.swapusage', { timeout: 5000 }).toString().trim();
+      const swapInfo = execSync('sysctl -n vm.swapusage', { timeout: EXEC_TIMEOUT_MS }).toString().trim();
       // Format: "total = 2048.00M  used = 1024.00M  free = 1024.00M  (encrypted)"
       const totalMatch = swapInfo.match(/total\s*=\s*([\d.]+)M/);
       const usedMatch = swapInfo.match(/used\s*=\s*([\d.]+)M/);
@@ -153,7 +168,7 @@ function getDiskMetrics(): DiskMetrics {
   const mounts: DiskMetrics['mounts'] = [];
 
   try {
-    const dfOutput = execSync('df -g 2>/dev/null || df -BG 2>/dev/null', { timeout: 5000 }).toString().trim();
+    const dfOutput = execSync('df -g 2>/dev/null || df -BG 2>/dev/null', { timeout: EXEC_TIMEOUT_MS }).toString().trim();
     const lines = dfOutput.split('\n').slice(1); // Skip header
 
     for (const line of lines) {
@@ -211,7 +226,7 @@ function getNetworkMetrics(): NetworkMetrics {
   let connections: number | undefined;
   if (platform() === 'darwin') {
     try {
-      const netstat = execSync('netstat -an 2>/dev/null | grep ESTABLISHED | wc -l', { timeout: 5000 }).toString().trim();
+      const netstat = execSync('netstat -an 2>/dev/null | grep ESTABLISHED | wc -l', { timeout: EXEC_TIMEOUT_MS }).toString().trim();
       connections = parseInt(netstat) || 0;
     } catch { /* ignore */ }
   }
@@ -229,7 +244,7 @@ function getProcessMetrics(): ProcessMetrics {
       // Get top CPU consumers
       const psOutput = execSync(
         'ps -Arcww -o pid,pcpu,pmem,comm | head -11',
-        { timeout: 5000 },
+        { timeout: EXEC_TIMEOUT_MS },
       ).toString().trim();
 
       const lines = psOutput.split('\n').slice(1); // Skip header
@@ -246,7 +261,7 @@ function getProcessMetrics(): ProcessMetrics {
       // Get top memory consumers
       const memOutput = execSync(
         'ps -Amcww -o pid,pcpu,pmem,comm | head -11',
-        { timeout: 5000 },
+        { timeout: EXEC_TIMEOUT_MS },
       ).toString().trim();
 
       const memLines = memOutput.split('\n').slice(1);
@@ -262,7 +277,7 @@ function getProcessMetrics(): ProcessMetrics {
       }
 
       // Total process count
-      const countOutput = execSync('ps -Ae | wc -l', { timeout: 5000 }).toString().trim();
+      const countOutput = execSync('ps -Ae | wc -l', { timeout: EXEC_TIMEOUT_MS }).toString().trim();
       totalProcesses = parseInt(countOutput) || 0;
     } catch { /* ignore */ }
   }
@@ -290,7 +305,7 @@ function getSystemOverview(): SystemOverview {
 function getMacOSThermal(): string {
   if (platform() !== 'darwin') return 'N/A (not macOS)';
   try {
-    const thermal = execSync('pmset -g therm 2>/dev/null', { timeout: 5000 }).toString().trim();
+    const thermal = execSync('pmset -g therm 2>/dev/null', { timeout: EXEC_TIMEOUT_MS }).toString().trim();
     if (thermal.includes('CPU_Speed_Limit')) {
       const match = thermal.match(/CPU_Speed_Limit\s*=\s*(\d+)/);
       if (match) {
@@ -318,21 +333,21 @@ function runHealthCheck(): { status: 'healthy' | 'warning' | 'critical'; alerts:
   const cpu = getCpuMetrics();
 
   // CPU
-  if (cpu.loadAvg[0] > cpu.cores * 0.9) {
+  if (cpu.loadAvg[0] > cpu.cores * CPU_LOAD_CRITICAL) {
     alerts.push({
       level: 'critical',
       component: 'CPU',
-      message: `Load average ${cpu.loadAvg[0].toFixed(1)} exceeds ${cpu.cores} cores * 0.9`,
+      message: `Load average ${cpu.loadAvg[0].toFixed(1)} exceeds ${cpu.cores} cores * ${CPU_LOAD_CRITICAL}`,
       value: cpu.loadAvg[0],
-      threshold: cpu.cores * 0.9,
+      threshold: cpu.cores * CPU_LOAD_CRITICAL,
     });
-  } else if (cpu.loadAvg[0] > cpu.cores * 0.7) {
+  } else if (cpu.loadAvg[0] > cpu.cores * CPU_LOAD_WARNING) {
     alerts.push({
       level: 'warning',
       component: 'CPU',
       message: `Load average ${cpu.loadAvg[0].toFixed(1)} is high (${cpu.cores} cores)`,
       value: cpu.loadAvg[0],
-      threshold: cpu.cores * 0.7,
+      threshold: cpu.cores * CPU_LOAD_WARNING,
     });
   } else {
     alerts.push({
@@ -340,26 +355,26 @@ function runHealthCheck(): { status: 'healthy' | 'warning' | 'critical'; alerts:
       component: 'CPU',
       message: `Load average ${cpu.loadAvg[0].toFixed(1)} / ${cpu.cores} cores`,
       value: cpu.loadAvg[0],
-      threshold: cpu.cores * 0.7,
+      threshold: cpu.cores * CPU_LOAD_WARNING,
     });
   }
 
   // Memory
-  if (mem.usagePercent > 90) {
+  if (mem.usagePercent > MEMORY_CRITICAL_PCT) {
     alerts.push({
       level: 'critical',
       component: 'Memory',
       message: `${mem.usagePercent}% used (${mem.usedGB}GB / ${mem.totalGB}GB)`,
       value: mem.usagePercent,
-      threshold: 90,
+      threshold: MEMORY_CRITICAL_PCT,
     });
-  } else if (mem.usagePercent > 75) {
+  } else if (mem.usagePercent > MEMORY_WARNING_PCT) {
     alerts.push({
       level: 'warning',
       component: 'Memory',
       message: `${mem.usagePercent}% used (${mem.usedGB}GB / ${mem.totalGB}GB)`,
       value: mem.usagePercent,
-      threshold: 75,
+      threshold: MEMORY_WARNING_PCT,
     });
   } else {
     alerts.push({
@@ -367,27 +382,27 @@ function runHealthCheck(): { status: 'healthy' | 'warning' | 'critical'; alerts:
       component: 'Memory',
       message: `${mem.usagePercent}% used (${mem.freeGB}GB free)`,
       value: mem.usagePercent,
-      threshold: 75,
+      threshold: MEMORY_WARNING_PCT,
     });
   }
 
   // Disk
   for (const mount of disk.mounts) {
-    if (mount.usagePercent > 90) {
+    if (mount.usagePercent > DISK_CRITICAL_PCT) {
       alerts.push({
         level: 'critical',
         component: `Disk ${mount.mount}`,
         message: `${mount.usagePercent}% used (${mount.freeGB}GB free)`,
         value: mount.usagePercent,
-        threshold: 90,
+        threshold: DISK_CRITICAL_PCT,
       });
-    } else if (mount.usagePercent > 80) {
+    } else if (mount.usagePercent > DISK_WARNING_PCT) {
       alerts.push({
         level: 'warning',
         component: `Disk ${mount.mount}`,
         message: `${mount.usagePercent}% used (${mount.freeGB}GB free)`,
         value: mount.usagePercent,
-        threshold: 80,
+        threshold: DISK_WARNING_PCT,
       });
     } else {
       alerts.push({
@@ -395,7 +410,7 @@ function runHealthCheck(): { status: 'healthy' | 'warning' | 'critical'; alerts:
         component: `Disk ${mount.mount}`,
         message: `${mount.usagePercent}% used (${mount.freeGB}GB free)`,
         value: mount.usagePercent,
-        threshold: 80,
+        threshold: DISK_WARNING_PCT,
       });
     }
   }
@@ -457,7 +472,6 @@ function formatDiskReport(disk: DiskMetrics): string {
 function formatNetworkReport(net: NetworkMetrics): string {
   const lines = ['Network Interfaces:'];
   const external = net.interfaces.filter(i => !i.internal && i.family === 'IPv4');
-  const internal = net.interfaces.filter(i => i.internal);
 
   for (const iface of external) {
     lines.push(`  ${iface.name.padEnd(10)} ${iface.address.padEnd(16)} (${iface.mac})`);

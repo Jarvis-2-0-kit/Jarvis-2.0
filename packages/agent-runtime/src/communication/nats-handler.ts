@@ -4,6 +4,13 @@ import { createLogger, NatsSubjects, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, type
 const log = createLogger('agent:nats');
 const sc = StringCodec();
 
+/** Maximum NATS connection retries on startup */
+const MAX_CONNECT_RETRIES = 30;
+/** Delay between NATS connection retries (ms) */
+const CONNECT_RETRY_DELAY_MS = 3000;
+/** Timeout for NATS drain on disconnect (ms) */
+const DRAIN_TIMEOUT_MS = 5000;
+
 export interface NatsHandlerConfig {
   agentId: AgentId;
   role: AgentRole;
@@ -80,8 +87,7 @@ export class NatsHandler {
       this.config.natsUrl,
     ].filter((s): s is string => !!s);
 
-    const MAX_RETRIES = 30;
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 1; attempt <= MAX_CONNECT_RETRIES; attempt++) {
       try {
         const natsOpts: Record<string, unknown> = {
           servers,
@@ -102,9 +108,9 @@ export class NatsHandler {
         this.nc = await connect(natsOpts as Parameters<typeof connect>[0]);
         break;
       } catch (err) {
-        if (attempt === MAX_RETRIES) throw err;
-        log.warn(`NATS connect attempt ${attempt}/${MAX_RETRIES} failed: ${(err as Error).message}. Retrying in 3s...`);
-        await new Promise(r => setTimeout(r, 3000));
+        if (attempt === MAX_CONNECT_RETRIES) throw err;
+        log.warn(`NATS connect attempt ${attempt}/${MAX_CONNECT_RETRIES} failed: ${(err as Error).message}. Retrying in ${CONNECT_RETRY_DELAY_MS / 1000}s...`);
+        await new Promise(r => setTimeout(r, CONNECT_RETRY_DELAY_MS));
       }
     }
 
@@ -585,7 +591,7 @@ export class NatsHandler {
       try {
         await Promise.race([
           this.nc.drain(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Drain timeout')), 5000)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Drain timeout')), DRAIN_TIMEOUT_MS)),
         ]);
       } catch (err) {
         log.warn(`NATS drain timeout/failed: ${(err as Error).message}`);

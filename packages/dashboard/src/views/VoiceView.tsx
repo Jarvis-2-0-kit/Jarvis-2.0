@@ -13,9 +13,9 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Mic, MicOff, Volume2, VolumeX, Settings, Trash2, Globe, Zap,
-  StopCircle, MessageSquare, AudioWaveform, ChevronDown, ChevronUp,
-  RefreshCw, Send,
+  Mic, Volume2, VolumeX, Settings, Trash2, Globe,
+  MessageSquare, AudioWaveform,
+  Send,
 } from 'lucide-react';
 import { useVoiceStore, type VoiceLanguage, type TTSProvider } from '../store/voice-store.js';
 import { useVoiceRecognition } from '../hooks/useVoiceRecognition.js';
@@ -67,7 +67,7 @@ export function VoiceView() {
   const clearError = useVoiceStore((s) => s.clearError);
   const setStatus = useVoiceStore((s) => s.setStatus);
 
-  const { isSupported, toggleListening, startListening, stopListening } = useVoiceRecognition();
+  const { toggleListening, startListening, stopListening } = useVoiceRecognition();
   const { speak, stopSpeaking } = useVoiceSynthesis();
 
   const [showSettings, setShowSettings] = useState(false);
@@ -80,13 +80,13 @@ export function VoiceView() {
 
   // Inject CSS
   useEffect(() => {
-    const id = 'jarvis-voice-css';
-    if (!document.getElementById(id)) {
-      const style = document.createElement('style');
-      style.id = id;
-      style.textContent = VOICE_CSS;
-      document.head.appendChild(style);
-    }
+    const styleId = 'voice-orb-styles';
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = VOICE_CSS;
+    document.head.appendChild(style);
+    return () => { style.remove(); };
   }, []);
 
   // Auto-scroll messages
@@ -134,7 +134,6 @@ export function VoiceView() {
 
     // Guard: echo/duplicate detection
     if (isEchoOrDuplicate(content)) {
-      console.log('[Voice] Skipping echo/duplicate:', content);
       return;
     }
 

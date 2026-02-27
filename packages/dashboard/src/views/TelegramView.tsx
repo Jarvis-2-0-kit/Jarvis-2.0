@@ -13,14 +13,10 @@ import {
   Send as SendIcon,
   Settings,
   RefreshCw,
-  Search,
   Bot,
   X,
   Wifi,
   WifiOff,
-  Users,
-  Clock,
-  MessageCircle,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 
@@ -75,7 +71,7 @@ export function TelegramView() {
 
   useEffect(() => {
     const unsub = gateway.on('telegram.message', (payload) => {
-      setMessages((prev) => [...prev, payload as TelegramMessage]);
+      setMessages((prev) => [...prev, payload as TelegramMessage].slice(-500));
     });
     return unsub;
   }, []);
@@ -109,9 +105,9 @@ export function TelegramView() {
         id: `tg-out-${Date.now()}`, from: 'jarvis', to: chatId,
         body: composing.trim(), timestamp: Date.now(),
         direction: 'outgoing', status: 'sent', type: 'text',
-      }]);
+      }].slice(-500));
       setComposing('');
-    } catch (err) { console.error('Telegram send failed:', err); }
+    } catch { /* send failed — optimistic message already shown */ }
     finally { setSending(false); }
   };
 

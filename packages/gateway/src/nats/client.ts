@@ -1,15 +1,15 @@
 import { connect, type NatsConnection, type Subscription, StringCodec, type Msg } from 'nats';
-import { createLogger, type AgentMessage } from '@jarvis/shared';
+import { createLogger, DEFAULT_NATS_URL } from '@jarvis/shared';
 
 const log = createLogger('gateway:nats');
 const sc = StringCodec();
 
 export class NatsClient {
   private connection: NatsConnection | null = null;
-  private subscriptions: Map<string, Subscription> = new Map();
-  private servers: string[];
+  private readonly subscriptions: Map<string, Subscription> = new Map();
+  private readonly servers: string[];
 
-  constructor(primaryUrl: string = 'nats://localhost:4222', _thunderboltUrl?: string) {
+  constructor(primaryUrl: string = DEFAULT_NATS_URL, _thunderboltUrl?: string) {
     // Gateway runs on Master (same machine as NATS) - always use primary (localhost)
     // Thunderbolt URL is only used by remote agents connecting FROM other machines
     this.servers = [primaryUrl];
@@ -27,7 +27,7 @@ export class NatsClient {
         timeout: 10000,
       };
 
-      // NATS authentication via env vars
+      // NATS authentication via env vars (required)
       if (process.env['NATS_USER'] && process.env['NATS_PASS']) {
         natsOpts.user = process.env['NATS_USER'];
         natsOpts.pass = process.env['NATS_PASS'];
@@ -36,12 +36,12 @@ export class NatsClient {
         natsOpts.token = process.env['NATS_TOKEN'];
         log.info('NATS: using token authentication');
       } else {
-        log.warn('NATS: no authentication configured — connection is unauthenticated');
+        log.error('NATS: no authentication configured. Set NATS_TOKEN or NATS_USER/NATS_PASS in .env');
+        throw new Error('NATS authentication is required. Set NATS_TOKEN or NATS_USER + NATS_PASS.');
       }
 
       this.connection = await connect(natsOpts as Parameters<typeof connect>[0]);
 
-      const connectedTo = (this.connection as unknown as { info?: { host?: string; port?: number } }).info;
       log.info(`Connected to NATS (servers: ${this.servers.join(', ')})`);
 
       // Monitor connection status
@@ -67,6 +67,12 @@ export class NatsClient {
   /** Subscribe to a subject with a handler */
   subscribe(subject: string, handler: (data: unknown, msg: Msg) => void): Subscription {
     if (!this.connection) throw new Error('NATS not connected');
+
+    // Unsubscribe existing subscription for this subject to prevent duplicates
+    if (this.subscriptions.has(subject)) {
+      this.subscriptions.get(subject)!.unsubscribe();
+      this.subscriptions.delete(subject);
+    }
 
     const sub = this.connection.subscribe(subject);
     this.subscriptions.set(subject, sub);
@@ -117,7 +123,6 @@ export class NatsClient {
       }
       this.subscriptions.clear();
       await this.connection.drain();
-      await this.connection.close();
       this.connection = null;
       log.info('NATS connection closed');
     }

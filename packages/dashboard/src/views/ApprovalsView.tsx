@@ -14,14 +14,11 @@ import {
   Check,
   X,
   Clock,
-  AlertTriangle,
-  Terminal,
   RefreshCw,
   Settings,
   Save,
   History,
   Bot,
-  Zap,
   Info,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
@@ -148,8 +145,8 @@ export function ApprovalsView() {
       setPending(p.approvals);
       setHistory(h.history.reverse()); // newest first
       setConfig(c);
-    } catch (err) {
-      console.error('Failed to load approvals', err);
+    } catch {
+      /* load failed */
     }
     setLoading(false);
   }, []);
@@ -160,10 +157,7 @@ export function ApprovalsView() {
   useEffect(() => {
     const unsub1 = gateway.on('approval.requested', (data: PendingApproval) => {
       setPending(prev => [data, ...prev]);
-      // Play sound
-      try {
-        const audio = new Audio('data:audio/wav;base64,UklGRl9vT19teleGFtcGxlAAAA'); // placeholder
-      } catch { /* */ }
+      // Play sound alert (placeholder — noop for now)
     });
 
     const unsub2 = gateway.on('approval.resolved', (data: { approvalId: string }) => {
@@ -193,8 +187,8 @@ export function ApprovalsView() {
       await gateway.request('approvals.approve', { approvalId: id });
       setPending(prev => prev.filter(a => a.id !== id));
       refresh();
-    } catch (err) {
-      console.error('Approve failed', err);
+    } catch {
+      /* approve failed */
     }
   };
 
@@ -204,8 +198,8 @@ export function ApprovalsView() {
       setPending(prev => prev.filter(a => a.id !== id));
       setDenyReason(prev => { const n = { ...prev }; delete n[id]; return n; });
       refresh();
-    } catch (err) {
-      console.error('Deny failed', err);
+    } catch {
+      /* deny failed */
     }
   };
 
@@ -213,8 +207,8 @@ export function ApprovalsView() {
     if (!config) return;
     try {
       await gateway.request('approvals.config.set', config);
-    } catch (err) {
-      console.error('Save config failed', err);
+    } catch {
+      /* save config failed */
     }
   };
 

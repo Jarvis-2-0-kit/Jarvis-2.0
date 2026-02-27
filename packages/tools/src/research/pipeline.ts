@@ -1,10 +1,7 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from '../base.js';
 import { createToolResult, createErrorResult } from '../base.js';
-
-const log = createLogger('tool:research');
 
 /**
  * Market Research Pipeline - 4-layer reasoning engine.

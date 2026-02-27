@@ -160,6 +160,7 @@ export function FileManagerView() {
               borderRadius: 4, cursor: 'pointer', color: 'var(--text-muted)',
             }}
             title="Refresh"
+            aria-label="Refresh directory listing"
           >
             <RefreshCw size={12} className={loading ? 'spin' : ''} />
           </button>

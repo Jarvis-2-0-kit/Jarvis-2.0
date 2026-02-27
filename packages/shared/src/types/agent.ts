@@ -68,27 +68,27 @@ export const AgentState = z.object({
 });
 export type AgentState = z.infer<typeof AgentState>;
 
-export const AGENT_DEFAULTS: Record<AgentId, { role: AgentRole; capabilities: AgentCapability[] }> = {
-  'jarvis': {
+export const AGENT_DEFAULTS: Record<AgentId, { role: AgentRole; capabilities: readonly AgentCapability[] }> = Object.freeze({
+  'jarvis': Object.freeze({
     role: 'orchestrator',
-    capabilities: [
+    capabilities: Object.freeze([
       'code', 'build', 'deploy', 'browser', 'app-store', 'google-play',
       'web-maintenance', 'social-media', 'market-research', 'content-creation',
       'analytics', 'finance', 'pr', 'exec', 'file-ops', 'web-search', 'web-fetch',
-    ],
-  },
-  'agent-smith': {
+    ] as const),
+  }),
+  'agent-smith': Object.freeze({
     role: 'dev',
-    capabilities: [
+    capabilities: Object.freeze([
       'code', 'build', 'deploy', 'browser', 'app-store', 'google-play',
       'web-maintenance', 'exec', 'file-ops', 'web-search', 'web-fetch',
-    ],
-  },
-  'agent-johny': {
+    ] as const),
+  }),
+  'agent-johny': Object.freeze({
     role: 'marketing',
-    capabilities: [
+    capabilities: Object.freeze([
       'social-media', 'market-research', 'content-creation', 'analytics',
       'finance', 'pr', 'browser', 'exec', 'file-ops', 'web-search', 'web-fetch',
-    ],
-  },
-};
+    ] as const),
+  }),
+});

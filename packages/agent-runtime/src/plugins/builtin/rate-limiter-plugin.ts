@@ -151,6 +151,16 @@ export function createRateLimiterPlugin(): JarvisPluginDefinition {
           state.lastToolName = toolName;
         }
 
+        // Check: token budget exceeded
+        if (state.tokensThisSession > config.maxTokensPerSession) {
+          state.totalBlocked++;
+          log.warn(`Rate limiter: session token budget exceeded (${state.tokensThisSession.toLocaleString()}/${config.maxTokensPerSession.toLocaleString()})`);
+          return {
+            block: true,
+            blockReason: `Rate limit: token budget exceeded — ${state.tokensThisSession.toLocaleString()} tokens used (max: ${config.maxTokensPerSession.toLocaleString()}). Use rate_limiter_reset to clear.`,
+          };
+        }
+
         // Check: consecutive same-tool limit
         if (state.consecutiveSameToolCount > config.maxConsecutiveSameToolCalls) {
           state.totalBlocked++;

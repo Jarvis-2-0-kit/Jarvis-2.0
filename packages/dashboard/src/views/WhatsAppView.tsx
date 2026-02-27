@@ -112,7 +112,7 @@ export function WhatsAppView() {
   useEffect(() => {
     const unsubMsg = gateway.on('whatsapp.message', (payload) => {
       const msg = payload as WhatsAppMessage;
-      setMessages((prev) => [...prev, msg]);
+      setMessages((prev) => [...prev, msg].slice(-500));
       updateContactFromMessage(msg);
     });
     const unsubSent = gateway.on('whatsapp.sent', (payload) => {

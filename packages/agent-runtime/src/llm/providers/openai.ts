@@ -2,11 +2,16 @@ import { createLogger } from '@jarvis/shared';
 import type {
   LLMProvider, ChatRequest, ChatResponse, ChatChunk,
   ModelInfo, ContentBlock, Message,
+  TextBlock, ToolUseBlock, ToolResultBlock,
 } from '../types.js';
 
 const log = createLogger('llm:openai');
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
+/** Timeout for non-streaming chat requests (5 minutes) */
+const CHAT_TIMEOUT_MS = 300_000;
+/** Timeout for streaming chat requests (10 minutes) */
+const STREAM_TIMEOUT_MS = 600_000;
 
 const MODELS: ModelInfo[] = [
   { id: 'gpt-5.2', name: 'GPT-5.2', provider: 'openai', contextWindow: 400000, maxOutputTokens: 128000, supportsTools: true, supportsVision: true, costPerInputToken: 1.75 / 1e6, costPerOutputToken: 14 / 1e6 },
@@ -15,8 +20,8 @@ const MODELS: ModelInfo[] = [
 ];
 
 export class OpenAIProvider implements LLMProvider {
-  id = 'openai';
-  name = 'OpenAI';
+  readonly id = 'openai';
+  readonly name = 'OpenAI';
 
   constructor(
     private apiKey: string,
@@ -37,6 +42,7 @@ export class OpenAIProvider implements LLMProvider {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -54,6 +60,7 @@ export class OpenAIProvider implements LLMProvider {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(STREAM_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -158,7 +165,7 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   private buildRequestBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
-    const messages = request.messages.map((m) => this.convertMessage(m, request.system));
+    const messages = request.messages.flatMap((m) => this.convertMessage(m));
     // Prepend system message if present
     if (request.system) {
       messages.unshift({ role: 'system', content: request.system });
@@ -192,48 +199,56 @@ export class OpenAIProvider implements LLMProvider {
     return body;
   }
 
-  private convertMessage(msg: Message, _system?: string): Record<string, unknown> {
+  private convertMessage(msg: Message): Record<string, unknown>[] {
     if (typeof msg.content === 'string') {
-      return { role: msg.role, content: msg.content };
+      return [{ role: msg.role, content: msg.content }];
     }
 
     // For tool results, convert to OpenAI format
-    const toolResults = msg.content.filter((b) => b.type === 'tool_result');
+    // OpenAI requires a separate { role: 'tool' } message for EACH tool result
+    const toolResults = msg.content.filter((b): b is ToolResultBlock => b.type === 'tool_result');
     if (toolResults.length > 0) {
-      // OpenAI uses separate messages for each tool result
-      return {
+      return toolResults.map((tr) => ({
         role: 'tool',
-        tool_call_id: (toolResults[0] as { tool_use_id: string }).tool_use_id,
-        content: typeof toolResults[0]!.content === 'string'
-          ? toolResults[0]!.content
-          : JSON.stringify(toolResults[0]!.content),
-      };
+        tool_call_id: tr.tool_use_id,
+        content: typeof tr.content === 'string'
+          ? tr.content
+          : JSON.stringify(tr.content),
+      }));
     }
 
     // For assistant messages with tool_use blocks
-    const toolUses = msg.content.filter((b) => b.type === 'tool_use');
+    const toolUses = msg.content.filter((b): b is ToolUseBlock => b.type === 'tool_use');
     if (toolUses.length > 0) {
-      const textBlocks = msg.content.filter((b) => b.type === 'text');
-      return {
+      const textBlocks = msg.content.filter((b): b is TextBlock => b.type === 'text');
+      return [{
         role: 'assistant',
-        content: textBlocks.length > 0 ? textBlocks.map((b) => (b as { text: string }).text).join('') : null,
+        content: textBlocks.length > 0 ? textBlocks.map((b) => b.text).join('') : null,
         tool_calls: toolUses.map((b) => ({
-          id: (b as { id: string }).id,
+          id: b.id,
           type: 'function',
           function: {
-            name: (b as { name: string }).name,
-            arguments: JSON.stringify((b as { input: unknown }).input),
+            name: b.name,
+            arguments: JSON.stringify(b.input),
           },
         })),
-      };
+      }];
     }
 
-    const content = msg.content.map((b) => (b as { text: string }).text).join('');
-    return { role: msg.role, content };
+    const content = msg.content
+      .filter((b): b is TextBlock => b.type === 'text')
+      .map((b) => b.text).join('');
+    return [{ role: msg.role, content }];
   }
 
   private parseResponse(data: OpenAIResponse): ChatResponse {
-    const choice = data.choices?.[0];
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid OpenAI response: expected an object');
+    }
+    if (!Array.isArray(data.choices) || data.choices.length === 0) {
+      throw new Error('Invalid OpenAI response: missing or empty choices array');
+    }
+    const choice = data.choices[0];
     const message = choice?.message;
     const content: ContentBlock[] = [];
 

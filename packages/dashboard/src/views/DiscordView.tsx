@@ -18,7 +18,6 @@ import {
   Wifi,
   WifiOff,
   Hash,
-  MessageCircle,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 
@@ -72,7 +71,7 @@ export function DiscordView() {
 
   useEffect(() => {
     const unsub = gateway.on('discord.message', (payload) => {
-      setMessages((prev) => [...prev, payload as DiscordMessage]);
+      setMessages((prev) => [...prev, payload as DiscordMessage].slice(-500));
     });
     return unsub;
   }, []);
@@ -106,9 +105,9 @@ export function DiscordView() {
         id: `dc-out-${Date.now()}`, from: 'jarvis', to: channelId || 'webhook',
         body: composing.trim(), timestamp: Date.now(),
         direction: 'outgoing', status: 'sent', type: 'text',
-      }]);
+      }].slice(-500));
       setComposing('');
-    } catch (err) { console.error('Discord send failed:', err); }
+    } catch { /* send failed — optimistic message already shown */ }
     finally { setSending(false); }
   };
 

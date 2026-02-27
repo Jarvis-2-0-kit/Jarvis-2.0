@@ -47,9 +47,9 @@ export function MetricsPanel() {
             INFRASTRUCTURE
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <InfraItem label="NATS" ok={health?.infrastructure.nats ?? false} />
-            <InfraItem label="REDIS" ok={health?.infrastructure.redis ?? false} />
-            <InfraItem label="NAS" ok={health?.infrastructure.nas.mounted ?? false} />
+            <InfraItem label="NATS" ok={health?.infrastructure?.nats ?? false} />
+            <InfraItem label="REDIS" ok={health?.infrastructure?.redis ?? false} />
+            <InfraItem label="NAS" ok={health?.infrastructure?.nas?.mounted ?? false} />
           </div>
         </div>
       </div>

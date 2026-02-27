@@ -10,8 +10,7 @@
  * ToolUseBlock objects.
  */
 import { createLogger } from '@jarvis/shared';
-import { execFile, execSync, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 import type {
@@ -19,7 +18,6 @@ import type {
   ModelInfo, ContentBlock, Message, ToolDefinition, TokenUsage,
 } from '../types.js';
 
-const execFileAsync = promisify(execFile);
 const log = createLogger('llm:claude-cli');
 
 /** Resolve claude binary path — check common locations */
@@ -45,6 +43,9 @@ function resolveClaudeBin(): string {
 }
 
 const CLAUDE_BIN = resolveClaudeBin();
+
+/** Timeout for Claude CLI subprocess (10 minutes) */
+const SPAWN_TIMEOUT_MS = 600_000;
 
 const ALLOWED_MODELS = new Set(['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001']);
 
@@ -171,8 +172,8 @@ function parseToolCalls(text: string): { textContent: string; toolCalls: Array<{
 }
 
 export class ClaudeCliProvider implements LLMProvider {
-  id = 'claude-cli';
-  name = 'Claude CLI (Max)';
+  readonly id = 'claude-cli';
+  readonly name = 'Claude CLI (Max)';
   private available: boolean;
 
   constructor() {
@@ -226,11 +227,10 @@ export class ClaudeCliProvider implements LLMProvider {
           '--output-format', 'json',
           '--model', model,
           '--no-session-persistence',
-          '--dangerously-skip-permissions',
           '--tools', '',
         ], {
           env: safeEnv,
-          timeout: 600_000,
+          timeout: SPAWN_TIMEOUT_MS,
         });
 
         let stdout = '';
@@ -328,7 +328,7 @@ export class ClaudeCliProvider implements LLMProvider {
     } catch (err) {
       const errMsg = (err as Error).message;
       if (errMsg.includes('TIMEOUT') || errMsg.includes('timed out')) {
-        throw new Error('Claude CLI timed out (600s)');
+        throw new Error(`Claude CLI timed out (${SPAWN_TIMEOUT_MS / 1000}s)`);
       }
       throw new Error(`Claude CLI failed: ${errMsg}`);
     }
@@ -371,11 +371,10 @@ export class ClaudeCliProvider implements LLMProvider {
       '--include-partial-messages',
       '--model', model,
       '--no-session-persistence',
-      '--dangerously-skip-permissions',
       '--tools', '',
     ], {
       env: safeEnv,
-      timeout: 600_000,
+      timeout: SPAWN_TIMEOUT_MS,
     });
 
     // Track block types by index for content_block_stop

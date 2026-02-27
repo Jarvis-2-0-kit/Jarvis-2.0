@@ -5,6 +5,7 @@ const log = createLogger('monitoring:health');
 
 const AGENT_TIMEOUT_MS = HEARTBEAT_INTERVAL * 3; // 3 missed heartbeats = offline
 const CHECK_INTERVAL_MS = 15_000; // Check every 15 seconds
+const BYTES_PER_MB = 1_048_576;
 
 export interface SystemHealth {
   status: 'healthy' | 'degraded' | 'critical';
@@ -55,10 +56,10 @@ export interface CostEntry {
  * Runs periodic health checks and aggregates metrics.
  */
 export class HealthMonitor {
-  private startTime = Date.now();
+  private readonly startTime = Date.now();
   private checkInterval: ReturnType<typeof setInterval> | null = null;
-  private agentHeartbeats = new Map<string, number>();
-  private agentStats = new Map<string, { completed: number; failed: number; startTime: number; memory?: number }>();
+  private readonly agentHeartbeats = new Map<string, number>();
+  private readonly agentStats = new Map<string, { completed: number; failed: number; startTime: number; memory?: number }>();
   private costLog: CostEntry[] = [];
   private natsHealthy = false;
   private nasHealthy = false;
@@ -110,6 +111,10 @@ export class HealthMonitor {
   /** Record LLM usage for cost tracking */
   recordUsage(entry: CostEntry): void {
     this.costLog.push(entry);
+    // Cap cost log to prevent unbounded memory growth
+    if (this.costLog.length > 10_000) {
+      this.costLog = this.costLog.slice(-5_000);
+    }
   }
 
   /** Update infrastructure status */
@@ -140,7 +145,7 @@ export class HealthMonitor {
         completedTasks: stats.completed,
         failedTasks: stats.failed,
         uptimeMs: now - stats.startTime,
-        memoryUsageMb: stats.memory ? Math.round(stats.memory / 1048576) : undefined,
+        memoryUsageMb: stats.memory ? Math.round(stats.memory / BYTES_PER_MB) : undefined,
       };
     }
 

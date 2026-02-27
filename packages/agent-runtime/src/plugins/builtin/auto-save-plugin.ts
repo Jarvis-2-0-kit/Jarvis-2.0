@@ -7,8 +7,8 @@
  * - agent_start hook: Log agent start events
  */
 
-import { existsSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, appendFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import type { JarvisPluginDefinition } from '../types.js';
 
 export function createAutoSavePlugin(): JarvisPluginDefinition {
@@ -29,10 +29,11 @@ export function createAutoSavePlugin(): JarvisPluginDefinition {
       } catch { /* exists */ }
 
       // Helper to append JSONL
-      const appendJsonl = (path: string, data: Record<string, unknown>) => {
+      const appendJsonl = (filePath: string, data: Record<string, unknown>) => {
         try {
-          const existing = existsSync(path) ? readFileSync(path, 'utf-8') : '';
-          writeFileSync(path, existing + JSON.stringify(data) + '\n');
+          const dir = dirname(filePath);
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          appendFileSync(filePath, JSON.stringify(data) + '\n');
         } catch { /* ignore */ }
       };
 

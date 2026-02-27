@@ -1,23 +1,21 @@
-import type { WebSocket } from 'ws';
+import WebSocket from 'ws';
 import {
   type RequestFrame,
   type ResponseFrame,
   type EventFrame,
   type Frame,
-  type GatewayMethod,
   Frame as FrameSchema,
   ErrorCode,
   createLogger,
 } from '@jarvis/shared';
-import { shortId } from '@jarvis/shared';
 
 const log = createLogger('gateway:protocol');
 
 export type MethodHandler = (params: unknown, clientId: string) => Promise<unknown>;
 
 export class ProtocolHandler {
-  private methods: Map<string, MethodHandler> = new Map();
-  private clients: Map<string, WebSocket> = new Map();
+  private readonly methods: Map<string, MethodHandler> = new Map();
+  private readonly clients: Map<string, WebSocket> = new Map();
 
   /** Register a gateway method handler */
   registerMethod(method: string, handler: MethodHandler): void {
@@ -74,7 +72,7 @@ export class ProtocolHandler {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`Method ${req.method} failed`, { error: message, clientId });
-      this.sendError(clientId, req.id, ErrorCode.INTERNAL_ERROR, message);
+      this.sendError(clientId, req.id, ErrorCode.INTERNAL_ERROR, 'Internal server error');
     }
   }
 
@@ -107,8 +105,15 @@ export class ProtocolHandler {
     };
     const json = JSON.stringify(frame);
     for (const [id, ws] of this.clients) {
-      if (ws.readyState === ws.OPEN) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        this.clients.delete(id);
+        continue;
+      }
+      try {
         ws.send(json);
+      } catch (err) {
+        log.error(`Failed to send to client ${id}, removing`, { error: String(err) });
+        this.clients.delete(id);
       }
     }
   }

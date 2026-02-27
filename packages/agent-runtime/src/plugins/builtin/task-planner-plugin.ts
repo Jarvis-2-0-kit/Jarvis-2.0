@@ -61,6 +61,9 @@ interface DelegatedTask {
 
 // ─── Plugin ───────────────────────────────────────────────────────────
 
+const MAX_ACTIVE_PLANS = 50;
+const MAX_DELEGATED_TASKS = 100;
+
 export function createTaskPlannerPlugin(): JarvisPluginDefinition {
   // In-memory state (per session)
   const activePlans = new Map<string, ExecutionPlan>();
@@ -176,6 +179,10 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
           };
 
           activePlans.set(planId, plan);
+          if (activePlans.size > MAX_ACTIVE_PLANS) {
+            const firstKey = activePlans.keys().next().value;
+            if (firstKey) activePlans.delete(firstKey);
+          }
           savePlan(plansDir, plan);
 
           log.info(`[task-planner] Created plan ${planId}: ${plan.title} (${steps.length} steps)`);
@@ -229,14 +236,19 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
           },
         },
         execute: async (params) => {
-          const plan = activePlans.get(params.planId as string);
+          const planId = params.planId as string;
+          if (!/^[\w-]+$/.test(planId)) {
+            return { type: 'error' as const, content: 'Invalid plan ID' };
+          }
+
+          const plan = activePlans.get(planId);
           if (!plan) {
-            return { type: 'error', content: `Plan not found: ${params.planId}` };
+            return { type: 'error', content: `Plan not found: ${planId}` };
           }
 
           const step = plan.steps.find((s) => s.id === params.stepId);
           if (!step) {
-            return { type: 'error', content: `Step not found: ${params.stepId} in plan ${params.planId}` };
+            return { type: 'error', content: `Step not found: ${params.stepId} in plan ${planId}` };
           }
 
           step.status = params.status as PlanStep['status'];
@@ -263,7 +275,7 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
           // Find newly unblocked steps
           const readySteps = findReadySteps(plan);
 
-          log.info(`[task-planner] Step ${params.stepId} → ${params.status} in plan ${params.planId}`);
+          log.info(`[task-planner] Step ${params.stepId} → ${params.status} in plan ${planId}`);
 
           const visual = buildPlanVisual(plan);
           let response = `Step "${step.title}" updated to ${params.status}.\n\n${visual}`;
@@ -302,6 +314,10 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
           },
         },
         execute: async (params) => {
+          if (params.planId && !/^[\w-]+$/.test(params.planId as string)) {
+            return { type: 'error' as const, content: 'Invalid plan ID' };
+          }
+
           let plan: ExecutionPlan | undefined;
 
           if (params.planId) {
@@ -413,6 +429,10 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
           };
 
           delegatedTasks.set(taskId, delegation);
+          if (delegatedTasks.size > MAX_DELEGATED_TASKS) {
+            const firstKey = delegatedTasks.keys().next().value;
+            if (firstKey) delegatedTasks.delete(firstKey);
+          }
 
           // Save delegation record to NAS
           const delegationsFile = join(nasPath, 'plans', 'delegations.jsonl');
@@ -777,11 +797,17 @@ function buildPlanVisual(plan: ExecutionPlan): string {
 }
 
 function savePlan(plansDir: string, plan: ExecutionPlan): void {
+  if (!/^[\w-]+$/.test(plan.planId)) {
+    return;
+  }
   const planFile = join(plansDir, `${plan.planId}.json`);
   writeFileSync(planFile, JSON.stringify(plan, null, 2));
 }
 
 function loadPlan(plansDir: string, planId: string): ExecutionPlan | undefined {
+  if (!/^[\w-]+$/.test(planId)) {
+    return undefined;
+  }
   const planFile = join(plansDir, `${planId}.json`);
   if (existsSync(planFile)) {
     return JSON.parse(readFileSync(planFile, 'utf-8'));

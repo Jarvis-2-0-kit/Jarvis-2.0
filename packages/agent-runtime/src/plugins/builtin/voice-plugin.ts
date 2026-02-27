@@ -29,7 +29,7 @@ export function createVoicePlugin(): JarvisPluginDefinition {
       api.registerTool({
         name: 'voice_respond',
         description: 'Generate a response as Jarvis for voice output. The response should be natural, concise, and in-character as a sophisticated AI assistant. Support Polish and English.',
-        parameters: {
+        inputSchema: {
           type: 'object',
           properties: {
             message: {
@@ -63,14 +63,17 @@ export function createVoicePlugin(): JarvisPluginDefinition {
             : `You're Jarvis — an AI system managing agents. Talk naturally, casually, like a knowledgeable friend — no "sir", no butler talk. Be brief, direct, sometimes a bit sarcastic. You have AI agents (Smith — dev, Johny — marketing), NATS, Redis, NAS. Max 2-3 sentences, this is a voice response.${sysContext ? `\n\nContext: ${sysContext}` : ''}`;
 
           return {
-            systemPrompt,
-            userMessage: message,
-            responseGuidelines: {
-              maxLength: 200,
-              style: 'concise, professional, slight wit',
-              persona: 'Jarvis AI assistant',
-              language,
-            },
+            type: 'text' as const,
+            content: JSON.stringify({
+              systemPrompt,
+              userMessage: message,
+              responseGuidelines: {
+                maxLength: 200,
+                style: 'concise, professional, slight wit',
+                persona: 'Jarvis AI assistant',
+                language,
+              },
+            }),
           };
         },
       });
@@ -78,12 +81,12 @@ export function createVoicePlugin(): JarvisPluginDefinition {
       api.registerTool({
         name: 'voice_status',
         description: 'Get the current voice system status and capabilities',
-        parameters: {
+        inputSchema: {
           type: 'object',
           properties: {},
         },
         execute: async () => {
-          return {
+          const status = {
             enabled: true,
             sttEngines: ['web-speech-api', 'whisper'],
             ttsEngines: ['elevenlabs', 'openai', 'browser'],
@@ -96,6 +99,10 @@ export function createVoicePlugin(): JarvisPluginDefinition {
               'multi-provider-tts',
               'voice-conversation-history',
             ],
+          };
+          return {
+            type: 'text' as const,
+            content: JSON.stringify(status, null, 2),
           };
         },
       });
@@ -116,7 +123,6 @@ export function createVoicePlugin(): JarvisPluginDefinition {
       // --- Prompt Section ---
 
       api.registerPromptSection({
-        id: 'voice-personality',
         title: 'Voice Interface Personality',
         content: `You have a voice interface. When responding to voice messages:
 - Keep responses SHORT (1-3 sentences) — they will be spoken aloud

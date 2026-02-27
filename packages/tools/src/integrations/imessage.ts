@@ -19,15 +19,15 @@ const execFileAsync = promisify(execFile);
 
 export interface IMessageConfig {
   /** Max messages to retrieve per conversation (default: 50) */
-  maxMessages?: number;
+  readonly maxMessages?: number;
   /** Whether to allow sending (default: true) */
-  allowSend?: boolean;
+  readonly allowSend?: boolean;
   /** Phone numbers that don't require confirmation */
-  trustedNumbers?: string[];
+  readonly trustedNumbers?: string[];
   /** Whether to require confirmation for sending (default: true) */
-  requireConfirmation?: boolean;
+  readonly requireConfirmation?: boolean;
   /** Confirmation callback - must return true to allow sending */
-  confirmSend?: (to: string, message: string) => Promise<boolean>;
+  readonly confirmSend?: (to: string, message: string) => Promise<boolean>;
 }
 
 type IMessageAction = 'send' | 'read' | 'search' | 'unread' | 'conversations';
@@ -38,8 +38,12 @@ function escapeAppleScript(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+function escapeSql(str: string): string {
+  return str.replace(/'/g, "''");
+}
+
 function escapeSqlLike(str: string): string {
-  return str.replace(/'/g, "''").replace(/%/g, '\\%').replace(/_/g, '\\_');
+  return escapeSql(str).replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
 // ─── Input validation ─────────────────────────────────────────────────
@@ -93,7 +97,7 @@ async function readConversation(contact: string, limit: number = 20): Promise<st
     JOIN chat c ON cmj.chat_id = c.ROWID
     WHERE c.chat_identifier LIKE '%${escapeSqlLike(contact)}%' ESCAPE '\\'
     ORDER BY m.date DESC
-    LIMIT ${limit}
+    LIMIT ${Number(limit)}
   `;
 
   try {
@@ -153,7 +157,7 @@ async function searchMessages(query: string, limit: number = 20): Promise<string
     LEFT JOIN handle h ON m.handle_id = h.ROWID
     WHERE m.text LIKE '%${escapeSqlLike(query)}%' ESCAPE '\\'
     ORDER BY m.date DESC
-    LIMIT ${limit}
+    LIMIT ${Number(limit)}
   `;
 
   try {
@@ -228,7 +232,7 @@ async function listConversations(limit: number = 30): Promise<string> {
     JOIN message m ON cmj.message_id = m.ROWID
     GROUP BY c.ROWID
     ORDER BY MAX(m.date) DESC
-    LIMIT ${limit}
+    LIMIT ${Number(limit)}
   `;
 
   try {

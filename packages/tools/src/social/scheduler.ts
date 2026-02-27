@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from '../base.js';
 import { createToolResult, createErrorResult } from '../base.js';
+import { SocialTool, type SocialToolConfig } from './social-tool.js';
 
 const log = createLogger('tool:social:scheduler');
 
@@ -147,5 +148,157 @@ export class SocialSchedulerTool implements AgentTool {
   private async saveSchedule(path: string, posts: ScheduledPost[]): Promise<void> {
     await mkdir(join(path, '..'), { recursive: true });
     await writeFile(path, JSON.stringify(posts, null, 2), 'utf-8');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Scheduled Post Executor — the automation engine
+// Runs on a timer, checks for due posts, publishes them
+// ═══════════════════════════════════════════════════════════════════
+
+const MAX_PUBLISH_RETRIES = 2;
+
+export class ScheduledPostExecutor {
+  private socialTool: SocialTool;
+  private schedulePath: string;
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private running = false;
+
+  constructor(
+    socialConfig: SocialToolConfig,
+    nasPath: string,
+    private readonly checkIntervalMs = 60_000, // check every 1 minute
+  ) {
+    this.socialTool = new SocialTool(socialConfig);
+    this.schedulePath = join(nasPath, 'config', 'social-schedule.json');
+  }
+
+  /** Start the executor loop */
+  start(): void {
+    if (this.timer) return;
+    log.info(`Scheduled post executor started (checking every ${this.checkIntervalMs / 1000}s)`);
+
+    // Run immediately, then on interval
+    void this.tick();
+    this.timer = setInterval(() => void this.tick(), this.checkIntervalMs);
+  }
+
+  /** Stop the executor */
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+      log.info('Scheduled post executor stopped');
+    }
+  }
+
+  /** Single tick — check and publish due posts */
+  async tick(): Promise<{ published: number; failed: number }> {
+    if (this.running) return { published: 0, failed: 0 };
+    this.running = true;
+
+    let published = 0;
+    let failed = 0;
+
+    try {
+      const posts = await this.loadSchedule();
+      const now = Date.now();
+      const duePosts = posts.filter(p => p.status === 'scheduled' && p.scheduledAt <= now);
+
+      if (duePosts.length === 0) {
+        return { published: 0, failed: 0 };
+      }
+
+      log.info({ count: duePosts.length }, 'Publishing due scheduled posts');
+
+      for (const post of duePosts) {
+        const success = await this.publishPost(post);
+        if (success) {
+          post.status = 'published';
+          post.publishedAt = Date.now();
+          published++;
+          log.info({ postId: post.id, platform: post.platform }, 'Scheduled post published');
+        } else {
+          post.status = 'failed';
+          failed++;
+          log.error({ postId: post.id, platform: post.platform, error: post.error }, 'Scheduled post failed');
+        }
+      }
+
+      await this.saveSchedule(posts);
+    } catch (err) {
+      log.error({ error: (err as Error).message }, 'Executor tick failed');
+    } finally {
+      this.running = false;
+    }
+
+    return { published, failed };
+  }
+
+  /** Publish a single scheduled post via SocialTool */
+  private async publishPost(post: ScheduledPost): Promise<boolean> {
+    const params: Record<string, unknown> = {
+      platform: post.platform,
+      action: post.action,
+      text: post.text,
+    };
+    if (post.mediaUrl) params['media_url'] = post.mediaUrl;
+    if (post.mediaUrls) params['media_urls'] = post.mediaUrls;
+    if (post.link) params['link'] = post.link;
+    if (post.title) params['title'] = post.title;
+
+    for (let attempt = 1; attempt <= MAX_PUBLISH_RETRIES; attempt++) {
+      try {
+        const context = { agentId: 'scheduler', workspacePath: '', nasPath: '', sessionId: 'auto-publish' };
+        const result = await this.socialTool.execute(params, context);
+
+        if (result.type === 'error') {
+          post.error = result.content;
+          if (attempt < MAX_PUBLISH_RETRIES) {
+            log.warn({ postId: post.id, attempt }, `Publish attempt failed, retrying: ${result.content}`);
+            await new Promise(r => setTimeout(r, 3000 * attempt));
+            continue;
+          }
+          return false;
+        }
+
+        return true;
+      } catch (err) {
+        post.error = (err as Error).message;
+        if (attempt < MAX_PUBLISH_RETRIES) {
+          await new Promise(r => setTimeout(r, 3000 * attempt));
+          continue;
+        }
+        return false;
+      }
+    }
+    return false;
+  }
+
+  private async loadSchedule(): Promise<ScheduledPost[]> {
+    try {
+      const content = await readFile(this.schedulePath, 'utf-8');
+      return JSON.parse(content) as ScheduledPost[];
+    } catch {
+      return [];
+    }
+  }
+
+  private async saveSchedule(posts: ScheduledPost[]): Promise<void> {
+    await mkdir(join(this.schedulePath, '..'), { recursive: true });
+    await writeFile(this.schedulePath, JSON.stringify(posts, null, 2), 'utf-8');
+  }
+
+  /** Get statistics about the schedule */
+  async getStats(): Promise<{ scheduled: number; published: number; failed: number; nextDue: string | null }> {
+    const posts = await this.loadSchedule();
+    const scheduled = posts.filter(p => p.status === 'scheduled');
+    const nextDue = scheduled.sort((a, b) => a.scheduledAt - b.scheduledAt)[0];
+    return {
+      scheduled: scheduled.length,
+      published: posts.filter(p => p.status === 'published').length,
+      failed: posts.filter(p => p.status === 'failed').length,
+      nextDue: nextDue ? new Date(nextDue.scheduledAt).toISOString() : null,
+    };
   }
 }

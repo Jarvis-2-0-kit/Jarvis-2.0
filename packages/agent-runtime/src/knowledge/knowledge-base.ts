@@ -1,5 +1,5 @@
-import { readFile, writeFile, readdir, mkdir, appendFile } from 'node:fs/promises';
-import { join, extname } from 'node:path';
+import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createLogger, type AgentId } from '@jarvis/shared';
 
 const log = createLogger('knowledge:base');
@@ -220,9 +220,9 @@ export class KnowledgeBase {
 }
 
 /** Simple tokenizer: lowercase, split on non-alphanumeric, filter short/stop words */
-function tokenize(text: string): string[] {
-  const STOP_WORDS = new Set(['the', 'a', 'an', 'is', 'it', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or', 'but', 'not', 'with', 'from', 'by', 'as', 'this', 'that', 'was', 'are', 'be', 'has', 'had', 'have', 'will', 'would', 'could', 'should', 'do', 'does', 'did']);
+const STOP_WORDS = new Set(['the', 'a', 'an', 'is', 'it', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or', 'but', 'not', 'with', 'from', 'by', 'as', 'this', 'that', 'was', 'are', 'be', 'has', 'had', 'have', 'will', 'would', 'could', 'should', 'do', 'does', 'did']);
 
+function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')

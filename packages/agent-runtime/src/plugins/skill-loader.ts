@@ -22,8 +22,8 @@
  *     └── ...
  */
 
-import { existsSync, readdirSync, readFileSync, watch, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, watch } from 'node:fs';
+import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { platform } from 'node:os';
 import { createLogger } from '@jarvis/shared';
@@ -389,11 +389,18 @@ function checkGating(
  * Check if a binary exists on PATH.
  * Caches results for performance.
  */
+const MAX_BIN_CACHE_SIZE = 200;
 const _binCache = new Map<string, boolean>();
 /** Allowed chars for binary names to prevent command injection */
 const SAFE_BIN_NAME = /^[a-zA-Z0-9._-]+$/;
 function binaryExists(name: string): boolean {
   if (_binCache.has(name)) return _binCache.get(name)!;
+
+  // Evict oldest entries if cache is too large
+  if (_binCache.size >= MAX_BIN_CACHE_SIZE) {
+    const firstKey = _binCache.keys().next().value;
+    if (firstKey !== undefined) _binCache.delete(firstKey);
+  }
 
   // Validate binary name to prevent command injection
   if (!SAFE_BIN_NAME.test(name)) {
@@ -481,6 +488,9 @@ function setupWatcher(
   debounceMs: number,
   config: SkillLoaderConfig,
 ): void {
+  // Clean up any existing watchers before creating new ones
+  stopSkillWatcher();
+
   // Only watch existing directories
   const watchableDirs = dirs.filter(d => existsSync(d));
   if (watchableDirs.length === 0) return;

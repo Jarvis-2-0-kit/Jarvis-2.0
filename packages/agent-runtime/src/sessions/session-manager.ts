@@ -1,4 +1,4 @@
-import { readFile, writeFile, appendFile, readdir, mkdir, stat, rename } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, readdir, mkdir, rename } from 'node:fs/promises';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -294,7 +294,14 @@ export class SessionManager {
     }
   }
 
+  private validateSessionId(sessionId: string): void {
+    if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+      throw new Error(`Invalid session ID: contains unsafe characters`);
+    }
+  }
+
   private getSessionPath(sessionId: string): string {
+    this.validateSessionId(sessionId);
     return join(this.sessionsDir, `${sessionId}.jsonl`);
   }
 

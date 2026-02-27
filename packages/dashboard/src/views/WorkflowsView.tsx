@@ -130,6 +130,7 @@ export function WorkflowsView() {
           <button
             onClick={() => void fetchData()}
             disabled={loading}
+            aria-label="Refresh workflows"
             style={{
               background: 'none',
               border: '1px solid var(--border-primary)',

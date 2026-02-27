@@ -2,15 +2,22 @@ import { createLogger } from '@jarvis/shared';
 import type {
   LLMProvider, ChatRequest, ChatResponse, ChatChunk,
   ModelInfo, ContentBlock, Message,
+  TextBlock, ToolUseBlock, ToolResultBlock,
 } from '../types.js';
 
 const log = createLogger('llm:ollama');
 
 const DEFAULT_OLLAMA_URL = 'http://localhost:11434';
+/** Timeout for non-streaming chat requests (5 minutes) */
+const CHAT_TIMEOUT_MS = 300_000;
+/** Timeout for streaming chat requests (10 minutes) */
+const STREAM_TIMEOUT_MS = 600_000;
+/** Timeout for fetching model tags (15 seconds) */
+const TAGS_TIMEOUT_MS = 15_000;
 
 export class OllamaProvider implements LLMProvider {
-  id = 'ollama';
-  name = 'Ollama (Local)';
+  readonly id = 'ollama';
+  readonly name = 'Ollama (Local)';
 
   constructor(private baseUrl: string = DEFAULT_OLLAMA_URL) {}
 
@@ -26,7 +33,9 @@ export class OllamaProvider implements LLMProvider {
   /** Dynamically fetch installed models from Ollama server */
   async fetchModels(): Promise<ModelInfo[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/tags`);
+      const response = await fetch(`${this.baseUrl}/api/tags`, {
+        signal: AbortSignal.timeout(TAGS_TIMEOUT_MS),
+      });
       if (!response.ok) return [];
       const data = await response.json() as OllamaTagsResponse;
       return (data.models ?? []).map((m) => ({
@@ -50,6 +59,7 @@ export class OllamaProvider implements LLMProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -67,6 +77,7 @@ export class OllamaProvider implements LLMProvider {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(STREAM_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -136,7 +147,7 @@ export class OllamaProvider implements LLMProvider {
   }
 
   private buildRequestBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
-    const messages = request.messages.map((m) => this.convertMessage(m, request.system));
+    const messages = request.messages.flatMap((m) => this.convertMessage(m));
 
     if (request.system) {
       messages.unshift({ role: 'system', content: request.system });
@@ -168,44 +179,50 @@ export class OllamaProvider implements LLMProvider {
     return body;
   }
 
-  private convertMessage(msg: Message, _system?: string): Record<string, unknown> {
+  private convertMessage(msg: Message): Record<string, unknown>[] {
     if (typeof msg.content === 'string') {
-      return { role: msg.role, content: msg.content };
+      return [{ role: msg.role, content: msg.content }];
     }
 
-    // Ollama uses OpenAI-compatible format
-    const toolResults = msg.content.filter((b) => b.type === 'tool_result');
+    // Ollama uses OpenAI-compatible format — each tool result must be a separate message
+    const toolResults = msg.content.filter((b): b is ToolResultBlock => b.type === 'tool_result');
     if (toolResults.length > 0) {
-      return {
+      return toolResults.map((tr) => ({
         role: 'tool',
-        content: typeof toolResults[0]!.content === 'string'
-          ? toolResults[0]!.content
-          : JSON.stringify(toolResults[0]!.content),
-      };
+        tool_call_id: tr.tool_use_id,
+        content: typeof tr.content === 'string'
+          ? tr.content
+          : JSON.stringify(tr.content),
+      }));
     }
 
-    const toolUses = msg.content.filter((b) => b.type === 'tool_use');
+    const toolUses = msg.content.filter((b): b is ToolUseBlock => b.type === 'tool_use');
     if (toolUses.length > 0) {
-      const textBlocks = msg.content.filter((b) => b.type === 'text');
-      return {
+      const textBlocks = msg.content.filter((b): b is TextBlock => b.type === 'text');
+      return [{
         role: 'assistant',
-        content: textBlocks.length > 0 ? textBlocks.map((b) => (b as { text: string }).text).join('') : '',
+        content: textBlocks.length > 0 ? textBlocks.map((b) => b.text).join('') : '',
         tool_calls: toolUses.map((b) => ({
-          id: (b as { id: string }).id,
+          id: b.id,
           type: 'function',
           function: {
-            name: (b as { name: string }).name,
-            arguments: JSON.stringify((b as { input: unknown }).input),
+            name: b.name,
+            arguments: JSON.stringify(b.input),
           },
         })),
-      };
+      }];
     }
 
-    const content = msg.content.map((b) => (b as { text: string }).text).join('');
-    return { role: msg.role, content };
+    const content = msg.content
+      .filter((b): b is TextBlock => b.type === 'text')
+      .map((b) => b.text).join('');
+    return [{ role: msg.role, content }];
   }
 
   private parseResponse(data: OllamaResponse, model: string): ChatResponse {
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid Ollama response: expected an object');
+    }
     const content: ContentBlock[] = [];
     let toolCallCounter = 0;
 

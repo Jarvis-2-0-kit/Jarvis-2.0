@@ -1,17 +1,15 @@
-import { createLogger } from '@jarvis/shared';
+import { createHmac, randomBytes } from 'node:crypto';
 import type { ToolResult } from '../../base.js';
 import { createToolResult, createErrorResult } from '../../base.js';
-
-const log = createLogger('tool:social:twitter');
 
 const TWITTER_API_V2 = 'https://api.twitter.com/2';
 
 export interface TwitterConfig {
-  apiKey: string;
-  apiSecret: string;
-  accessToken: string;
-  accessTokenSecret: string;
-  bearerToken: string;
+  readonly apiKey: string;
+  readonly apiSecret: string;
+  readonly accessToken: string;
+  readonly accessTokenSecret: string;
+  readonly bearerToken: string;
 }
 
 /**
@@ -43,9 +41,10 @@ export class TwitterClient {
     }
 
     try {
-      const response = await fetch(`${TWITTER_API_V2}/tweets`, {
+      const tweetUrl = `${TWITTER_API_V2}/tweets`;
+      const response = await fetch(tweetUrl, {
         method: 'POST',
-        headers: this.getHeaders(),
+        headers: this.getHeaders('POST', tweetUrl),
         body: JSON.stringify(body),
       });
 
@@ -82,9 +81,10 @@ export class TwitterClient {
 
   async deleteTweet(tweetId: string): Promise<ToolResult> {
     try {
-      const response = await fetch(`${TWITTER_API_V2}/tweets/${tweetId}`, {
+      const deleteUrl = `${TWITTER_API_V2}/tweets/${tweetId}`;
+      const response = await fetch(deleteUrl, {
         method: 'DELETE',
-        headers: this.getHeaders(),
+        headers: this.getHeaders('DELETE', deleteUrl),
       });
 
       if (!response.ok) {
@@ -157,7 +157,7 @@ export class TwitterClient {
       url.searchParams.set('tweet.fields', 'public_metrics,organic_metrics,created_at');
 
       const response = await fetch(url.toString(), {
-        headers: this.getHeaders(),
+        headers: { 'Authorization': `Bearer ${this.config.bearerToken}` },
       });
 
       if (!response.ok) {
@@ -181,11 +181,49 @@ export class TwitterClient {
     }
   }
 
-  private getHeaders(): Record<string, string> {
+  private getHeaders(method?: string, url?: string): Record<string, string> {
+    // Use OAuth 1.0a for write requests (POST/DELETE), Bearer for read (GET)
+    if (method && method.toUpperCase() !== 'GET') {
+      return {
+        'Content-Type': 'application/json',
+        'Authorization': this.generateOAuthHeader(method, url ?? ''),
+      };
+    }
     return {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${this.config.bearerToken}`,
     };
+  }
+
+  private generateOAuthHeader(method: string, url: string): string {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const nonce = randomBytes(16).toString('hex');
+
+    const params: Record<string, string> = {
+      oauth_consumer_key: this.config.apiKey,
+      oauth_nonce: nonce,
+      oauth_signature_method: 'HMAC-SHA1',
+      oauth_timestamp: timestamp,
+      oauth_token: this.config.accessToken,
+      oauth_version: '1.0',
+    };
+
+    // Build parameter string (sorted)
+    const paramString = Object.entries(params)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join('&');
+
+    const baseString = `${method.toUpperCase()}&${encodeURIComponent(url)}&${encodeURIComponent(paramString)}`;
+    const signingKey = `${encodeURIComponent(this.config.apiSecret)}&${encodeURIComponent(this.config.accessTokenSecret)}`;
+    const signature = createHmac('sha1', signingKey).update(baseString).digest('base64');
+
+    params['oauth_signature'] = signature;
+
+    return 'OAuth ' + Object.entries(params)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${encodeURIComponent(k)}="${encodeURIComponent(v)}"`)
+      .join(', ');
   }
 }
 

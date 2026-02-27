@@ -13,7 +13,7 @@
  * - Sound notification on new agent messages
  */
 
-import { useState, useRef, useEffect, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   Send, Copy, RotateCcw, ChevronDown,
   Bot, User, Cpu, Terminal,
@@ -91,13 +91,13 @@ export function ChatPanel() {
 
   // Inject CSS
   useEffect(() => {
-    const id = 'jarvis-chat-css';
-    if (!document.getElementById(id)) {
-      const style = document.createElement('style');
-      style.id = id;
-      style.textContent = CHAT_CSS;
-      document.head.appendChild(style);
-    }
+    const styleId = 'chat-panel-styles';
+    if (document.getElementById(styleId)) return;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = CHAT_CSS;
+    document.head.appendChild(style);
+    return () => { style.remove(); };
   }, []);
 
   // Auto-scroll with smart detection
@@ -205,8 +205,8 @@ export function ChatPanel() {
     });
   };
 
-  // Group consecutive messages from same sender
-  const messageGroups = groupMessages(chatMessages);
+  // Group consecutive messages from same sender (memoized to avoid re-computation on every render)
+  const messageGroups = useMemo(() => groupMessages(chatMessages), [chatMessages]);
 
   // Active agent statuses
   const activeTyping = Object.entries(isTyping).filter(([, v]) => v);
@@ -239,6 +239,8 @@ export function ChatPanel() {
             <button
               key={t}
               onClick={() => setTarget(t)}
+              aria-label={`Send to ${t === 'all' ? 'all agents' : t}`}
+              aria-pressed={target === t}
               style={{
                 fontSize: 9,
                 padding: '1px 6px',
@@ -300,6 +302,7 @@ export function ChatPanel() {
       {showScrollDown && (
         <button
           onClick={scrollToBottom}
+          aria-label="Scroll to newest messages"
           style={{
             position: 'absolute',
             bottom: 60,
@@ -402,6 +405,7 @@ export function ChatPanel() {
         <button
           onClick={handleSend}
           disabled={!input.trim()}
+          aria-label="Send message"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -589,6 +593,7 @@ function MessageGroupBlock({ group, copiedId, onCopy, onResend }: {
                 <button
                   onClick={() => onCopy(msg.id, msg.content)}
                   title="Copy"
+                  aria-label="Copy message"
                   style={{
                     width: 20, height: 20,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -603,6 +608,7 @@ function MessageGroupBlock({ group, copiedId, onCopy, onResend }: {
                   <button
                     onClick={() => onResend(msg.content)}
                     title="Edit & resend"
+                    aria-label="Edit and resend message"
                     style={{
                       width: 20, height: 20,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',

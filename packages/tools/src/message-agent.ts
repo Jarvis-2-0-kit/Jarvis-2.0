@@ -1,4 +1,4 @@
-import { createLogger, NatsSubjects } from '@jarvis/shared';
+import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
 

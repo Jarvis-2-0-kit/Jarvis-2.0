@@ -142,7 +142,7 @@ export function ToastContainer() {
 
   // Inject keyframes
   useEffect(() => {
-    const styleId = 'jarvis-toast-styles';
+    const styleId = 'toast-container-styles';
     if (document.getElementById(styleId)) return;
 
     const style = document.createElement('style');
@@ -162,6 +162,7 @@ export function ToastContainer() {
       }
     `;
     document.head.appendChild(style);
+    return () => { style.remove(); };
   }, []);
 
   // Always show the mute/unmute button (even when no toasts)

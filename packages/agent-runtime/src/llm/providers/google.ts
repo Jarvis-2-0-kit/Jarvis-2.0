@@ -7,6 +7,10 @@ import type {
 const log = createLogger('llm:google');
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+/** Timeout for non-streaming chat requests (5 minutes) */
+const CHAT_TIMEOUT_MS = 300_000;
+/** Timeout for streaming chat requests (10 minutes) */
+const STREAM_TIMEOUT_MS = 600_000;
 
 const MODELS: ModelInfo[] = [
   { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'google', contextWindow: 1048576, maxOutputTokens: 8192, supportsTools: true, supportsVision: true, costPerInputToken: 0.075 / 1e6, costPerOutputToken: 0.3 / 1e6 },
@@ -16,8 +20,8 @@ const MODELS: ModelInfo[] = [
 ];
 
 export class GoogleProvider implements LLMProvider {
-  id = 'google';
-  name = 'Google AI';
+  readonly id = 'google';
+  readonly name = 'Google AI';
 
   constructor(private apiKey: string) {}
 
@@ -30,13 +34,14 @@ export class GoogleProvider implements LLMProvider {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const url = `${GEMINI_API_URL}/${request.model}:generateContent?key=${this.apiKey}`;
+    const url = `${GEMINI_API_URL}/${request.model}:generateContent`;
     const body = this.buildRequestBody(request);
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -49,13 +54,14 @@ export class GoogleProvider implements LLMProvider {
   }
 
   async *chatStream(request: ChatRequest): AsyncIterable<ChatChunk> {
-    const url = `${GEMINI_API_URL}/${request.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`;
+    const url = `${GEMINI_API_URL}/${request.model}:streamGenerateContent?alt=sse`;
     const body = this.buildRequestBody(request);
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(STREAM_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -211,6 +217,9 @@ export class GoogleProvider implements LLMProvider {
   }
 
   private parseResponse(data: GeminiResponse, model: string): ChatResponse {
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid Gemini response: expected an object');
+    }
     const candidate = data.candidates?.[0];
     const content: ContentBlock[] = [];
     let toolCallCounter = 0;

@@ -1,16 +1,12 @@
-import { createLogger } from '@jarvis/shared';
 import type { ToolResult } from '../../base.js';
 import { createToolResult, createErrorResult } from '../../base.js';
 
-const log = createLogger('tool:social:linkedin');
-
 const LINKEDIN_API_URL = 'https://api.linkedin.com/v2';
-const LINKEDIN_REST_URL = 'https://api.linkedin.com/rest';
 
 export interface LinkedInConfig {
-  accessToken: string;
-  organizationId?: string; // For company pages
-  personUrn?: string; // For personal profile (format: urn:li:person:xxx)
+  readonly accessToken: string;
+  readonly organizationId?: string; // For company pages
+  readonly personUrn?: string; // For personal profile (format: urn:li:person:xxx)
 }
 
 /**

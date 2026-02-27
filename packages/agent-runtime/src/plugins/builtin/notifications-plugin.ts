@@ -176,7 +176,18 @@ async function sendWebhook(webhook: WebhookConfig, notification: Notification): 
 }
 
 function escapeAS(str: string): string {
-  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\r/g, '').replace(/\n/g, ' ');
+}
+
+function isPrivateWebhookUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname;
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
+    if (hostname.startsWith('10.') || hostname.startsWith('192.168.') || hostname.startsWith('172.')) return true;
+    if (parsed.protocol !== 'https:') return true; // require HTTPS for webhooks
+    return false;
+  } catch { return true; }
 }
 
 function isQuietHours(config: NotificationConfig): boolean {
@@ -437,6 +448,10 @@ export function createNotificationsPlugin(): JarvisPluginDefinition {
                 return { type: 'error' as const, content: 'add_webhook requires webhook.name and webhook.url' };
               }
 
+              if (isPrivateWebhookUrl(webhook.url)) {
+                return { type: 'error' as const, content: 'Webhook URL must be a public HTTPS URL (no localhost, private IPs, or non-HTTPS)' };
+              }
+
               config.webhooks.push({
                 name: webhook.name,
                 url: webhook.url,
@@ -489,40 +504,32 @@ export function createNotificationsPlugin(): JarvisPluginDefinition {
       // ─── Lifecycle hooks ───
 
       // Auto-notify on task completion
-      api.registerHook('task_completed', {
-        priority: 50,
-        handler: async (data) => {
-          const config = loadConfig();
-          if (!config.notifyOnTaskComplete) return data;
+      api.registerHook('task_completed', async (data) => {
+        const config = loadConfig();
+        if (!config.notifyOnTaskComplete) return;
 
-          const taskData = data as { taskId?: string; title?: string; description?: string };
-          await sendNotification({
-            title: `✅ Task Complete`,
-            message: taskData.title ?? taskData.description ?? `Task ${taskData.taskId ?? 'unknown'} finished`,
-            priority: 4,
-            sound: true,
-          });
-          return data;
-        },
-      });
+        const taskData = data as { taskId?: string; title?: string; description?: string };
+        await sendNotification({
+          title: `✅ Task Complete`,
+          message: taskData.title ?? taskData.description ?? `Task ${taskData.taskId ?? 'unknown'} finished`,
+          priority: 4,
+          sound: true,
+        });
+      }, { priority: 50 });
 
       // Auto-notify on task failure
-      api.registerHook('task_failed', {
-        priority: 50,
-        handler: async (data) => {
-          const config = loadConfig();
-          if (!config.notifyOnTaskFail) return data;
+      api.registerHook('task_failed', async (data) => {
+        const config = loadConfig();
+        if (!config.notifyOnTaskFail) return;
 
-          const taskData = data as { taskId?: string; error?: string; title?: string };
-          await sendNotification({
-            title: `❌ Task Failed`,
-            message: taskData.error ?? taskData.title ?? `Task ${taskData.taskId ?? 'unknown'} failed`,
-            priority: 8,
-            sound: true,
-          });
-          return data;
-        },
-      });
+        const taskData = data as { taskId?: string; error?: string; title?: string };
+        await sendNotification({
+          title: `❌ Task Failed`,
+          message: taskData.error ?? taskData.title ?? `Task ${taskData.taskId ?? 'unknown'} failed`,
+          priority: 8,
+          sound: true,
+        });
+      }, { priority: 50 });
 
       api.logger.info('[jarvis-notifications] Notifications plugin registered with 2 tools + 2 hooks');
     },

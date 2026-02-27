@@ -9,6 +9,12 @@ const log = createLogger('llm:anthropic');
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
+/** Timeout for non-streaming chat requests (5 minutes) */
+const CHAT_TIMEOUT_MS = 300_000;
+/** Timeout for streaming chat requests (10 minutes) */
+const STREAM_TIMEOUT_MS = 600_000;
+/** Default max tokens if not specified in request */
+const DEFAULT_MAX_TOKENS = 8192;
 
 const MODELS: ModelInfo[] = [
   { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'anthropic', contextWindow: 200000, maxOutputTokens: 128000, supportsTools: true, supportsVision: true, costPerInputToken: 5 / 1e6, costPerOutputToken: 25 / 1e6 },
@@ -54,8 +60,8 @@ function readClaudeCliToken(): { accessToken: string; expiresAt: number; refresh
 }
 
 export class AnthropicProvider implements LLMProvider {
-  id = 'anthropic';
-  name = 'Anthropic';
+  readonly id = 'anthropic';
+  readonly name = 'Anthropic';
 
   private apiKey?: string;
   private authMode: AnthropicAuthMode;
@@ -117,6 +123,7 @@ export class AnthropicProvider implements LLMProvider {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
     });
 
     // Auto-refresh OAuth token on 401 and retry once
@@ -127,6 +134,7 @@ export class AnthropicProvider implements LLMProvider {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
       });
     }
 
@@ -145,6 +153,7 @@ export class AnthropicProvider implements LLMProvider {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(STREAM_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -284,7 +293,7 @@ export class AnthropicProvider implements LLMProvider {
     const body: Record<string, unknown> = {
       model: request.model,
       messages,
-      max_tokens: request.max_tokens ?? 8192,
+      max_tokens: request.max_tokens ?? DEFAULT_MAX_TOKENS,
       stream,
     };
 
@@ -365,7 +374,10 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   private parseResponse(data: AnthropicResponse): ChatResponse {
-    const content: ContentBlock[] = (data.content ?? []).map((block) => {
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid Anthropic response: expected an object');
+    }
+    const content: ContentBlock[] = (Array.isArray(data.content) ? data.content : []).map((block) => {
       if (block.type === 'thinking') return { type: 'thinking' as const, thinking: block.thinking ?? '' };
       if (block.type === 'text') return { type: 'text', text: block.text ?? '' };
       if (block.type === 'tool_use') return {

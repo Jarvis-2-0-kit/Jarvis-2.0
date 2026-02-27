@@ -6,9 +6,12 @@ import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
 import { writeFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 const log = createLogger('tools:image-gen');
+
+const OPENAI_IMAGES_URL = 'https://api.openai.com/v1/images/generations';
+const BLOCKED_SAVE_SEGMENTS = ['/.ssh/', '/.gnupg/', '/.config/gh/', '/.aws/', '/.env', '/etc/'];
 
 export class ImageGenTool implements AgentTool {
   private apiKey: string;
@@ -72,7 +75,7 @@ export class ImageGenTool implements AgentTool {
     log.info(`Generating image: "${prompt.slice(0, 80)}..." (${size}, quality: ${quality})`);
 
     try {
-      const response = await fetch('https://api.openai.com/v1/images/generations', {
+      const response = await fetch(OPENAI_IMAGES_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -101,6 +104,15 @@ export class ImageGenTool implements AgentTool {
       }
 
       if (savePath) {
+        // Validate save_path to prevent path traversal
+        const resolvedSavePath = resolve(savePath);
+        for (const seg of BLOCKED_SAVE_SEGMENTS) {
+          if (resolvedSavePath.includes(seg)) {
+            return createErrorResult(`Save path denied: contains blocked segment '${seg}'`);
+          }
+        }
+        savePath = resolvedSavePath;
+
         // Ensure directory exists and write PNG
         await mkdir(dirname(savePath), { recursive: true });
         const buffer = Buffer.from(b64, 'base64');

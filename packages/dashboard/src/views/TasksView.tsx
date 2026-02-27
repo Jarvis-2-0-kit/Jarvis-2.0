@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useGatewayStore } from '../store/gateway-store.js';
 import { gateway } from '../gateway/client.js';
 import {
@@ -27,7 +27,6 @@ interface TaskDef {
 }
 
 export function TasksView() {
-  const connected = useGatewayStore((s) => s.connected);
   const tasks = useGatewayStore((s) => s.tasks);
   const createTask = useGatewayStore((s) => s.createTask);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -59,8 +58,8 @@ export function TasksView() {
   const handleCancel = async (taskId: string) => {
     try {
       await gateway.request('tasks.cancel', { taskId });
-    } catch (err) {
-      console.error('Cancel failed:', err);
+    } catch {
+      /* cancel failed — task state will refresh from gateway */
     }
   };
 

@@ -1,14 +1,10 @@
-import { createLogger } from '@jarvis/shared';
 import type { ToolResult } from '../../base.js';
 import { createToolResult, createErrorResult } from '../../base.js';
-
-const log = createLogger('tool:social:meta');
-
-const GRAPH_API_URL = 'https://graph.facebook.com/v21.0';
+import { GRAPH_API_URL } from './constants.js';
 
 export interface FacebookConfig {
-  accessToken: string;
-  pageId: string;
+  readonly accessToken: string;
+  readonly pageId: string;
 }
 
 /**

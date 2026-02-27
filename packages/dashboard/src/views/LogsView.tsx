@@ -453,7 +453,7 @@ export function LogsView() {
 
         {filteredLogs.map((entry, i) => (
           <div
-            key={i}
+            key={`${entry.timestamp}-${entry.level}-${entry.source}-${i}`}
             style={{
               padding: '1px 16px',
               display: 'flex',

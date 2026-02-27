@@ -1,4 +1,3 @@
-import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from '../base.js';
 import { createToolResult, createErrorResult } from '../base.js';
 import { TwitterClient, type TwitterConfig } from './platforms/twitter.js';
@@ -7,14 +6,12 @@ import { FacebookClient, type FacebookConfig } from './platforms/meta.js';
 import { LinkedInClient, type LinkedInConfig } from './platforms/linkedin.js';
 import { TikTokClient, type TikTokConfig } from './platforms/tiktok.js';
 
-const log = createLogger('tool:social');
-
 export interface SocialToolConfig {
-  twitter?: TwitterConfig;
-  instagram?: InstagramConfig;
-  facebook?: FacebookConfig;
-  linkedin?: LinkedInConfig;
-  tiktok?: TikTokConfig;
+  readonly twitter?: TwitterConfig;
+  readonly instagram?: InstagramConfig;
+  readonly facebook?: FacebookConfig;
+  readonly linkedin?: LinkedInConfig;
+  readonly tiktok?: TikTokConfig;
 }
 
 /**
@@ -85,7 +82,6 @@ export class SocialTool implements AgentTool {
   }
 
   private async postToAll(action: string, params: Record<string, unknown>): Promise<ToolResult> {
-    const results: string[] = [];
     const platforms = [
       { name: 'Twitter', handler: () => this.handleTwitter(action, params) },
       { name: 'Facebook', handler: () => this.handleFacebook(action, params) },
@@ -93,14 +89,16 @@ export class SocialTool implements AgentTool {
       { name: 'Instagram', handler: () => this.handleInstagram(action, params) },
     ];
 
-    for (const p of platforms) {
-      try {
-        const result = await p.handler();
-        results.push(`${p.name}: ${result.type === 'error' ? 'FAILED' : 'OK'} - ${result.content.slice(0, 80)}`);
-      } catch (err) {
-        results.push(`${p.name}: FAILED - ${(err as Error).message}`);
+    const settled = await Promise.allSettled(platforms.map((p) => p.handler()));
+
+    const results = settled.map((outcome, i) => {
+      const name = platforms[i]!.name;
+      if (outcome.status === 'fulfilled') {
+        const result = outcome.value;
+        return `${name}: ${result.type === 'error' ? 'FAILED' : 'OK'} - ${result.content.slice(0, 80)}`;
       }
-    }
+      return `${name}: FAILED - ${outcome.reason?.message ?? 'Unknown error'}`;
+    });
 
     return createToolResult(`Cross-platform post results:\n${results.join('\n')}`);
   }
@@ -235,23 +233,33 @@ export class SocialAnalyticsTool implements AgentTool {
     }
 
     switch (platform) {
-      case 'twitter':
-        if (type === 'post' && postId) return this.twitter?.getAnalytics(postId) ?? createErrorResult('Twitter not configured');
-        if (type === 'search' && query) return this.twitter?.searchTweets(query) ?? createErrorResult('Twitter not configured');
+      case 'twitter': {
+        if (!this.twitter) return createErrorResult('Twitter not configured');
+        if (type === 'post' && postId) return this.twitter.getAnalytics(postId);
+        if (type === 'search' && query) return this.twitter.searchTweets(query);
         return createErrorResult('Twitter analytics requires post_id or search query');
-      case 'instagram':
-        if (type === 'account') return this.instagram?.getInsights(period) ?? createErrorResult('Instagram not configured');
-        if (type === 'post' && postId) return this.instagram?.getMediaInsights(postId) ?? createErrorResult('Instagram not configured');
+      }
+      case 'instagram': {
+        if (!this.instagram) return createErrorResult('Instagram not configured');
+        if (type === 'account') return this.instagram.getInsights(period);
+        if (type === 'post' && postId) return this.instagram.getMediaInsights(postId);
         return createErrorResult('Specify type: account or post');
-      case 'facebook':
-        if (type === 'account') return this.facebook?.getPageInsights(period === 'month' ? 'days_28' : period) ?? createErrorResult('Facebook not configured');
+      }
+      case 'facebook': {
+        if (!this.facebook) return createErrorResult('Facebook not configured');
+        if (type === 'account') return this.facebook.getPageInsights(period === 'month' ? 'days_28' : period);
         return createErrorResult('Facebook analytics: use type=account');
-      case 'linkedin':
-        if (type === 'account') return this.linkedin?.getFollowerStats() ?? createErrorResult('LinkedIn not configured');
+      }
+      case 'linkedin': {
+        if (!this.linkedin) return createErrorResult('LinkedIn not configured');
+        if (type === 'account') return this.linkedin.getFollowerStats();
         return createErrorResult('LinkedIn analytics: use type=account');
-      case 'tiktok':
-        if (type === 'account') return this.tiktok?.getVideos() ?? createErrorResult('TikTok not configured');
+      }
+      case 'tiktok': {
+        if (!this.tiktok) return createErrorResult('TikTok not configured');
+        if (type === 'account') return this.tiktok.getVideos();
         return createErrorResult('TikTok analytics: use type=account');
+      }
       default:
         return createErrorResult(`Unknown platform: ${platform}`);
     }

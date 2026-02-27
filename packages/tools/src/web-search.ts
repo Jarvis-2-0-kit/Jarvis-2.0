@@ -4,6 +4,9 @@ import { createToolResult, createErrorResult } from './base.js';
 
 const log = createLogger('tool:web-search');
 
+const BRAVE_TIMEOUT = 30_000;
+const PERPLEXITY_TIMEOUT = 60_000;
+
 /**
  * Web search tool supporting Brave Search API and Perplexity.
  * Falls back between providers based on availability.
@@ -60,12 +63,18 @@ export class WebSearchTool implements AgentTool {
     url.searchParams.set('q', query);
     url.searchParams.set('count', String(count));
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), BRAVE_TIMEOUT);
+
     const response = await fetch(url.toString(), {
       headers: {
         'Accept': 'application/json',
         'X-Subscription-Token': this.braveApiKey!,
       },
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`Brave API error ${response.status}`);
@@ -87,6 +96,9 @@ export class WebSearchTool implements AgentTool {
   }
 
   private async searchPerplexity(query: string): Promise<ToolResult> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), PERPLEXITY_TIMEOUT);
+
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
       headers: {
@@ -97,7 +109,10 @@ export class WebSearchTool implements AgentTool {
         model: 'sonar',
         messages: [{ role: 'user', content: query }],
       }),
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`Perplexity API error ${response.status}`);

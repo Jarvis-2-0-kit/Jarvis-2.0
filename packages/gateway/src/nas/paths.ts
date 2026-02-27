@@ -1,11 +1,16 @@
 import { existsSync, mkdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { resolve as pathResolve, join } from 'node:path';
 import { NAS_DIRS, DEFAULT_NAS_MOUNT, createLogger } from '@jarvis/shared';
 
 const log = createLogger('gateway:nas');
 
 export class NasPaths {
   constructor(private readonly mountPath: string = process.env['JARVIS_NAS_MOUNT'] ?? DEFAULT_NAS_MOUNT) {}
+
+  /** Get the effective base path (NAS mount or local fallback) */
+  getBasePath(): string {
+    return this.isMounted() ? this.mountPath : join(process.cwd(), '.jarvis-data');
+  }
 
   /** Check if NAS is mounted and accessible */
   isMounted(): boolean {
@@ -22,7 +27,7 @@ export class NasPaths {
       log.warn(`NAS not mounted at ${this.mountPath} - using local fallback`);
     }
 
-    const basePath = this.isMounted() ? this.mountPath : join(process.cwd(), '.jarvis-data');
+    const basePath = this.getBasePath();
 
     for (const dir of Object.values(NAS_DIRS)) {
       const fullPath = join(basePath, dir);
@@ -35,8 +40,14 @@ export class NasPaths {
 
   /** Get resolved path for a NAS directory */
   resolve(dir: keyof typeof NAS_DIRS, ...segments: string[]): string {
-    const basePath = this.isMounted() ? this.mountPath : join(process.cwd(), '.jarvis-data');
-    return join(basePath, NAS_DIRS[dir], ...segments);
+    const basePath = this.getBasePath();
+    const resolved = join(basePath, NAS_DIRS[dir], ...segments);
+    const normalizedBase = pathResolve(basePath);
+    const normalizedResolved = pathResolve(resolved);
+    if (!normalizedResolved.startsWith(normalizedBase + '/') && normalizedResolved !== normalizedBase) {
+      throw new Error(`Path traversal detected: ${segments.join('/')}`);
+    }
+    return resolved;
   }
 
   /** Get sessions directory for an agent */

@@ -29,6 +29,7 @@ export function formatUptimeShort(seconds: number): string {
 
 /** Format byte count, e.g. "1.5 GB" */
 export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
   if (bytes === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -51,7 +52,7 @@ export function formatBytesRate(bytesPerSec: number): string {
  */
 export function formatTimeAgo(ts: number): string {
   if (!ts) return 'never';
-  const diff = Date.now() - ts;
+  const diff = Math.max(0, Date.now() - ts);
   if (diff < 5_000) return 'just now';
   if (diff < 60_000) return `${Math.round(diff / 1000)}s ago`;
   if (diff < 3_600_000) return `${Math.round(diff / 60_000)}m ago`;

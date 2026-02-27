@@ -8,20 +8,25 @@ import { sshExecSimple, type SshHostConfig } from './ssh.js';
 
 const log = createLogger('tool:computer-use');
 
+const SCREENSHOT_TIMEOUT = 30_000; // 30s for screenshot capture
+const ACTION_TIMEOUT = 15_000; // 15s for mouse/keyboard actions
+const OPEN_APP_TIMEOUT = 15_000; // 15s for app launch via SSH
+const MAX_SCREENSHOT_KB = 500; // 500KB max base64 screenshot size
+
 export interface VncHostConfig {
   /** VNC host IP */
-  host: string;
+  readonly host: string;
   /** VNC port (default: 5900) */
-  vncPort?: number;
+  readonly vncPort?: number;
   /** VNC password for VNCAuth */
-  vncPassword: string;
+  readonly vncPassword: string;
   /** SSH config for commands that need SSH (open_app, etc.) */
-  ssh?: SshHostConfig;
+  readonly ssh?: SshHostConfig;
 }
 
 export interface ComputerUseConfig {
   /** Map of agentId -> VNC host config for target machines */
-  hosts: Record<string, VncHostConfig>;
+  readonly hosts: Record<string, VncHostConfig>;
 }
 
 type ComputerAction =
@@ -224,7 +229,6 @@ KEY COMBOS: Use key_combo with format like "cmd+c", "cmd+shift+s", "ctrl+a"`,
         this.vncControlScript,
         host.host,
         String(host.vncPort || 5900),
-        host.vncPassword,
         action,
         ...params,
       ];
@@ -232,8 +236,9 @@ KEY COMBOS: Use key_combo with format like "cmd+c", "cmd+shift+s", "ctrl+a"`,
       log.info(`VNC: ${action} ${params.join(' ')}`);
 
       const proc = spawn('python3', args, {
-        timeout: action === 'screenshot' ? 30000 : 15000,
+        timeout: action === 'screenshot' ? SCREENSHOT_TIMEOUT : ACTION_TIMEOUT,
         stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, VNC_PASSWORD: host.vncPassword },
       });
 
       let stdout = '';
@@ -264,8 +269,8 @@ KEY COMBOS: Use key_combo with format like "cmd+c", "cmd+shift+s", "ctrl+a"`,
           const sizeKB = output.length / 1024;
           log.info(`Screenshot captured: ${sizeKB.toFixed(0)}KB base64`);
 
-          // Safety cap: if base64 still > 500KB after Python resize, replace with text
-          if (sizeKB > 500) {
+          // Safety cap: if base64 still > MAX_SCREENSHOT_KB after Python resize, replace with text
+          if (sizeKB > MAX_SCREENSHOT_KB) {
             log.warn(`Screenshot too large (${sizeKB.toFixed(0)}KB), returning text description instead`);
             resolve(createToolResult(
               `Screenshot captured but too large to display (${sizeKB.toFixed(0)}KB). ` +
@@ -302,13 +307,18 @@ KEY COMBOS: Use key_combo with format like "cmd+c", "cmd+shift+s", "ctrl+a"`,
   private async openApp(host: VncHostConfig, appName: string): Promise<ToolResult> {
     if (!appName) return createErrorResult('Missing required parameter: app_name');
 
+    // Validate appName to prevent shell injection via SSH command
+    if (!/^[a-zA-Z0-9 ._-]+$/.test(appName)) {
+      return createErrorResult('Invalid app_name: only alphanumeric characters, spaces, dots, underscores, and hyphens are allowed');
+    }
+
     if (!host.ssh) {
       return createErrorResult('SSH config not available for open_app action');
     }
 
     const result = await sshExecSimple(host.ssh,
       `open -a "${appName}" 2>&1 || open -a "${appName}.app" 2>&1`,
-      15000
+      OPEN_APP_TIMEOUT
     );
 
     if (result.code !== 0) {

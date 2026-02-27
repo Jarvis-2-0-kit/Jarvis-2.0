@@ -10,6 +10,10 @@ import type { RedisClient } from './client.js';
 
 const log = createLogger('gateway:state-store');
 
+/** TTL constants in seconds */
+const TTL_24_HOURS = 86_400;
+const TTL_7_DAYS = 604_800;
+
 export class StateStore {
   constructor(private readonly redis: RedisClient) {}
 
@@ -17,7 +21,7 @@ export class StateStore {
 
   async setAgentState(state: AgentState): Promise<void> {
     const key = RedisKeys.agentStatus(state.identity.agentId);
-    await this.redis.setJson(key, state);
+    await this.redis.setJson(key, state, TTL_24_HOURS);
   }
 
   async getAgentState(agentId: string): Promise<AgentState | null> {
@@ -35,10 +39,10 @@ export class StateStore {
 
   async updateHeartbeat(agentId: string): Promise<void> {
     const state = await this.getAgentState(agentId);
-    if (state) {
-      state.lastHeartbeat = Date.now();
-      await this.setAgentState(state);
-    }
+    if (!state) return;
+    state.lastHeartbeat = Date.now();
+    state.status = state.status === 'offline' ? 'idle' : state.status;
+    await this.setAgentState(state);
   }
 
   // --- Agent Capabilities ---
@@ -56,7 +60,7 @@ export class StateStore {
 
   async createTask(task: TaskDefinition): Promise<void> {
     const key = RedisKeys.task(task.id);
-    await this.redis.setJson(key, task);
+    await this.redis.setJson(key, task, TTL_7_DAYS);
 
     // Add to priority queue
     const queueKey = RedisKeys.taskQueue(task.priority);
@@ -73,7 +77,7 @@ export class StateStore {
     if (!task) throw new Error(`Task not found: ${taskId}`);
 
     const updated = { ...task, ...updates, updatedAt: Date.now() };
-    await this.redis.setJson(RedisKeys.task(taskId), updated);
+    await this.redis.setJson(RedisKeys.task(taskId), updated, TTL_7_DAYS);
   }
 
   async getTasksByPriority(priority: string, limit = 50): Promise<string[]> {
@@ -113,7 +117,7 @@ export class StateStore {
 
   async setTaskResult(result: TaskResult): Promise<void> {
     const key = `${RedisKeys.task(result.taskId)}:result`;
-    await this.redis.setJson(key, result);
+    await this.redis.setJson(key, result, TTL_7_DAYS);
 
     // Remove from queue
     for (const priority of ['critical', 'high', 'normal', 'low']) {

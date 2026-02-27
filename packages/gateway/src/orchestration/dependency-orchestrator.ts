@@ -13,10 +13,13 @@
  */
 
 import { createLogger, type AgentId } from '@jarvis/shared';
-import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { access, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const log = createLogger('orchestration:deps');
+
+const POLL_INTERVAL_MS = 5_000;
+const GRAPH_PRUNE_THRESHOLD = 200;
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -69,8 +72,8 @@ export interface OrchestratorConfig {
 // ─── Orchestrator ─────────────────────────────────────────────────────
 
 export class DependencyOrchestrator {
-  private graph: TaskGraph;
-  private config: OrchestratorConfig;
+  private readonly graph: TaskGraph;
+  private readonly config: OrchestratorConfig;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
   private dispatchCallback: ((agentId: string, task: TaskNode) => Promise<void>) | null = null;
   private announceCallback: ((sourceAgent: string, taskId: string, result: string, success: boolean) => Promise<void>) | null = null;
@@ -97,14 +100,12 @@ export class DependencyOrchestrator {
   start(): void {
     log.info('Dependency orchestrator started');
 
-    // Poll for delegation requests every 5 seconds
     this.pollInterval = setInterval(() => {
-      this.pollDelegations();
-      this.processReadyTasks();
-    }, 5000);
+      void this.pollDelegations().then(() => this.processReadyTasks());
+    }, POLL_INTERVAL_MS);
 
     // Initial poll
-    this.pollDelegations();
+    void this.pollDelegations();
   }
 
   /** Stop the orchestrator */
@@ -172,8 +173,18 @@ export class DependencyOrchestrator {
       }
     }
 
+    // Prune completed/failed nodes if graph is too large
+    if (this.graph.nodes.size > GRAPH_PRUNE_THRESHOLD) {
+      for (const [id, n] of this.graph.nodes) {
+        if (n.status === 'completed' || n.status === 'failed') {
+          this.graph.nodes.delete(id);
+        }
+      }
+      log.info(`Pruned graph to ${this.graph.nodes.size} nodes`);
+    }
+
     // Save result for file-based pickup
-    this.saveTaskResult(node);
+    void this.saveTaskResult(node);
   }
 
   /** Mark a task as failed */
@@ -195,7 +206,7 @@ export class DependencyOrchestrator {
     }
 
     // Save result
-    this.saveTaskResult(node);
+    void this.saveTaskResult(node);
   }
 
   /** Mark a task as in-progress */
@@ -257,17 +268,23 @@ export class DependencyOrchestrator {
   // ─── Delegation Polling ─────────────────────────────────────────────
 
   /** Poll NAS for delegation requests from agents */
-  private pollDelegations(): void {
+  private async pollDelegations(): Promise<void> {
     const plansDir = join(this.config.nasPath, 'plans');
-    if (!existsSync(plansDir)) return;
+    try {
+      await access(plansDir);
+    } catch {
+      return; // Directory does not exist
+    }
 
     try {
-      const files = readdirSync(plansDir).filter((f) => f.startsWith('delegation-') && f.endsWith('.json'));
+      const allFiles = await readdir(plansDir);
+      const files = allFiles.filter((f) => f.startsWith('delegation-') && f.endsWith('.json'));
 
       for (const file of files) {
         const filePath = join(plansDir, file);
         try {
-          const data = JSON.parse(readFileSync(filePath, 'utf-8')) as DelegationRequest;
+          const content = await readFile(filePath, 'utf-8');
+          const data = JSON.parse(content) as DelegationRequest;
 
           // Check if we already have this task
           if (this.graph.nodes.has(data.taskId)) continue;
@@ -293,7 +310,7 @@ export class DependencyOrchestrator {
           this.addTask(taskNode);
 
           // Remove the delegation file (processed)
-          unlinkSync(filePath);
+          await unlink(filePath);
           log.info(`Processed delegation file: ${file}`);
         } catch (err) {
           log.error(`Failed to process delegation file ${file}: ${(err as Error).message}`);
@@ -351,17 +368,21 @@ export class DependencyOrchestrator {
 
   // ─── File-Based Result Storage ──────────────────────────────────────
 
-  private saveTaskResult(node: TaskNode): void {
+  private async saveTaskResult(node: TaskNode): Promise<void> {
     const resultFile = join(this.config.nasPath, 'plans', `result-${node.taskId}.json`);
-    writeFileSync(resultFile, JSON.stringify({
-      taskId: node.taskId,
-      title: node.title,
-      status: node.status,
-      agentId: node.assignedAgent,
-      output: node.result ?? node.error ?? '',
-      completedAt: node.completedAt,
-      planId: node.planId,
-      stepId: node.stepId,
-    }, null, 2));
+    try {
+      await writeFile(resultFile, JSON.stringify({
+        taskId: node.taskId,
+        title: node.title,
+        status: node.status,
+        agentId: node.assignedAgent,
+        output: node.result ?? node.error ?? '',
+        completedAt: node.completedAt,
+        planId: node.planId,
+        stepId: node.stepId,
+      }, null, 2));
+    } catch (err) {
+      log.error(`Failed to save task result for ${node.taskId}: ${(err as Error).message}`);
+    }
   }
 }

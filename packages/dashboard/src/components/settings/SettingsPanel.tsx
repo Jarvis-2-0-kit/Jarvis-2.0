@@ -155,6 +155,7 @@ export function SettingsPanel({ visible, onClose }: SettingsPanelProps) {
           )}
           <button
             onClick={onClose}
+            aria-label="Close settings"
             style={{
               marginLeft: 'auto',
               background: 'transparent',

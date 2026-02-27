@@ -90,6 +90,8 @@ export function OverviewView() {
   const prevNetRef = useRef<Record<string, { rx: number; tx: number }> | null>(null);
   const [netRates, setNetRates] = useState<Record<string, { rxRate: number; txRate: number }>>({});
 
+  const cancelledRef = useRef(false);
+
   const fetchAll = useCallback(async () => {
     try {
       setRefreshing(true);
@@ -98,6 +100,8 @@ export function OverviewView() {
         gateway.request<SystemMetrics>('system.metrics').catch(() => null),
         gateway.request<ProcessInfo[]>('system.processes').catch(() => []),
       ]);
+      // Avoid state updates if component has been unmounted (effect cleaned up)
+      if (cancelledRef.current) return;
       if (healthData) setDetailedHealth(healthData);
       if (metricsData) {
         // Calculate network rates
@@ -124,16 +128,21 @@ export function OverviewView() {
     } catch {
       // ignore
     } finally {
-      setRefreshing(false);
+      if (!cancelledRef.current) setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
+    cancelledRef.current = false;
     if (connected) {
       void fetchAll();
       const interval = setInterval(() => void fetchAll(), 10000);
-      return () => clearInterval(interval);
+      return () => {
+        cancelledRef.current = true;
+        clearInterval(interval);
+      };
     }
+    return () => { cancelledRef.current = true; };
   }, [connected, fetchAll]);
 
   const h = detailedHealth ?? health;
@@ -167,6 +176,7 @@ export function OverviewView() {
         </span>
         <button
           onClick={() => void fetchAll()}
+          aria-label="Refresh system overview"
           style={{
             marginLeft: 'auto',
             display: 'flex',

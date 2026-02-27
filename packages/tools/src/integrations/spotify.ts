@@ -20,13 +20,13 @@ const execFileAsync = promisify(execFile);
 
 export interface SpotifyConfig {
   /** Spotify Web API OAuth access token (optional — enables search, playlists, etc.) */
-  accessToken?: string;
+  readonly accessToken?: string;
   /** Spotify refresh token for auto-renewal */
-  refreshToken?: string;
+  readonly refreshToken?: string;
   /** Spotify client ID for token refresh */
-  clientId?: string;
+  readonly clientId?: string;
   /** Spotify client secret for token refresh */
-  clientSecret?: string;
+  readonly clientSecret?: string;
 }
 
 type SpotifyAction =
@@ -58,10 +58,24 @@ async function osa(script: string): Promise<string> {
   return stdout.trim();
 }
 
+/** Escape a string for safe interpolation into AppleScript double-quoted strings */
+function escapeAppleScript(str: string): string {
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/** Validate that a string is a legitimate Spotify URI or URL */
+function isValidSpotifyUri(uri: string): boolean {
+  return /^spotify:[a-zA-Z]+:[a-zA-Z0-9]+$/.test(uri) || uri.startsWith('https://open.spotify.com/');
+}
+
 const appleScript = {
   async play(uri?: string): Promise<string> {
     if (uri) {
-      await osa(`tell application "Spotify" to play track "${uri}"`);
+      if (!isValidSpotifyUri(uri)) {
+        throw new Error('Invalid Spotify URI format. Expected spotify:type:id or https://open.spotify.com/...');
+      }
+      const safeUri = escapeAppleScript(uri);
+      await osa(`tell application "Spotify" to play track "${safeUri}"`);
       return `Playing: ${uri}`;
     }
     await osa('tell application "Spotify" to play');

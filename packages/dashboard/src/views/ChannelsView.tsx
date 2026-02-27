@@ -152,7 +152,7 @@ export function ChannelsView() {
       </div>
 
       {/* Channel cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380, 1fr))', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: 12 }}>
         {loading ? (
           <div style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 8, padding: 20 }}>
             <RefreshCw size={16} style={{ animation: 'spin 1s linear infinite' }} />

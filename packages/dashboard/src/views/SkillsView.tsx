@@ -166,11 +166,6 @@ export function SkillsView() {
   const [selectedSkill, setSelectedSkill] = useState<Skill | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Load skills status from gateway
-  useEffect(() => {
-    loadSkillsStatus();
-  }, []);
-
   const loadSkillsStatus = useCallback(async () => {
     try {
       const result = await gateway.request('skills.list', {}) as { skills: Skill[] };
@@ -193,6 +188,11 @@ export function SkillsView() {
       await gateway.request('skills.toggle', { skillId });
     } catch { /* */ }
   };
+
+  // Load skills status from gateway
+  useEffect(() => {
+    void loadSkillsStatus();
+  }, [loadSkillsStatus]);
 
   const installSkill = async (skillId: string) => {
     setLoading(true);
@@ -268,6 +268,8 @@ export function SkillsView() {
           </div>
           <button
             onClick={() => setShowInstalled(!showInstalled)}
+            aria-label={showInstalled ? 'Show all skills' : 'Show installed skills only'}
+            aria-pressed={showInstalled}
             style={{
               display: 'flex', alignItems: 'center', gap: 4,
               padding: '6px 10px', fontSize: 9, fontFamily: 'var(--font-display)',
@@ -451,7 +453,7 @@ export function SkillsView() {
                   {selectedSkill.description}
                 </div>
               </div>
-              <button onClick={() => setSelectedSkill(null)} style={{ all: 'unset', cursor: 'pointer', color: 'var(--text-muted)' }}>
+              <button onClick={() => setSelectedSkill(null)} aria-label="Close skill details" style={{ all: 'unset', cursor: 'pointer', color: 'var(--text-muted)' }}>
                 <X size={16} />
               </button>
             </div>

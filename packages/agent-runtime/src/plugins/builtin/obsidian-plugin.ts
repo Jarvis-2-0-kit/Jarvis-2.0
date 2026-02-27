@@ -43,6 +43,12 @@ class ObsidianAPI {
     this.baseUrl = baseUrl.replace(/\/$/, '');
   }
 
+  // Tradeoff: NODE_TLS_REJECT_UNAUTHORIZED is process-wide, so there is a
+  // small race window where concurrent requests in other parts of the process
+  // could also skip TLS verification.  The proper fix would be to pass a
+  // custom https.Agent (via undici's `dispatcher` option), but that requires
+  // an undici dependency which may not be available.  The save/restore in
+  // try/finally keeps the window as narrow as possible.
   private async fetch(path: string, init: RequestInit = {}): Promise<Response> {
     const url = new URL(this.baseUrl);
     const isLocalhost = url.hostname === '127.0.0.1' || url.hostname === 'localhost';

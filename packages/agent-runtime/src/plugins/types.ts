@@ -78,6 +78,7 @@ export interface PluginRuntimeConfig {
   workspacePath: string;
   nasPath: string;
   defaultModel: string;
+  socialConfig?: Record<string, unknown>;
   delegateTask?: (targetAgent: string, task: { title: string; description: string; priority?: string }) => Promise<void>;
 }
 

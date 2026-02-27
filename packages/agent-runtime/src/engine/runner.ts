@@ -1,4 +1,4 @@
-import { createLogger, type AgentId, HEARTBEAT_INTERVAL } from '@jarvis/shared';
+import { createLogger, type AgentId } from '@jarvis/shared';
 import {
   ProviderRegistry, type ProviderRegistryConfig,
   type ChatRequest, type ChatResponse, type ChatChunk,
@@ -25,6 +25,9 @@ const log = createLogger('agent:runner');
 
 const MAX_TOOL_ROUNDS = 50;
 const MAX_CONSECUTIVE_ERRORS = 5;
+const TOOL_TIMEOUT_MS = 300_000; // 5 minutes
+/** Default max output tokens per LLM request */
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 /** Approximate char budget for the full prompt (system + tools + messages).
  *  Claude CLI's `-p` mode pipes everything as a single string; keeping it
  *  well under the 200k-token context avoids "Prompt is too long" errors.
@@ -98,12 +101,21 @@ function estimateMessagesSize(msgs: Message[], systemPromptLen: number, toolDefs
       size += m.content.length;
     } else {
       for (const block of m.content) {
-        if ('text' in block) size += (block as { text: string }).text.length;
-        else if ('content' in block) {
-          const c = (block as { content: unknown }).content;
-          size += typeof c === 'string' ? c.length : JSON.stringify(c).length;
-        } else {
-          size += JSON.stringify(block).length;
+        switch (block.type) {
+          case 'text':
+            size += block.text.length;
+            break;
+          case 'thinking':
+            size += block.thinking.length;
+            break;
+          case 'tool_result':
+            size += typeof block.content === 'string' ? block.content.length : JSON.stringify(block.content).length;
+            break;
+          case 'tool_use':
+            size += JSON.stringify(block.input).length;
+            break;
+          default:
+            size += JSON.stringify(block).length;
         }
       }
     }
@@ -298,6 +310,7 @@ export interface AgentRunnerConfig {
   llm: ProviderRegistryConfig;
   defaultModel: string;
   tools: ToolRegistry;
+  socialConfig?: Record<string, unknown>;
 }
 
 /**
@@ -319,7 +332,10 @@ export class AgentRunner {
   private sessions: SessionManager;
   private tools: ToolRegistry;
   private currentTask: TaskAssignment | null = null;
+  private taskProcessing = false; // mutex flag to prevent race conditions
+  private chatProcessing = false;
   private currentSessionId: string | null = null;
+  private taskSessionId: string | null = null; // separate from chat session
 
   // Plugin system
   private runtimeConfig!: PluginRuntimeConfig;
@@ -358,6 +374,7 @@ export class AgentRunner {
       workspacePath: this.config.workspacePath,
       nasPath: this.config.nasMountPath,
       defaultModel: this.config.defaultModel,
+      socialConfig: this.config.socialConfig,
     };
 
     try {
@@ -472,17 +489,18 @@ export class AgentRunner {
   }
 
   /** Pending task queue — tasks that arrive while busy are queued instead of dropped */
-  private taskQueue: TaskAssignment[] = [];
+  private taskQueue: Array<TaskAssignment & { queuedAt: number }> = [];
   private static readonly MAX_QUEUE_SIZE = 5;
+  private static readonly TASK_QUEUE_TTL_MS = 5 * 60 * 1000; // 5 min TTL for queued tasks
 
   /** Handle an incoming task assignment */
   private async handleTask(task: TaskAssignment): Promise<void> {
-    if (this.currentTask) {
+    // Mutex: prevent race condition when two tasks arrive simultaneously
+    if (this.taskProcessing || this.currentTask) {
       if (this.taskQueue.length < AgentRunner.MAX_QUEUE_SIZE) {
-        this.taskQueue.push(task);
+        this.taskQueue.push({ ...task, queuedAt: Date.now() });
         log.info(`Queued task ${task.taskId} (queue size: ${this.taskQueue.length})`);
-        // Notify the sender that we queued (not rejected) the task
-        await this.nats.publishProgress(task.taskId, { step: 'queued', log: `Task queued behind ${this.currentTask.taskId}` });
+        await this.nats.publishProgress(task.taskId, { step: 'queued', log: `Task queued behind ${this.currentTask?.taskId ?? 'processing task'}` });
       } else {
         log.warn(`Task queue full (${AgentRunner.MAX_QUEUE_SIZE}), rejecting ${task.taskId}`);
         await this.nats.publishResult(task.taskId, { success: false, output: `Agent ${this.config.agentId} queue full — task rejected` });
@@ -490,6 +508,7 @@ export class AgentRunner {
       return;
     }
 
+    this.taskProcessing = true;
     this.currentTask = task;
     log.info(`Starting task: ${task.taskId} - ${task.title}`);
 
@@ -505,7 +524,7 @@ export class AgentRunner {
       await this.nats.updateStatus('busy', task.taskId, task.title);
 
       const sessionId = await this.sessions.createSession(task.taskId);
-      this.currentSessionId = sessionId;
+      this.taskSessionId = sessionId;
 
       // Fire session_start hook
       if (this.hooks) {
@@ -516,7 +535,7 @@ export class AgentRunner {
       }
 
       const systemPrompt = await this.buildEnhancedSystemPrompt({
-        currentTask: `Task: ${task.title}\n\nDescription: ${task.description}\nPriority: ${task.priority}`,
+        currentTask: `<task_context>\n<title>${task.title}</title>\n<description>${task.description}</description>\n<priority>${task.priority}</priority>\n</task_context>`,
       });
 
       const userMessage = task.description || task.title;
@@ -630,8 +649,18 @@ export class AgentRunner {
       });
     } finally {
       this.currentTask = null;
-      this.currentSessionId = null;
+      this.taskSessionId = null;
+      this.taskProcessing = false;
       await this.nats.updateStatus('idle');
+
+      // Expire stale queued tasks before processing next
+      const now = Date.now();
+      const expired = this.taskQueue.filter(t => now - t.queuedAt > AgentRunner.TASK_QUEUE_TTL_MS);
+      for (const stale of expired) {
+        log.warn(`Expiring stale queued task ${stale.taskId} (queued ${Math.round((now - stale.queuedAt) / 1000)}s ago)`);
+        this.nats.publishResult(stale.taskId, { success: false, output: 'Task expired while queued (TTL exceeded)' }).catch(() => {});
+      }
+      this.taskQueue = this.taskQueue.filter(t => now - t.queuedAt <= AgentRunner.TASK_QUEUE_TTL_MS);
 
       // Process next queued task if any
       if (this.taskQueue.length > 0) {
@@ -646,6 +675,12 @@ export class AgentRunner {
 
   /** Handle chat messages from dashboard or external channels (WhatsApp, etc.) */
   private async handleChat(msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<void> {
+    if (this.chatProcessing) {
+      log.warn('Chat already being processed, dropping message');
+      return;
+    }
+    this.chatProcessing = true;
+
     if (!this.currentSessionId) {
       const sessionId = await this.sessions.createSession();
       this.currentSessionId = sessionId;
@@ -699,6 +734,7 @@ export class AgentRunner {
       if (externalSessionId) errorMeta.sessionId = externalSessionId;
       await this.nats.sendChatResponse(`Error: ${(err as Error).message}`, Object.keys(errorMeta).length > 0 ? errorMeta : undefined);
     } finally {
+      this.chatProcessing = false;
       // Reset session so next chat gets a fresh context
       this.currentSessionId = null;
       if (!this.currentTask) {
@@ -714,7 +750,7 @@ export class AgentRunner {
     // Route as chat message with metadata indicating it's from another agent
     await this.handleChat({
       from: msg.from,
-      content: `[Inter-agent message from ${msg.from}] ${msg.content}`,
+      content: `<inter_agent_message from="${msg.from}">\n${msg.content}\n</inter_agent_message>`,
       metadata: { source: 'agent-dm', fromAgent: msg.from, replyTo: msg.replyTo, originalType: msg.type },
     });
 
@@ -796,7 +832,7 @@ export class AgentRunner {
           agentId: this.config.agentId,
           currentTask: options?.currentTask,
         },
-        { agentId: this.config.agentId, sessionId: this.currentSessionId ?? undefined },
+        { agentId: this.config.agentId, sessionId: this.taskSessionId ?? this.currentSessionId ?? undefined },
       );
 
       if (hookResult) {
@@ -827,7 +863,7 @@ export class AgentRunner {
         agentId: this.config.agentId,
         workspacePath: this.config.workspacePath,
         nasPath: this.config.nasMountPath,
-        sessionId: this.currentSessionId ?? undefined,
+        sessionId: this.taskSessionId ?? this.currentSessionId ?? undefined,
       });
 
       const pluginDefs = pluginTools.map((t) => t.definition);
@@ -1059,7 +1095,7 @@ export class AgentRunner {
         messages,
         system: systemPrompt,
         tools: toolDefs,
-        max_tokens: 8192,
+        max_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
         stream: true,
       };
 
@@ -1227,12 +1263,23 @@ export class AgentRunner {
         } catch { /* non-critical */ }
 
         const startTime = Date.now();
-        let result = await this.executeTool(toolUse.name, toolInput, {
-          agentId: this.config.agentId,
-          workspacePath: this.config.workspacePath,
-          nasPath: this.config.nasMountPath,
-          sessionId,
-        });
+        let result: Awaited<ReturnType<typeof this.executeTool>>;
+        try {
+          result = await Promise.race([
+            this.executeTool(toolUse.name, toolInput, {
+              agentId: this.config.agentId,
+              workspacePath: this.config.workspacePath,
+              nasPath: this.config.nasMountPath,
+              sessionId,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error(`Tool '${toolUse.name}' timed out after ${TOOL_TIMEOUT_MS / 1000}s`)), TOOL_TIMEOUT_MS)
+            ),
+          ]);
+        } catch (err) {
+          log.error(`Tool ${toolUse.name} failed: ${(err as Error).message}`);
+          result = { type: 'error' as const, content: (err as Error).message };
+        }
         const elapsed = Date.now() - startTime;
 
         // Stream event: tool result summary (visible in dashboard chat)
@@ -1313,7 +1360,7 @@ export class AgentRunner {
     await sendDone();
     const lastText = messages
       .filter((m) => m.role === 'assistant')
-      .flatMap((m) => typeof m.content === 'string' ? [m.content] : m.content.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text))
+      .flatMap((m) => typeof m.content === 'string' ? [m.content] : m.content.filter((b): b is TextBlock => b.type === 'text').map((b) => b.text))
       .pop();
 
     return {
@@ -1326,8 +1373,8 @@ export class AgentRunner {
   private logRound(round: number, response: ChatResponse, usage: UsageAccumulator): void {
     const toolCount = response.content.filter((b) => b.type === 'tool_use').length;
     const textLength = response.content
-      .filter((b) => b.type === 'text')
-      .reduce((sum, b) => sum + ((b as { text: string }).text?.length ?? 0), 0);
+      .filter((b): b is TextBlock => b.type === 'text')
+      .reduce((sum, b) => sum + (b.text?.length ?? 0), 0);
 
     log.info(
       `Round ${round + 1}: ${toolCount} tool calls, ${textLength} chars text, ` +

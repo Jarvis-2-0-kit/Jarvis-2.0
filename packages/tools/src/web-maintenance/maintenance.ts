@@ -1,9 +1,7 @@
-import { createLogger } from '@jarvis/shared';
+import * as tls from 'node:tls';
 import type { AgentTool, ToolContext, ToolResult } from '../base.js';
 import { createToolResult, createErrorResult } from '../base.js';
 import { ExecTool } from '../exec.js';
-
-const log = createLogger('tool:web-maintenance');
 
 const exec = new ExecTool();
 
@@ -64,8 +62,15 @@ export class DeployTool implements AgentTool {
       case 'git_push': {
         const branch = (params['branch'] as string) || 'main';
         const remote = (params['remote'] as string) || 'origin';
+        // Validate branch and remote to prevent shell injection
+        if (!/^[a-zA-Z0-9_.\/-]+$/.test(branch)) {
+          return createErrorResult('Invalid branch name: contains disallowed characters');
+        }
+        if (!/^[a-zA-Z0-9_.\/-]+$/.test(remote)) {
+          return createErrorResult('Invalid remote name: contains disallowed characters');
+        }
         return exec.execute({
-          command: `cd "${projectPath}" && git push ${remote} ${branch}`,
+          command: `cd "${projectPath}" && git push "${remote}" "${branch}"`,
           timeout: 120_000,
         }, ctx);
       }
@@ -118,9 +123,15 @@ export class MonitoringTool implements AgentTool {
         return this.sslCheck(urls);
       case 'performance':
         return this.performanceCheck(urls);
-      case 'dns_check':
+      case 'dns_check': {
         if (!url) return createErrorResult('dns_check requires a single url');
-        return exec.execute({ command: `dig +short ${new URL(url).hostname}` }, context);
+        const hostname = new URL(url).hostname;
+        // Validate hostname to prevent command injection
+        if (!/^[a-zA-Z0-9.-]+$/.test(hostname)) {
+          return createErrorResult(`Invalid hostname: "${hostname}" contains disallowed characters`);
+        }
+        return exec.execute({ command: `dig +short "${hostname}"` }, context);
+      }
       default:
         return createErrorResult(`Unknown monitor action: ${action}`);
     }
@@ -154,14 +165,34 @@ export class MonitoringTool implements AgentTool {
     for (const url of urls) {
       try {
         const hostname = new URL(url).hostname;
+        // Validate hostname to prevent command injection
+        if (!/^[a-zA-Z0-9.-]+$/.test(hostname)) {
+          results.push(`${url}: Invalid hostname - contains disallowed characters`);
+          continue;
+        }
         // Use openssl to check certificate
-        const result = await new Promise<string>((resolve) => {
-          const { spawn } = require('node:child_process') as typeof import('node:child_process');
-          const proc = spawn('bash', ['-c', `echo | openssl s_client -connect ${hostname}:443 -servername ${hostname} 2>/dev/null | openssl x509 -noout -dates -subject 2>/dev/null`]);
-          let output = '';
-          proc.stdout.on('data', (d: Buffer) => { output += d.toString(); });
-          proc.stderr.on('data', (d: Buffer) => { output += d.toString(); });
-          proc.on('close', () => resolve(output));
+        const result = await new Promise<string>((resolve, reject) => {
+          const socket = tls.connect(443, hostname, { servername: hostname }, () => {
+            const cert = socket.getPeerCertificate();
+            if (!cert || !cert.subject) {
+              socket.destroy();
+              resolve('Could not retrieve certificate');
+              return;
+            }
+            const info = [
+              `subject= ${Object.entries(cert.subject).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+              `notBefore=${cert.valid_from}`,
+              `notAfter=${cert.valid_to}`,
+              `issuer= ${Object.entries(cert.issuer).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+            ].join('\n');
+            socket.destroy();
+            resolve(info);
+          });
+          socket.on('error', (err) => resolve(`TLS error: ${err.message}`));
+          socket.setTimeout(10_000, () => {
+            socket.destroy();
+            resolve('Connection timed out');
+          });
         });
 
         results.push(`${hostname}:\n${result.trim()}`);

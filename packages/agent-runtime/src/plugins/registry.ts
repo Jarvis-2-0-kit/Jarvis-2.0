@@ -114,7 +114,7 @@ export class PluginRegistry {
     const api: PluginApi = {
       id: pluginId,
       name: definition.name,
-      config: this.runtimeConfig,
+      config: Object.freeze({ ...this.runtimeConfig }),
       pluginConfig,
       logger,
 
@@ -306,6 +306,32 @@ export class PluginRegistry {
     }
 
     return stopFns;
+  }
+
+  // ─── Cleanup ─────────────────────────────────────────────────────
+
+  /**
+   * Clean up all registered resources. Call on shutdown to prevent leaks.
+   */
+  async cleanup(stopFns?: Array<() => void>): Promise<void> {
+    // Stop all services
+    if (stopFns) {
+      for (const stop of stopFns) {
+        try {
+          stop();
+        } catch (err) {
+          log.error(`Service stop failed: ${(err as Error).message}`);
+        }
+      }
+    }
+
+    // Clear all registrations
+    this.toolRegistrations = [];
+    this.hookRegistrations = [];
+    this.services = [];
+    this.promptSections = [];
+
+    log.info('Plugin registry cleaned up');
   }
 
   // ─── Inspection ──────────────────────────────────────────────────

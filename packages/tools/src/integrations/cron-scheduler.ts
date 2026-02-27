@@ -22,11 +22,11 @@ import { createToolResult, createErrorResult } from '../base.js';
 
 export interface CronSchedulerConfig {
   /** Path to NAS jobs directory */
-  jobsDir?: string;
+  readonly jobsDir?: string;
   /** Interval for checking jobs (ms, default: 60000) */
-  tickInterval?: number;
+  readonly tickInterval?: number;
   /** Callback when a job fires */
-  onJobFire?: (job: ScheduledJob) => Promise<void>;
+  readonly onJobFire?: (job: ScheduledJob) => Promise<void>;
 }
 
 export interface ScheduledJob {

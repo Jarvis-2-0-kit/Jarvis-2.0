@@ -35,15 +35,20 @@ export const ChatMessage = z.object({
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
+/** Strip chars dangerous for NATS subjects and Redis keys */
+export function sanitizeToken(token: string): string {
+  return token.replace(/[.*>\s\r\n\x00-\x1f]/g, '');
+}
+
 /** NATS subject helpers */
-export const NatsSubjects = {
-  agentStatus: (agentId: string) => `jarvis.agent.${agentId}.status`,
-  agentTask: (agentId: string) => `jarvis.agent.${agentId}.task`,
-  agentResult: (agentId: string) => `jarvis.agent.${agentId}.result`,
-  agentHeartbeat: (agentId: string) => `jarvis.agent.${agentId}.heartbeat`,
+export const NatsSubjects = Object.freeze({
+  agentStatus: (agentId: string) => `jarvis.agent.${sanitizeToken(agentId)}.status`,
+  agentTask: (agentId: string) => `jarvis.agent.${sanitizeToken(agentId)}.task`,
+  agentResult: (agentId: string) => `jarvis.agent.${sanitizeToken(agentId)}.result`,
+  agentHeartbeat: (agentId: string) => `jarvis.agent.${sanitizeToken(agentId)}.heartbeat`,
   /** Direct message to a specific agent */
-  agentDM: (agentId: string) => `jarvis.agent.${agentId}.dm`,
-  taskProgress: (taskId: string) => `jarvis.task.${taskId}.progress`,
+  agentDM: (agentId: string) => `jarvis.agent.${sanitizeToken(agentId)}.dm`,
+  taskProgress: (taskId: string) => `jarvis.task.${sanitizeToken(taskId)}.progress`,
   dashboardBroadcast: 'jarvis.broadcast.dashboard',
   /** Shared broadcast channel — ALL agents + gateway subscribe */
   agentsBroadcast: 'jarvis.agents.broadcast',
@@ -52,10 +57,10 @@ export const NatsSubjects = {
   /** Coordination — task delegation between agents */
   coordinationRequest: 'jarvis.coordination.request',
   coordinationResponse: 'jarvis.coordination.response',
-  chat: (agentId: string) => `jarvis.chat.${agentId}`,
+  chat: (agentId: string) => `jarvis.chat.${sanitizeToken(agentId)}`,
   chatBroadcast: 'jarvis.chat.broadcast',
   chatStream: 'jarvis.chat.stream',
-} as const;
+} as const);
 
 /** Ephemeral streaming delta from an agent during LLM generation */
 export interface ChatStreamDelta {
@@ -93,12 +98,12 @@ export const InterAgentMessage = z.object({
 export type InterAgentMessage = z.infer<typeof InterAgentMessage>;
 
 /** Redis key helpers */
-export const RedisKeys = {
-  agentStatus: (agentId: string) => `jarvis:agent:${agentId}:status`,
-  agentCapabilities: (agentId: string) => `jarvis:agent:${agentId}:capabilities`,
-  task: (taskId: string) => `jarvis:task:${taskId}`,
-  taskQueue: (priority: string) => `jarvis:task:queue:${priority}`,
-  session: (sessionKey: string) => `jarvis:session:${sessionKey}`,
+export const RedisKeys = Object.freeze({
+  agentStatus: (agentId: string) => `jarvis:agent:${sanitizeToken(agentId)}:status`,
+  agentCapabilities: (agentId: string) => `jarvis:agent:${sanitizeToken(agentId)}:capabilities`,
+  task: (taskId: string) => `jarvis:task:${sanitizeToken(taskId)}`,
+  taskQueue: (priority: string) => `jarvis:task:queue:${sanitizeToken(priority)}`,
+  session: (sessionKey: string) => `jarvis:session:${sanitizeToken(sessionKey)}`,
   config: 'jarvis:config',
-  llmCache: (hash: string) => `jarvis:llm:cache:${hash}`,
-} as const;
+  llmCache: (hash: string) => `jarvis:llm:cache:${sanitizeToken(hash)}`,
+} as const);

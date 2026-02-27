@@ -19,9 +19,9 @@ const execFileAsync = promisify(execFile);
 
 export interface AppleCalendarConfig {
   /** Default calendar name for new events */
-  defaultCalendar?: string;
+  readonly defaultCalendar?: string;
   /** Default reminders list name */
-  defaultRemindersList?: string;
+  readonly defaultRemindersList?: string;
 }
 
 type CalendarAction =
@@ -102,11 +102,13 @@ async function getEventsToday(): Promise<string> {
 }
 
 async function getUpcomingEvents(days: number = 7): Promise<string> {
+  // Validate days is a safe integer to prevent AppleScript injection
+  const safeDays = Math.max(1, Math.min(365, Math.floor(Number(days) || 7)));
   const script = `
     tell application "Calendar"
       set today to current date
       set todayStart to today - (time of today)
-      set futureEnd to todayStart + (${days} * days)
+      set futureEnd to todayStart + (${safeDays} * days)
 
       set eventList to ""
       repeat with cal in calendars
@@ -144,11 +146,13 @@ async function getUpcomingEvents(days: number = 7): Promise<string> {
 }
 
 async function searchEvents(query: string, days: number = 30): Promise<string> {
+  // Validate days is a safe integer to prevent AppleScript injection
+  const safeDays = Math.max(1, Math.min(365, Math.floor(Number(days) || 30)));
   const script = `
     tell application "Calendar"
       set today to current date
       set todayStart to today - (time of today)
-      set futureEnd to todayStart + (${days} * days)
+      set futureEnd to todayStart + (${safeDays} * days)
 
       set eventList to ""
       repeat with cal in calendars

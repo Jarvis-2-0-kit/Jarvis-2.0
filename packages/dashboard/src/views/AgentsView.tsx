@@ -8,13 +8,12 @@
  * - Quick chat, capability badges, real-time activity
  */
 
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useGatewayStore } from '../store/gateway-store.js';
 import { gateway } from '../gateway/client.js';
 import {
   Bot,
   RefreshCw,
-  Wifi,
   WifiOff,
   Play,
   Pause,
@@ -29,21 +28,15 @@ import {
   Shield,
   Sparkles,
   Settings,
-  Clock,
   Eye,
   ToggleLeft,
   ToggleRight,
   Search,
-  FileText,
   Radio,
-  ChevronDown,
-  ChevronRight,
   Save,
   RotateCcw,
   Layers,
   Package,
-  GitBranch,
-  MessageSquare,
 } from 'lucide-react';
 import { formatTimeAgo } from '../utils/formatters.js';
 

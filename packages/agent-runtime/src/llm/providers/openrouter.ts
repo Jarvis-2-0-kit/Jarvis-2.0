@@ -2,21 +2,30 @@ import { createLogger } from '@jarvis/shared';
 import type {
   LLMProvider, ChatRequest, ChatResponse, ChatChunk,
   ModelInfo, ContentBlock, Message,
+  TextBlock, ToolUseBlock, ToolResultBlock,
 } from '../types.js';
 
 const log = createLogger('llm:openrouter');
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+/** Timeout for non-streaming chat requests (5 minutes) */
+const CHAT_TIMEOUT_MS = 300_000;
+/** Timeout for streaming chat requests (10 minutes) */
+const STREAM_TIMEOUT_MS = 600_000;
+/** Timeout for fetching model list (15 seconds) */
+const MODELS_TIMEOUT_MS = 15_000;
 
 /**
  * OpenRouter aggregator - uses OpenAI-compatible API format.
  * Supports 200+ models from all providers.
  */
 export class OpenRouterProvider implements LLMProvider {
-  id = 'openrouter';
-  name = 'OpenRouter';
+  readonly id = 'openrouter';
+  readonly name = 'OpenRouter';
 
   private cachedModels: ModelInfo[] | null = null;
+  private cachedModelsAt: number = 0;
+  private static readonly MODEL_CACHE_TTL = 600_000; // 10 minutes
 
   constructor(
     private apiKey: string,
@@ -29,19 +38,29 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   listModels(): ModelInfo[] {
-    // Return cached or empty — use fetchModels() for dynamic list
+    // Return cached if still fresh, otherwise empty
+    if (this.cachedModels && Date.now() - this.cachedModelsAt < OpenRouterProvider.MODEL_CACHE_TTL) {
+      return this.cachedModels;
+    }
     return this.cachedModels ?? [];
   }
 
   /** Fetch available models from OpenRouter API */
   async fetchModels(): Promise<ModelInfo[]> {
+    // Return cached if still fresh
+    if (this.cachedModels && Date.now() - this.cachedModelsAt < OpenRouterProvider.MODEL_CACHE_TTL) {
+      return this.cachedModels;
+    }
+
     try {
       const response = await fetch('https://openrouter.ai/api/v1/models', {
         headers: this.getHeaders(),
+        signal: AbortSignal.timeout(MODELS_TIMEOUT_MS),
       });
       if (!response.ok) return [];
       const data = await response.json() as OpenRouterModelsResponse;
 
+      this.cachedModelsAt = Date.now();
       this.cachedModels = (data.data ?? []).map((m) => ({
         id: m.id,
         name: m.name ?? m.id,
@@ -67,6 +86,7 @@ export class OpenRouterProvider implements LLMProvider {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -84,6 +104,7 @@ export class OpenRouterProvider implements LLMProvider {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(STREAM_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -188,7 +209,7 @@ export class OpenRouterProvider implements LLMProvider {
   }
 
   private buildRequestBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
-    const messages = request.messages.map((m) => this.convertMessage(m));
+    const messages = request.messages.flatMap((m) => this.convertMessage(m));
     if (request.system) {
       messages.unshift({ role: 'system', content: request.system });
     }
@@ -221,45 +242,55 @@ export class OpenRouterProvider implements LLMProvider {
     return body;
   }
 
-  private convertMessage(msg: Message): Record<string, unknown> {
+  private convertMessage(msg: Message): Record<string, unknown>[] {
     if (typeof msg.content === 'string') {
-      return { role: msg.role, content: msg.content };
+      return [{ role: msg.role, content: msg.content }];
     }
 
-    const toolResults = msg.content.filter((b) => b.type === 'tool_result');
+    // For tool results, convert to OpenAI-compatible format
+    // Each tool result must be a separate { role: 'tool' } message
+    const toolResults = msg.content.filter((b): b is ToolResultBlock => b.type === 'tool_result');
     if (toolResults.length > 0) {
-      return {
+      return toolResults.map((tr) => ({
         role: 'tool',
-        tool_call_id: (toolResults[0] as { tool_use_id: string }).tool_use_id,
-        content: typeof toolResults[0]!.content === 'string'
-          ? toolResults[0]!.content
-          : JSON.stringify(toolResults[0]!.content),
-      };
+        tool_call_id: tr.tool_use_id,
+        content: typeof tr.content === 'string'
+          ? tr.content
+          : JSON.stringify(tr.content),
+      }));
     }
 
-    const toolUses = msg.content.filter((b) => b.type === 'tool_use');
+    const toolUses = msg.content.filter((b): b is ToolUseBlock => b.type === 'tool_use');
     if (toolUses.length > 0) {
-      const textBlocks = msg.content.filter((b) => b.type === 'text');
-      return {
+      const textBlocks = msg.content.filter((b): b is TextBlock => b.type === 'text');
+      return [{
         role: 'assistant',
-        content: textBlocks.length > 0 ? textBlocks.map((b) => (b as { text: string }).text).join('') : null,
+        content: textBlocks.length > 0 ? textBlocks.map((b) => b.text).join('') : null,
         tool_calls: toolUses.map((b) => ({
-          id: (b as { id: string }).id,
+          id: b.id,
           type: 'function',
           function: {
-            name: (b as { name: string }).name,
-            arguments: JSON.stringify((b as { input: unknown }).input),
+            name: b.name,
+            arguments: JSON.stringify(b.input),
           },
         })),
-      };
+      }];
     }
 
-    const content = msg.content.map((b) => (b as { text: string }).text).join('');
-    return { role: msg.role, content };
+    const content = msg.content
+      .filter((b): b is TextBlock => b.type === 'text')
+      .map((b) => b.text).join('');
+    return [{ role: msg.role, content }];
   }
 
   private parseResponse(data: OpenRouterResponse): ChatResponse {
-    const choice = data.choices?.[0];
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid OpenRouter response: expected an object');
+    }
+    if (!Array.isArray(data.choices) || data.choices.length === 0) {
+      throw new Error('Invalid OpenRouter response: missing or empty choices array');
+    }
+    const choice = data.choices[0];
     const message = choice?.message;
     const content: ContentBlock[] = [];
 

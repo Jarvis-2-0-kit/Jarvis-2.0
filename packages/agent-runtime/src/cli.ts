@@ -214,6 +214,7 @@ async function main(): Promise<void> {
     },
     enableSocial,
     socialConfig,
+    anthropicApiKey: process.env['ANTHROPIC_API_KEY'],
     enableImageGen: true,
     openaiApiKey: process.env['OPENAI_API_KEY'],
   });
@@ -248,6 +249,7 @@ async function main(): Promise<void> {
     capabilities: CAPABILITIES[role] ?? [],
     defaultModel: activeModel,
     tools,
+    socialConfig: socialConfig as Record<string, unknown> | undefined,
     llm: {
       anthropicApiKey: process.env['ANTHROPIC_API_KEY'],
       anthropicAuthMode: anthropicAuthMode,

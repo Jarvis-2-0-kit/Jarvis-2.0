@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import {
+  DEFAULT_GATEWAY_PORT,
+  DEFAULT_NATS_PORT,
+  DEFAULT_REDIS_PORT,
+  DEFAULT_WEBSOCKIFY_PORT,
+  DEFAULT_NAS_MOUNT,
+} from '../constants.js';
 
 export const LLMProviderConfig = z.object({
   id: z.string(),
@@ -12,7 +19,7 @@ export type LLMProviderConfig = z.infer<typeof LLMProviderConfig>;
 
 export const VNCEndpoint = z.object({
   host: z.string(),
-  port: z.number().default(6080),
+  port: z.number().default(DEFAULT_WEBSOCKIFY_PORT),
   password: z.string().optional(),
   label: z.string(),
 });
@@ -20,21 +27,21 @@ export type VNCEndpoint = z.infer<typeof VNCEndpoint>;
 
 export const JarvisConfig = z.object({
   gateway: z.object({
-    port: z.number().default(18900),
+    port: z.number().default(DEFAULT_GATEWAY_PORT),
     host: z.string().default('0.0.0.0'),
     authToken: z.string(),
   }),
 
   nats: z.object({
-    url: z.string().default('nats://localhost:4222'),
+    url: z.string().default(`nats://localhost:${DEFAULT_NATS_PORT}`),
   }),
 
   redis: z.object({
-    url: z.string().default('redis://localhost:6379'),
+    url: z.string().default(`redis://localhost:${DEFAULT_REDIS_PORT}`),
   }),
 
   nas: z.object({
-    mountPath: z.string().default('/Volumes/JarvisNAS/jarvis'),
+    mountPath: z.string().default(DEFAULT_NAS_MOUNT),
   }),
 
   providers: z.record(LLMProviderConfig).default({}),

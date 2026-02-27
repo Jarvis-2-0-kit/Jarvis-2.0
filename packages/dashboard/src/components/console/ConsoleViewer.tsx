@@ -34,7 +34,7 @@ export function ConsoleViewer() {
           </div>
         ) : (
           consoleLines.map((line, i) => (
-            <div key={i} style={{
+            <div key={`line-${i}-${line.line.slice(0, 20)}`} style={{
               animation: 'slide-in 0.15s ease-out',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-all',

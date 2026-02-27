@@ -176,8 +176,8 @@ export function MemoryView() {
       setStatus(s);
       setFiles(f.files);
       setEntries(e.entries);
-    } catch (err) {
-      console.error('Failed to load memory', err);
+    } catch {
+      /* load failed */
     }
     setLoading(false);
   }, []);
@@ -191,8 +191,8 @@ export function MemoryView() {
         setCoreContent(result.content);
         setCoreDraft(result.content);
       }
-    } catch (err) {
-      console.error('Failed to load core memory', err);
+    } catch {
+      /* load failed */
     }
   }, []);
 
@@ -217,8 +217,8 @@ export function MemoryView() {
       const result = await gateway.request('memory.search', { query: searchQuery, maxResults: 50 }) as { results: SearchResult[]; total: number };
       setSearchResults(result.results);
       setSearchTotal(result.total);
-    } catch (err) {
-      console.error('Search failed', err);
+    } catch {
+      /* search failed */
     }
     setLoading(false);
   }, [searchQuery]);
@@ -229,8 +229,8 @@ export function MemoryView() {
       await gateway.request('memory.save', { content: saveContent, category: saveCategory });
       setSaveContent('');
       refresh();
-    } catch (err) {
-      console.error('Save failed', err);
+    } catch {
+      /* save failed */
     }
   }, [saveContent, saveCategory, refresh]);
 
@@ -248,8 +248,8 @@ export function MemoryView() {
       setNewTags('');
       setShowNewEntry(false);
       refresh();
-    } catch (err) {
-      console.error('Save entry failed', err);
+    } catch {
+      /* save entry failed */
     }
   }, [newTitle, newContent, newTags, refresh]);
 
@@ -257,8 +257,8 @@ export function MemoryView() {
     try {
       await gateway.request('memory.entry.delete', { id });
       refresh();
-    } catch (err) {
-      console.error('Delete entry failed', err);
+    } catch {
+      /* delete entry failed */
     }
   }, [refresh]);
 
@@ -396,7 +396,7 @@ export function MemoryView() {
               {searchResults.length > 0 && (
                 <div style={{ marginTop: 12, maxHeight: 200, overflow: 'auto' }}>
                   {searchResults.slice(0, 10).map((r, i) => (
-                    <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid var(--border-dim)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                    <div key={`${r.type}-${r.source}-${r.line ?? i}`} style={{ padding: '6px 0', borderBottom: '1px solid var(--border-dim)', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                       <span style={{ ...tagStyle, background: r.type === 'core' ? 'rgba(0,255,65,0.1)' : r.type === 'entry' ? 'rgba(240,192,64,0.1)' : 'rgba(0,200,255,0.1)', color: r.type === 'core' ? 'var(--green-bright)' : r.type === 'entry' ? '#f0c040' : 'var(--cyan-bright)', border: 'none', flexShrink: 0 }}>
                         {r.type}
                       </span>
@@ -474,7 +474,7 @@ export function MemoryView() {
                         setCoreContent(coreDraft);
                         setCoreEditing(false);
                         refresh();
-                      } catch (err) { console.error(err); }
+                      } catch { /* save failed */ }
                     }} style={btnPrimary}><Check size={12} /> SAVE</button>
                   </>
                 ) : (
@@ -719,7 +719,7 @@ export function MemoryView() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {searchResults.map((r, i) => (
-                <div key={i} style={{
+                <div key={`${r.type}-${r.source}-${r.line ?? i}`} style={{
                   ...cardStyle,
                   display: 'flex',
                   gap: 10,

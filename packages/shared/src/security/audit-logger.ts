@@ -1,4 +1,5 @@
-import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
+import { appendFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 
@@ -48,10 +49,13 @@ const FAILED_AUTH_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const FAILED_AUTH_MAX = 5;
 const BLOCK_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
+const FAILED_AUTH_MAP_CAP = 10_000;
+
 class AuditLogger {
-  private logFilePath: string | null;
-  private onEvent?: (event: AuditEvent) => void;
-  private failedAuth = new Map<string, FailedAuthTracker>();
+  private readonly logFilePath: string | null;
+  private readonly onEvent?: (event: AuditEvent) => void;
+  private readonly failedAuth = new Map<string, FailedAuthTracker>();
+  private readonly failedAuthCleanupInterval: ReturnType<typeof setInterval>;
 
   constructor(config: AuditLoggerConfig = {}) {
     this.logFilePath = config.logFilePath ?? null;
@@ -63,6 +67,21 @@ class AuditLogger {
         mkdirSync(dir, { recursive: true });
       }
     }
+
+    // Periodically sweep stale failedAuth entries
+    this.failedAuthCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [ip, tracker] of this.failedAuth) {
+        // Remove if the block has expired, or if the tracking window has lapsed and it was never blocked
+        const stale = tracker.blocked
+          ? now > tracker.blockedUntil
+          : now - tracker.firstAttempt > BLOCK_DURATION_MS;
+        if (stale) {
+          this.failedAuth.delete(ip);
+        }
+      }
+    }, FAILED_AUTH_WINDOW_MS);
+    this.failedAuthCleanupInterval.unref();
   }
 
   /** Log an audit event */
@@ -76,13 +95,11 @@ class AuditLogger {
       agentId,
     };
 
-    // Write to file
+    // Write to file (async fire-and-forget)
     if (this.logFilePath) {
-      try {
-        appendFileSync(this.logFilePath, JSON.stringify(event) + '\n');
-      } catch (err) {
+      void appendFile(this.logFilePath, JSON.stringify(event) + '\n').catch((err) => {
         log.error(`Failed to write audit log: ${(err as Error).message}`);
-      }
+      });
     }
 
     // Console log for critical events
@@ -100,6 +117,13 @@ class AuditLogger {
     let tracker = this.failedAuth.get(ip);
 
     if (!tracker || (now - tracker.firstAttempt > FAILED_AUTH_WINDOW_MS)) {
+      // Evict oldest entry if map is at capacity
+      if (!this.failedAuth.has(ip) && this.failedAuth.size >= FAILED_AUTH_MAP_CAP) {
+        const oldestKey = this.failedAuth.keys().next().value;
+        if (oldestKey !== undefined) {
+          this.failedAuth.delete(oldestKey);
+        }
+      }
       tracker = { count: 0, firstAttempt: now, blocked: false, blockedUntil: 0 };
       this.failedAuth.set(ip, tracker);
     }
@@ -137,12 +161,21 @@ class AuditLogger {
   clearFailedAuth(ip: string): void {
     this.failedAuth.delete(ip);
   }
+
+  /** Stop background cleanup and release resources */
+  destroy(): void {
+    clearInterval(this.failedAuthCleanupInterval);
+    this.failedAuth.clear();
+  }
 }
 
 // Singleton instance
 let auditInstance: AuditLogger | null = null;
 
 export function initAuditLogger(config: AuditLoggerConfig = {}): AuditLogger {
+  if (auditInstance) {
+    auditInstance.destroy();
+  }
   auditInstance = new AuditLogger(config);
   return auditInstance;
 }

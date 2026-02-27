@@ -69,9 +69,11 @@ export function useVoiceSynthesis() {
     loadVoices();
     // Chrome loads voices asynchronously
     if (window.speechSynthesis) {
-      window.speechSynthesis.onvoiceschanged = () => {
+      const handler = () => {
         cachedVoices = window.speechSynthesis.getVoices();
       };
+      speechSynthesis.addEventListener('voiceschanged', handler);
+      return () => speechSynthesis.removeEventListener('voiceschanged', handler);
     }
   }, []);
 
@@ -244,7 +246,7 @@ export function useVoiceSynthesis() {
             reject(new Error('Playback error'));
           };
 
-          audio.play().catch((e) => {
+          audio.play().catch(() => {
             URL.revokeObjectURL(audioUrl);
             // Autoplay blocked — fall back to browser TTS
             console.warn('Audio autoplay blocked, falling back to browser TTS');

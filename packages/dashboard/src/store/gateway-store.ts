@@ -251,7 +251,7 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
 
     gateway.on('task.created', (payload) => {
       const task = payload as TaskDef;
-      set((prev) => ({ tasks: [...prev.tasks, task] }));
+      set((prev) => ({ tasks: [...prev.tasks.slice(-499), task] }));
     });
 
     gateway.on('task.completed', (payload) => {
@@ -310,10 +310,15 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
   },
 
   sendChat: (to: string, content: string) => {
+    // Sanitize: strip control characters (except newline/tab), limit length
+    const sanitized = content
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+      .slice(0, 10_000);
+    if (!sanitized.trim()) return;
     void gateway.request('chat.send', {
       from: 'user',
       to,
-      content,
+      content: sanitized,
       timestamp: Date.now(),
     });
   },

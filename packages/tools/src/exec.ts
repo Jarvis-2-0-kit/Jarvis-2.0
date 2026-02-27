@@ -8,7 +8,7 @@
  * - Background session management
  */
 
-import { spawn, execSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createLogger, getAuditLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
@@ -18,6 +18,9 @@ const log = createLogger('tool:exec');
 const MAX_OUTPUT_SIZE = 100_000; // 100KB max output
 const DEFAULT_TIMEOUT = 120_000; // 2 minutes
 const DEFAULT_YIELD_MS = 10_000; // Auto-background after 10s (OpenClaw default)
+const SESSION_TAIL_SIZE = 3_000; // chars of output to show for in-progress sessions
+const SESSION_CLEANUP_MS = 5 * 60 * 1000; // 5 minutes before cleaning up finished sessions
+const SESSION_PARTIAL_PREVIEW = 2_000; // chars of partial output in auto-background message
 
 // ─── Security Configuration ───────────────────────────────────────────
 
@@ -269,6 +272,12 @@ export class ExecTool implements AgentTool {
         log.warn(`Rejected env override: ${key} (security restriction)`);
         continue;
       }
+      // Apply same blocked-pattern filter as process.env to prevent secret injection
+      const isBlocked = BLOCKED_ENV_PATTERNS.some(pattern => pattern.test(key));
+      if (isBlocked) {
+        log.warn(`Rejected env override: ${key} (matches blocked pattern)`);
+        continue;
+      }
       env[key] = value;
     }
 
@@ -371,7 +380,7 @@ export class ExecTool implements AgentTool {
             `⏳ Command still running after ${yieldMs}ms — moved to background.\n` +
             `Session ID: ${sessionId}\n` +
             `PID: ${proc.pid}\n` +
-            `Partial output so far:\n${stdout.slice(0, 2000)}${stdout.length > 2000 ? '\n[truncated]' : ''}\n\n` +
+            `Partial output so far:\n${stdout.slice(0, SESSION_PARTIAL_PREVIEW)}${stdout.length > SESSION_PARTIAL_PREVIEW ? '\n[truncated]' : ''}\n\n` +
             `Use exec with sessionId="${sessionId}" to check results later.`,
             { sessionId, pid: proc.pid, backgrounded: true },
           ));
@@ -485,7 +494,7 @@ export class ExecTool implements AgentTool {
         `⏳ Session ${sessionId} still running (${elapsedStr})\n` +
         `PID: ${session.pid}\n` +
         `Output so far (${session.output.length} chars):\n` +
-        `${session.output.slice(-3000)}`,
+        `${session.output.slice(-SESSION_TAIL_SIZE)}`,
         { sessionId, pid: session.pid, finished: false, elapsed },
       );
     }
@@ -497,7 +506,7 @@ export class ExecTool implements AgentTool {
     );
 
     // Keep session for 5 minutes then clean up
-    setTimeout(() => backgroundSessions.delete(sessionId), 5 * 60 * 1000);
+    setTimeout(() => backgroundSessions.delete(sessionId), SESSION_CLEANUP_MS);
 
     return result;
   }

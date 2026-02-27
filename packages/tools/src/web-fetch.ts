@@ -1,8 +1,6 @@
-import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createToolResult, createErrorResult } from './base.js';
-
-const log = createLogger('tool:web-fetch');
+import { isPrivateUrl } from './ssrf.js';
 
 const MAX_CONTENT_LENGTH = 200_000; // 200KB max
 const FETCH_TIMEOUT = 30_000; // 30s
@@ -26,6 +24,11 @@ export class WebFetchTool implements AgentTool {
     const url = params['url'] as string;
     if (!url) return createErrorResult('Missing required parameter: url');
 
+    // SSRF protection: block requests to private/internal networks
+    if (isPrivateUrl(url)) {
+      return createErrorResult('Blocked: URL targets a private or internal network address');
+    }
+
     const raw = params['raw'] as boolean ?? false;
     const customHeaders = (params['headers'] as Record<string, string>) ?? {};
 
@@ -44,6 +47,12 @@ export class WebFetchTool implements AgentTool {
       });
 
       clearTimeout(timeoutId);
+
+      // Post-redirect SSRF check: verify the final URL after redirects
+      const finalUrl = response.url;
+      if (finalUrl && finalUrl !== url && isPrivateUrl(finalUrl)) {
+        return createErrorResult('Blocked: redirect targets a private or internal network address');
+      }
 
       if (!response.ok) {
         return createErrorResult(`HTTP ${response.status}: ${response.statusText} for ${url}`);
