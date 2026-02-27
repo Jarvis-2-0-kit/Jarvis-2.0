@@ -163,6 +163,54 @@ export function useGatewayToasts() {
       })
     );
 
+    // --- OTA Update events ---
+    unsubs.push(
+      gateway.on('system.update.available', (payload) => {
+        const info = payload as { commitsBehind: number; latestMessage: string; latestCommit: string };
+        addToast({
+          type: 'info',
+          title: 'Update Available',
+          message: `${info.commitsBehind} new commit${info.commitsBehind > 1 ? 's' : ''}: ${info.latestMessage}`,
+          duration: 0, // sticky
+        });
+      })
+    );
+
+    unsubs.push(
+      gateway.on('system.update.started', () => {
+        addToast({
+          type: 'warning',
+          title: 'Updating...',
+          message: 'Pulling changes & rebuilding. Gateway will restart.',
+          duration: 0, // sticky
+        });
+      })
+    );
+
+    unsubs.push(
+      gateway.on('system.update.completed', (payload) => {
+        const info = payload as { prevHead?: string; newHead?: string };
+        addToast({
+          type: 'success',
+          title: 'Updated!',
+          message: info.prevHead && info.newHead ? `${info.prevHead} → ${info.newHead}` : 'System is up to date',
+          duration: 6000,
+        });
+      })
+    );
+
+    unsubs.push(
+      gateway.on('system.update.failed', (payload) => {
+        const info = payload as { message?: string };
+        addToast({
+          type: 'error',
+          title: 'Update Failed',
+          message: info.message || 'Check logs for details',
+          duration: 0, // sticky
+        });
+      })
+    );
+
     // NOTE: Removed chat.message toasts — too noisy. Chat has its own panel.
     // NOTE: Removed task.assigned, task.cancelled — too noisy for toasts.
     // NOTE: Removed workflow.started — only show completion/failure.

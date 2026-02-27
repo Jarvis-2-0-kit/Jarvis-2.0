@@ -15,6 +15,8 @@ import {
   Thermometer,
   RefreshCw,
   Monitor,
+  Download,
+  Loader2,
 } from 'lucide-react';
 import { formatUptime, formatUptimeShort, formatBytes, formatBytesRate } from '../utils/formatters.js';
 
@@ -82,6 +84,9 @@ export function OverviewView() {
   const connected = useGatewayStore((s) => s.connected);
   const health = useGatewayStore((s) => s.health);
   const agents = useGatewayStore((s) => s.agents);
+  const update = useGatewayStore((s) => s.update);
+  const updateInProgress = useGatewayStore((s) => s.updateInProgress);
+  const applyUpdate = useGatewayStore((s) => s.applyUpdate);
   const [detailedHealth, setDetailedHealth] = useState<DetailedHealth | null>(null);
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
@@ -205,6 +210,84 @@ export function OverviewView() {
           {refreshing ? 'REFRESHING...' : 'REFRESH'}
         </button>
       </div>
+
+      {/* OTA Update Banner */}
+      {(update || updateInProgress) && (
+        <div style={{
+          marginBottom: 20,
+          padding: '12px 16px',
+          background: 'rgba(0,255,255,0.04)',
+          border: '1px solid rgba(0,255,255,0.2)',
+          borderRadius: 6,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+        }}>
+          <Download size={18} style={{ color: 'var(--cyan-bright)', flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontFamily: 'var(--font-display)',
+              fontSize: 11,
+              letterSpacing: 2,
+              color: 'var(--cyan-bright)',
+              marginBottom: 2,
+            }}>
+              {updateInProgress ? 'UPDATING...' : 'UPDATE AVAILABLE'}
+            </div>
+            {update && !updateInProgress && (
+              <div style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10,
+                color: 'var(--text-secondary)',
+              }}>
+                {update.commitsBehind} commit{update.commitsBehind > 1 ? 's' : ''} behind
+                <span style={{ color: 'var(--text-muted)', margin: '0 6px' }}>|</span>
+                <span style={{ color: 'var(--cyan-bright)' }}>{update.localHead}</span>
+                <span style={{ color: 'var(--text-muted)' }}> → </span>
+                <span style={{ color: 'var(--cyan-bright)' }}>{update.remoteHead}</span>
+                <span style={{ color: 'var(--text-muted)', margin: '0 6px' }}>|</span>
+                {update.latestMessage}
+              </div>
+            )}
+            {updateInProgress && (
+              <div style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: 10,
+                color: 'var(--text-muted)',
+              }}>
+                Pulling changes, rebuilding, and restarting. Please wait...
+              </div>
+            )}
+          </div>
+          <button
+            onClick={applyUpdate}
+            disabled={updateInProgress}
+            style={{
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 10,
+              padding: '6px 16px',
+              background: updateInProgress ? 'rgba(0,255,255,0.05)' : 'rgba(0,255,255,0.1)',
+              border: '1px solid rgba(0,255,255,0.3)',
+              borderRadius: 4,
+              color: 'var(--cyan-bright)',
+              cursor: updateInProgress ? 'not-allowed' : 'pointer',
+              fontFamily: 'var(--font-display)',
+              letterSpacing: 2,
+              opacity: updateInProgress ? 0.5 : 1,
+            }}
+          >
+            {updateInProgress ? (
+              <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+            ) : (
+              <Download size={12} />
+            )}
+            {updateInProgress ? 'UPDATING...' : 'UPDATE NOW'}
+          </button>
+        </div>
+      )}
 
       {/* Infrastructure Status */}
       <SectionTitle icon={<Server size={14} />} label="INFRASTRUCTURE" color="var(--green-bright)" />

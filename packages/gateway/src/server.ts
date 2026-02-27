@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSy
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname, cpus, totalmem, freemem, loadavg, networkInterfaces, uptime as osUptime } from 'node:os';
-import { execSync, execFile, execFileSync } from 'node:child_process';
+import { execSync, execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { timingSafeEqual, createHash } from 'node:crypto';
 
@@ -88,6 +88,9 @@ export class GatewayServer {
   private auth: AuthManager;
   private orchestrator: DependencyOrchestrator;
   private healthInterval: ReturnType<typeof setInterval> | null = null;
+  private updateCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private updateAvailable: { commitsBehind: number; latestCommit: string; latestMessage: string; localHead: string; remoteHead: string } | null = null;
+  private updateInProgress = false;
 
   constructor(private readonly config: GatewayConfig) {
     this.app = express();
@@ -168,6 +171,9 @@ export class GatewayServer {
     // Start health monitoring
     this.startHealthMonitoring();
 
+    // Start update checker (every 5 min)
+    this.startUpdateChecker();
+
     // Start HTTP+WS server
     await new Promise<void>((resolve, reject) => {
       this.httpServer.once('error', (err: NodeJS.ErrnoException) => {
@@ -179,12 +185,16 @@ export class GatewayServer {
         resolve();
       });
     });
+
+    // Post-restart: check if we just completed an OTA update
+    this.broadcastUpdateStatusOnRestart();
   }
 
   /** Stop the gateway */
   async stop(): Promise<void> {
     log.info('Shutting down gateway...');
     if (this.healthInterval) clearInterval(this.healthInterval);
+    if (this.updateCheckInterval) clearInterval(this.updateCheckInterval);
     this.orchestrator.stop();
 
     // Close all WebSocket connections gracefully
@@ -1345,6 +1355,20 @@ export class GatewayServer {
 
     this.protocol.registerMethod('approvals.config.set', async (params) => {
       return this.setApprovalConfig(params as Record<string, unknown>);
+    });
+
+    // --- OTA Update Methods ---
+
+    this.protocol.registerMethod('system.update.check', async () => {
+      return this.checkForUpdates();
+    });
+
+    this.protocol.registerMethod('system.update.apply', async () => {
+      return this.applyUpdate();
+    });
+
+    this.protocol.registerMethod('system.update.status', async () => {
+      return this.getUpdateStatus();
     });
 
   }
@@ -4481,6 +4505,129 @@ end tell`;
       writeFileSync(configPath, JSON.stringify(config, null, 2));
       return { success: true };
     } catch { return { success: false }; }
+  }
+
+  // --- OTA Update System ---
+
+  private startUpdateChecker(): void {
+    // Check immediately on startup (after a short delay for connections to settle)
+    setTimeout(() => void this.checkForUpdates(), 30_000);
+    // Then every 5 minutes
+    this.updateCheckInterval = setInterval(() => {
+      void this.checkForUpdates();
+    }, 5 * 60 * 1000);
+  }
+
+  private async checkForUpdates(): Promise<{ available: boolean; commitsBehind: number; latestCommit: string; latestMessage: string; localHead: string; remoteHead: string }> {
+    const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+    try {
+      // Fetch latest from origin (non-destructive)
+      execSync('git fetch origin', { cwd: projectDir, timeout: 30_000, stdio: 'pipe' });
+
+      // Get current branch
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectDir, stdio: 'pipe' }).toString().trim();
+
+      // Compare HEAD vs origin/branch
+      const localHead = execSync('git rev-parse HEAD', { cwd: projectDir, stdio: 'pipe' }).toString().trim();
+      const remoteHead = execSync(`git rev-parse origin/${branch}`, { cwd: projectDir, stdio: 'pipe' }).toString().trim();
+
+      if (localHead === remoteHead) {
+        this.updateAvailable = null;
+        return { available: false, commitsBehind: 0, latestCommit: '', latestMessage: '', localHead, remoteHead };
+      }
+
+      // Count commits behind
+      const behindStr = execSync(`git rev-list --count HEAD..origin/${branch}`, { cwd: projectDir, stdio: 'pipe' }).toString().trim();
+      const commitsBehind = parseInt(behindStr, 10) || 0;
+
+      // Get latest commit info from remote
+      const latestCommit = remoteHead.slice(0, 8);
+      const latestMessage = execSync(`git log -1 --format=%s origin/${branch}`, { cwd: projectDir, stdio: 'pipe' }).toString().trim();
+
+      this.updateAvailable = { commitsBehind, latestCommit, latestMessage, localHead: localHead.slice(0, 8), remoteHead: remoteHead.slice(0, 8) };
+
+      log.info(`Update available: ${commitsBehind} commit(s) behind — ${latestMessage}`);
+
+      // Broadcast to all dashboard clients
+      this.protocol.broadcast('system.update.available', this.updateAvailable);
+
+      return { available: true, commitsBehind, latestCommit, latestMessage, localHead: localHead.slice(0, 8), remoteHead: remoteHead.slice(0, 8) };
+    } catch (err) {
+      log.warn('Update check failed', { error: (err as Error).message });
+      return { available: false, commitsBehind: 0, latestCommit: '', latestMessage: '', localHead: '', remoteHead: '' };
+    }
+  }
+
+  private applyUpdate(): { started: boolean; error?: string } {
+    if (this.updateInProgress) {
+      return { started: false, error: 'Update already in progress' };
+    }
+
+    const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+    const updateScript = resolve(projectDir, 'scripts/jarvis-update.sh');
+
+    if (!existsSync(updateScript)) {
+      return { started: false, error: 'Update script not found' };
+    }
+
+    this.updateInProgress = true;
+
+    // Broadcast that update is starting
+    this.protocol.broadcast('system.update.started', {
+      timestamp: Date.now(),
+      message: 'Pulling latest changes and rebuilding...',
+    });
+
+    log.info('Spawning OTA update trampoline script...');
+
+    // Spawn detached — this process outlives the gateway
+    const child = spawn('bash', [updateScript], {
+      cwd: projectDir,
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    return { started: true };
+  }
+
+  private getUpdateStatus(): { status: string; message: string; prevHead: string; newHead: string; timestamp: number } | null {
+    const statusFile = '/tmp/jarvis-update-status.json';
+    try {
+      if (!existsSync(statusFile)) return null;
+      const raw = readFileSync(statusFile, 'utf-8');
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+
+  private broadcastUpdateStatusOnRestart(): void {
+    const statusFile = '/tmp/jarvis-update-status.json';
+    if (!existsSync(statusFile)) return;
+
+    try {
+      const raw = readFileSync(statusFile, 'utf-8');
+      const status = JSON.parse(raw) as { status: string; message: string; prevHead: string; newHead: string; timestamp: number };
+
+      // Wait for dashboard clients to reconnect before broadcasting
+      setTimeout(() => {
+        if (status.status === 'done') {
+          log.info('Post-update broadcast: update completed successfully');
+          this.protocol.broadcast('system.update.completed', status);
+        } else if (status.status === 'error') {
+          log.warn('Post-update broadcast: update failed', { message: status.message });
+          this.protocol.broadcast('system.update.failed', status);
+        }
+
+        // Clean up status file
+        try { unlinkSync(statusFile); } catch { /* ignore */ }
+        this.updateInProgress = false;
+        this.updateAvailable = null;
+      }, 5000);
+    } catch (err) {
+      log.warn('Failed to read update status file', { error: (err as Error).message });
+    }
   }
 
   // --- Health Data Helper (for voice/channel responses) ---

@@ -62,6 +62,14 @@ export interface FeedEntry {
   newStatus?: string;
 }
 
+interface UpdateInfo {
+  commitsBehind: number;
+  latestCommit: string;
+  latestMessage: string;
+  localHead: string;
+  remoteHead: string;
+}
+
 interface HealthInfo {
   status: string;
   version: string;
@@ -92,12 +100,16 @@ interface GatewayStore {
   taskProgress: Map<string, FeedEntry>;
   health: HealthInfo | null;
   consoleLines: Array<{ agentId: string; line: string; timestamp: number }>;
+  update: UpdateInfo | null;
+  updateInProgress: boolean;
 
   // Actions
   init: () => void;
   destroy: () => void;
   sendChat: (to: string, content: string) => void;
   createTask: (task: Partial<TaskDef>) => void;
+  checkForUpdate: () => void;
+  applyUpdate: () => void;
 }
 
 export const useGatewayStore = create<GatewayStore>((set, get) => ({
@@ -111,6 +123,8 @@ export const useGatewayStore = create<GatewayStore>((set, get) => ({
   taskProgress: new Map(),
   health: null,
   consoleLines: [],
+  update: null,
+  updateInProgress: false,
 
   init: () => {
     if (get().initialized) return;
@@ -313,6 +327,23 @@ export const useGatewayStore = create<GatewayStore>((set, get) => ({
       }));
     }));
 
+    // --- OTA Update events ---
+    unsubs.push(gateway.on('system.update.available', (payload) => {
+      set({ update: payload as UpdateInfo });
+    }));
+
+    unsubs.push(gateway.on('system.update.started', () => {
+      set({ updateInProgress: true });
+    }));
+
+    unsubs.push(gateway.on('system.update.completed', () => {
+      set({ update: null, updateInProgress: false });
+    }));
+
+    unsubs.push(gateway.on('system.update.failed', () => {
+      set({ updateInProgress: false });
+    }));
+
     // Store cleanup function on the store so destroy() can call it
     (useGatewayStore as unknown as { _unsubs: Array<() => void> })._unsubs = unsubs;
   },
@@ -344,5 +375,20 @@ export const useGatewayStore = create<GatewayStore>((set, get) => ({
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
+  },
+
+  checkForUpdate: () => {
+    void gateway.request<{ available: boolean; commitsBehind: number; latestCommit: string; latestMessage: string; localHead: string; remoteHead: string }>('system.update.check').then((result) => {
+      if (result.available) {
+        set({ update: { commitsBehind: result.commitsBehind, latestCommit: result.latestCommit, latestMessage: result.latestMessage, localHead: result.localHead, remoteHead: result.remoteHead } });
+      } else {
+        set({ update: null });
+      }
+    });
+  },
+
+  applyUpdate: () => {
+    set({ updateInProgress: true });
+    void gateway.request('system.update.apply');
   },
 }));
