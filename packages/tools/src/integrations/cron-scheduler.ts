@@ -149,13 +149,26 @@ function getNextCronDate(expression: string, after: Date = new Date()): Date {
 
 function matchesCron(expression: string, date: Date): boolean {
   const fields = parseCron(expression);
-  return (
-    fields.minute.includes(date.getMinutes()) &&
-    fields.hour.includes(date.getHours()) &&
-    fields.dayOfMonth.includes(date.getDate()) &&
-    fields.month.includes(date.getMonth() + 1) &&
-    fields.dayOfWeek.includes(date.getDay())
-  );
+  const parts = expression.trim().split(/\s+/);
+
+  const domIsWildcard = parts[2] === '*';
+  const dowIsWildcard = parts[4] === '*';
+
+  const minuteMatch = fields.minute.includes(date.getMinutes());
+  const hourMatch = fields.hour.includes(date.getHours());
+  const monthMatch = fields.month.includes(date.getMonth() + 1);
+  const domMatch = fields.dayOfMonth.includes(date.getDate());
+  const dowMatch = fields.dayOfWeek.includes(date.getDay());
+
+  // Per POSIX cron spec: when both dayOfMonth and dayOfWeek are explicitly
+  // specified (neither is *), the job fires if EITHER matches (OR logic).
+  // When only one (or neither) is specified, use AND logic.
+  const dayMatch =
+    !domIsWildcard && !dowIsWildcard
+      ? domMatch || dowMatch   // both explicit → OR
+      : domMatch && dowMatch;  // at least one wildcard → AND
+
+  return minuteMatch && hourMatch && dayMatch && monthMatch;
 }
 
 function describeCron(expression: string): string {

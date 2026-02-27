@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useGatewayStore } from '../../store/gateway-store.js';
 
 const ROLE_LABELS: Record<string, string> = {
@@ -26,6 +27,19 @@ export function AgentPanel() {
 
   const agentList = Array.from(agents.values());
 
+  // Build a per-agent activity map once per activityLog/agentList change, avoiding
+  // repeated .filter calls inside the render loop for every agent on every render.
+  const activityByAgent = useMemo(() => {
+    const map = new Map<string, typeof activityLog>();
+    for (const agent of agentList) {
+      map.set(
+        agent.identity.agentId,
+        activityLog.filter((a) => a.agentId === agent.identity.agentId),
+      );
+    }
+    return map;
+  }, [activityLog, agentList]);
+
   return (
     <div className="panel" style={{ height: '100%' }}>
       <div className="panel-header">
@@ -44,9 +58,7 @@ export function AgentPanel() {
         ) : (
           agentList.map((agent) => {
             const statusInfo = STATUS_LABELS[agent.status] ?? STATUS_LABELS['offline']!;
-            const recentActivity = activityLog
-              .filter((a) => a.agentId === agent.identity.agentId)
-              .slice(-3);
+            const recentActivity = (activityByAgent.get(agent.identity.agentId) ?? []).slice(-3);
 
             return (
               <div key={agent.identity.agentId} style={{

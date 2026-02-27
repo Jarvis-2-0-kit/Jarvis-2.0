@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { hostname, cpus, totalmem, freemem, loadavg, networkInterfaces, uptime as osUptime } from 'node:os';
 import { execSync, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { timingSafeEqual, createHash } from 'node:crypto';
 
 const execFileAsync = promisify(execFile);
 import { z } from 'zod';
@@ -49,6 +50,7 @@ const ALL_AGENTS = ['jarvis', 'agent-smith', 'agent-johny'] as const;
 // Rate limiters
 const wsRateLimiter = new RateLimiter(30);   // 30 msgs/min per WS connection
 const apiRateLimiter = new RateLimiter(120);  // 120 req/min per IP
+const authTokenRateLimiter = new RateLimiter(10); // 10 req/min for /auth/token
 
 // Zod schema for chat.send validation
 const chatSendSchema = z.object({
@@ -271,9 +273,16 @@ export class GatewayServer {
       const ip = req.ip || req.socket.remoteAddress || '';
       const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1' || ip === 'localhost';
       if (!isLocal) {
+        log.warn(`/auth/token access denied from non-local IP: ${ip}`);
         res.status(403).json({ error: 'Token endpoint only accessible from localhost' });
         return;
       }
+      if (!authTokenRateLimiter.allow(ip)) {
+        log.warn(`/auth/token rate limit exceeded for IP: ${ip}`);
+        res.status(429).json({ error: 'Too many requests' });
+        return;
+      }
+      log.info(`/auth/token accessed from ${ip}`);
       res.json({ token: this.auth.getDashboardToken() });
     });
 
@@ -1390,7 +1399,10 @@ export class GatewayServer {
 
         // Update task status in store
         if (result.taskId) {
-          void this.store.updateTask(result.taskId, { status: finalStatus }).catch(() => {});
+          void this.store.updateTask(result.taskId, { status: finalStatus }).catch((err: unknown) => {
+            log.error(`Failed to update task ${result.taskId} status to ${finalStatus}: ${(err as Error).message}`);
+            throw err;
+          });
         }
 
         this.protocol.broadcast(result.success !== false ? 'task.completed' : 'task.failed', result);
@@ -2006,6 +2018,13 @@ export class GatewayServer {
     };
   }
 
+  /** Compare two strings using a timing-safe method to prevent timing attacks. */
+  private safeCompareKeys(a: string, b: string): boolean {
+    const hashA = createHash('sha256').update(a).digest();
+    const hashB = createHash('sha256').update(b).digest();
+    return timingSafeEqual(hashA, hashB);
+  }
+
   /** Validate an API key without exposing it — returns true/false */
   private validateApiKey(params: { id: string; key: string }): { valid: boolean } {
     const configPath = this.nas.resolve('config', 'api-keys.json');
@@ -2014,7 +2033,7 @@ export class GatewayServer {
         const data = JSON.parse(readFileSync(configPath, 'utf-8')) as { keys: Array<{ id: string; key: string }> };
         const found = data.keys.find(k => k.id === params.id);
         if (found) {
-          return { valid: found.key === params.key };
+          return { valid: this.safeCompareKeys(found.key, params.key) };
         }
       }
     } catch { /* ignore */ }
@@ -2028,7 +2047,7 @@ export class GatewayServer {
     };
     const envVar = envMap[params.id];
     if (envVar && process.env[envVar]) {
-      return { valid: process.env[envVar] === params.key };
+      return { valid: this.safeCompareKeys(process.env[envVar]!, params.key) };
     }
 
     return { valid: false };
@@ -2863,7 +2882,7 @@ export class GatewayServer {
   private waSocket: ReturnType<typeof import('@whiskeysockets/baileys').makeWASocket> | null = null;
   private waConnected = false;
   private waQrDataUrl: string | null = null;
-  private waLoginResolve: ((value: { connected: boolean; message: string }) => void) | null = null;
+  private waLoginResolvers: Array<(value: { connected: boolean; message: string }) => void> = [];
   private waSelfJid: string | null = null;
   /** Maps WhatsApp session IDs to JIDs for routing agent responses back via WhatsApp */
   private waActiveChats = new Map<string, string>();
@@ -2997,11 +3016,11 @@ export class GatewayServer {
             timestamp: Date.now(),
           });
 
-          // Resolve login wait if pending
-          if (this.waLoginResolve) {
-            this.waLoginResolve({ connected: true, message: `Connected as ${this.waSelfJid}` });
-            this.waLoginResolve = null;
+          // Resolve all pending login waiters
+          for (const resolve of this.waLoginResolvers) {
+            resolve({ connected: true, message: `Connected as ${this.waSelfJid}` });
           }
+          this.waLoginResolvers = [];
         }
 
         if (connection === 'close') {
@@ -3027,11 +3046,11 @@ export class GatewayServer {
             setTimeout(() => this.connectWhatsApp(), 5000);
           }
 
-          // Resolve login wait if pending
-          if (this.waLoginResolve) {
-            this.waLoginResolve({ connected: false, message: `Disconnected (code: ${statusCode})` });
-            this.waLoginResolve = null;
+          // Resolve all pending login waiters with disconnect
+          for (const resolve of this.waLoginResolvers) {
+            resolve({ connected: false, message: `Disconnected (code: ${statusCode})` });
           }
+          this.waLoginResolvers = [];
         }
       });
 
@@ -3149,11 +3168,12 @@ export class GatewayServer {
     }
 
     return new Promise((resolve) => {
-      this.waLoginResolve = resolve;
+      this.waLoginResolvers.push(resolve);
       // Timeout after 120 seconds
       setTimeout(() => {
-        if (this.waLoginResolve === resolve) {
-          this.waLoginResolve = null;
+        const idx = this.waLoginResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.waLoginResolvers.splice(idx, 1);
           resolve({ connected: false, message: 'Scan timeout (120s). Try again.' });
         }
       }, 120000);

@@ -151,6 +151,8 @@ export function ChatView() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  // Track recently-sent optimistic messages for secondary dedup (content+role within 5s window)
+  const recentOptimisticRef = useRef<Array<{ content: string; role: string; sentAt: number }>>([]);
 
   // ── Inject CSS ──
   useEffect(() => {
@@ -309,8 +311,17 @@ export function ChatView() {
       if (msg.from === 'user' && msg.sessionId && msg.sessionId !== activeSessionId) return;
 
       // Deduplicate: skip if message with same ID already exists (optimistic append or duplicate WS)
+      // Secondary check: also skip if content+role matches a recently-sent optimistic message (last 5s),
+      // in case the server assigned its own ID instead of echoing the client-generated one.
+      const now = Date.now();
+      const RECENT_WINDOW_MS = 5000;
+      recentOptimisticRef.current = recentOptimisticRef.current.filter((r) => now - r.sentAt < RECENT_WINDOW_MS);
+      const isRecentOptimistic = recentOptimisticRef.current.some(
+        (r) => r.content === msg.content && r.role === msg.from,
+      );
       setMessages((prev) => {
         if (prev.some((m) => m.id === msg.id)) return prev;
+        if (isRecentOptimistic && msg.from === 'user') return prev;
         return [...prev.slice(-500), msg];
       });
 
@@ -395,7 +406,8 @@ export function ChatView() {
       sessionId: activeSessionId,
     };
 
-    // Optimistic append
+    // Optimistic append — track for secondary dedup (server may assign a different ID)
+    recentOptimisticRef.current.push({ content: text, role: 'user', sentAt: Date.now() });
     setMessages((prev) => [...prev, msg]);
     setInput('');
     setIsAgentRunning(true);

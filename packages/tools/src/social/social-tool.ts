@@ -87,6 +87,7 @@ export class SocialTool implements AgentTool {
       { name: 'Facebook', handler: () => this.handleFacebook(action, params) },
       { name: 'LinkedIn', handler: () => this.handleLinkedIn(action, params) },
       { name: 'Instagram', handler: () => this.handleInstagram(action, params) },
+      ...(this.tiktok ? [{ name: 'TikTok', handler: () => this.handleTikTok(action, params) }] : []),
     ];
 
     const settled = await Promise.allSettled(platforms.map((p) => p.handler()));

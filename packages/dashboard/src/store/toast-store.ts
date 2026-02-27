@@ -65,7 +65,7 @@ function loadEnabled(): boolean {
   return true; // Default enabled
 }
 
-export const useToastStore = create<ToastStore>((set) => ({
+export const useToastStore = create<ToastStore>((set, get) => ({
   toasts: [],
   maxToasts: 4,
   paused: false,
@@ -126,6 +126,6 @@ export const useToastStore = create<ToastStore>((set) => ({
 
   setEnabled: (enabled) => {
     try { localStorage.setItem('jarvis-toasts-enabled', JSON.stringify(enabled)); } catch { /* */ }
-    set({ enabled, toasts: enabled ? [] : [] }); // Clear on toggle
+    set({ enabled, toasts: enabled ? get().toasts : [] }); // Only clear toasts when disabling
   },
 }));

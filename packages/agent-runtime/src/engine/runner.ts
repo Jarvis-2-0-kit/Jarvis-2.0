@@ -263,6 +263,13 @@ function trimMessagesToFit(messages: Message[], systemPromptLen: number, toolDef
     role: 'assistant',
     content: '[Previous conversation was too large and has been dropped. Continue the task based on the original instructions above.]',
   };
+  // Anthropic requires the first message to be a user message.
+  // If the oldest retained message is an assistant message (e.g. loaded from context),
+  // prepend a synthetic user message so the array starts with role 'user'.
+  if (firstMsg.role === 'assistant') {
+    const syntheticUser: Message = { role: 'user', content: '[conversation resumed]' };
+    return [syntheticUser, firstMsg, summary];
+  }
   return [firstMsg, summary];
 }
 
@@ -1030,6 +1037,10 @@ export class AgentRunner {
       const cleanedFinal = currentText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
       if (cleanedFinal) content.push({ type: 'text', text: cleanedFinal });
     }
+
+    // Compute totalTokens from accumulated input + output (avoids double-counting
+    // when the provider emits partial totals in individual chunks).
+    usage.totalTokens = usage.inputTokens + usage.outputTokens;
 
     // NOTE: Do NOT send 'done' here — it kills the stream indicator in the dashboard
     // while tools are still executing. 'done' is sent at the end of runAgentLoop instead.

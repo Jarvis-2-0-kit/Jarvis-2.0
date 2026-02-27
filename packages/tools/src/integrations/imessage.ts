@@ -102,7 +102,7 @@ async function readConversation(contact: string, limit: number = 20): Promise<st
 
   try {
     const { stdout } = await execFileAsync('sqlite3', [
-      '-separator', ' | ',
+      '-separator', '\x1F',
       `${process.env['HOME']}/Library/Messages/chat.db`,
       query,
     ], { timeout: 10_000 });
@@ -113,7 +113,7 @@ async function readConversation(contact: string, limit: number = 20): Promise<st
 
     const lines = stdout.trim().split('\n').reverse();
     const formatted = lines.map((line) => {
-      const parts = line.split(' | ');
+      const parts = line.split('\x1F');
       const date = parts[2] || '';
       const fromMe = parts[1]?.trim() === '1';
       const text = parts[0] || '';
@@ -162,7 +162,7 @@ async function searchMessages(query: string, limit: number = 20): Promise<string
 
   try {
     const { stdout } = await execFileAsync('sqlite3', [
-      '-separator', ' | ',
+      '-separator', '\x1F',
       `${process.env['HOME']}/Library/Messages/chat.db`,
       sqlQuery,
     ], { timeout: 10_000 });
@@ -173,7 +173,7 @@ async function searchMessages(query: string, limit: number = 20): Promise<string
 
     const lines = stdout.trim().split('\n');
     const formatted = lines.map((line) => {
-      const parts = line.split(' | ');
+      const parts = line.split('\x1F');
       const text = parts[0] || '';
       const fromMe = parts[1]?.trim() === '1';
       const contact = parts[2] || 'unknown';
@@ -237,7 +237,7 @@ async function listConversations(limit: number = 30): Promise<string> {
 
   try {
     const { stdout } = await execFileAsync('sqlite3', [
-      '-separator', ' | ',
+      '-separator', '\x1F',
       `${process.env['HOME']}/Library/Messages/chat.db`,
       sqlQuery,
     ], { timeout: 10_000 });
@@ -248,7 +248,7 @@ async function listConversations(limit: number = 30): Promise<string> {
 
     const lines = stdout.trim().split('\n');
     const formatted = lines.map((line, i) => {
-      const parts = line.split(' | ');
+      const parts = line.split('\x1F');
       const id = parts[0] || '';
       const name = parts[1] || id;
       const lastMsg = parts[2] || '';

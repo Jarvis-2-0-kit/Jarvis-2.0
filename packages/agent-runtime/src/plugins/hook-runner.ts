@@ -17,6 +17,20 @@ import type {
 
 const log = createLogger('plugins:hooks');
 
+const HOOK_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(promise: Promise<T>, hookName: string, pluginId: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Hook "${hookName}" (plugin: ${pluginId}) timed out after ${HOOK_TIMEOUT_MS}ms`)),
+        HOOK_TIMEOUT_MS,
+      )
+    ),
+  ]);
+}
+
 export class HookRunner {
   constructor(
     private readonly registry: PluginRegistry,
@@ -40,7 +54,11 @@ export class HookRunner {
     for (const hook of hooks) {
       try {
         const hookCtx: PluginHookContext = { ...ctx, pluginId: hook.pluginId };
-        const result = await hook.handler(event, hookCtx);
+        const result = await withTimeout(
+          Promise.resolve(hook.handler(event, hookCtx)),
+          name,
+          hook.pluginId,
+        );
 
         if (result !== undefined && result !== null) {
           // Merge results: first non-undefined value for each key wins
@@ -54,9 +72,15 @@ export class HookRunner {
           }
         }
       } catch (err) {
+        const errMsg = (err as Error).message;
+        const isTimeout = errMsg.includes('timed out after');
         if (this.options.catchErrors) {
-          log.error(`Hook ${name} (plugin: ${hook.pluginId}) error: ${(err as Error).message}`);
-          // Don't silently continue on security-critical hooks
+          if (isTimeout) {
+            log.warn(`Hook ${name} (plugin: ${hook.pluginId}) timed out — skipping`);
+          } else {
+            log.error(`Hook ${name} (plugin: ${hook.pluginId}) error: ${errMsg}`);
+          }
+          // Don't silently continue on security-critical hooks (timeout included)
           const criticalHooks: PluginHookName[] = ['before_tool_call', 'before_model_resolve'];
           if (criticalHooks.includes(name)) {
             throw err;

@@ -87,6 +87,7 @@ export function OverviewView() {
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [lastPoll, setLastPoll] = useState(0);
+  const [, setTickCounter] = useState(0);
   const prevNetRef = useRef<Record<string, { rx: number; tx: number }> | null>(null);
   const [netRates, setNetRates] = useState<Record<string, { rxRate: number; txRate: number }>>({});
 
@@ -144,6 +145,12 @@ export function OverviewView() {
     }
     return () => { cancelledRef.current = true; };
   }, [connected, fetchAll]);
+
+  // Tick every 5s so the "polled X seconds ago" display stays current between polls
+  useEffect(() => {
+    const tick = setInterval(() => setTickCounter((c) => c + 1), 5000);
+    return () => clearInterval(tick);
+  }, []);
 
   const h = detailedHealth ?? health;
 

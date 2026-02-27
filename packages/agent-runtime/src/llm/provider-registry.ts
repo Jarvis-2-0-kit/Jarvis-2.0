@@ -93,8 +93,15 @@ export class ProviderRegistry {
     const providerId = this.modelProviderMap.get(modelId);
     if (providerId) return this.providers.get(providerId);
 
-    // Heuristic: guess provider from model name
-    if (modelId.startsWith('claude-')) return this.providers.get('claude-cli') ?? this.providers.get('anthropic');
+    // Heuristic: guess provider from model name.
+    // For claude-* models, prefer the explicit `anthropic` API-key provider when
+    // it is registered (i.e. the user configured an API key).  Only fall back to
+    // `claude-cli` when no API-key-backed anthropic provider is present.
+    if (modelId.startsWith('claude-')) {
+      const anthropicProvider = this.providers.get('anthropic');
+      if (anthropicProvider?.isAvailable()) return anthropicProvider;
+      return this.providers.get('claude-cli');
+    }
     if (modelId.startsWith('gpt-') || modelId.startsWith('o1') || modelId.startsWith('o3') || modelId.startsWith('o4')) return this.providers.get('openai');
     if (modelId.startsWith('gemini-')) return this.providers.get('google');
     if (modelId.includes('/')) return this.providers.get('openrouter'); // e.g. "meta-llama/llama-3.1-70b"

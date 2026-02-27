@@ -38,11 +38,30 @@ export class StateStore {
   }
 
   async updateHeartbeat(agentId: string): Promise<void> {
-    const state = await this.getAgentState(agentId);
-    if (!state) return;
-    state.lastHeartbeat = Date.now();
-    state.status = state.status === 'offline' ? 'idle' : state.status;
-    await this.setAgentState(state);
+    const key = RedisKeys.agentStatus(agentId);
+    const now = Date.now();
+    // Lua script atomically reads the stored JSON, updates lastHeartbeat and
+    // conditionally flips status from 'offline' → 'idle', then writes back.
+    // This avoids a GET → modify → SET race with concurrent status updates.
+    const luaScript = `
+      local raw = redis.call('GET', KEYS[1])
+      if not raw then return nil end
+      local ok, obj = pcall(cjson.decode, raw)
+      if not ok then return nil end
+      obj['lastHeartbeat'] = tonumber(ARGV[1])
+      if obj['status'] == 'offline' then
+        obj['status'] = 'idle'
+      end
+      local encoded = cjson.encode(obj)
+      local ttl = redis.call('TTL', KEYS[1])
+      if ttl and ttl > 0 then
+        redis.call('SETEX', KEYS[1], ttl, encoded)
+      else
+        redis.call('SET', KEYS[1], encoded)
+      end
+      return 1
+    `;
+    await this.redis.raw.eval(luaScript, 1, key, String(now));
   }
 
   // --- Agent Capabilities ---

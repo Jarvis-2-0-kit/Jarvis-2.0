@@ -353,17 +353,15 @@ export class DependencyOrchestrator {
         }
       }
 
-      // Dispatch
+      // Dispatch — only mark as assigned after the dispatch call succeeds
       if (this.dispatchCallback && targetAgent) {
-        task.status = 'assigned';
-        task.assignedAgent = targetAgent;
-
         this.dispatchCallback(targetAgent, task).then(() => {
+          task.status = 'assigned';
+          task.assignedAgent = targetAgent;
           log.info(`Dispatched task ${task.taskId} to ${targetAgent}`);
         }).catch((err) => {
           log.error(`Failed to dispatch task ${task.taskId}: ${(err as Error).message}`);
-          task.status = 'ready'; // Reset to retry
-          task.assignedAgent = undefined;
+          // task remains in 'ready' state so it will be retried
         });
       }
     }

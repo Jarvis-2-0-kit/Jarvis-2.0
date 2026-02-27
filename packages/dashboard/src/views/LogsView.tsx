@@ -53,6 +53,8 @@ export function LogsView() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastCountRef = useRef(0);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   // Parse log line
   const parseLine = useCallback((line: string): LogEntry => {
@@ -111,7 +113,7 @@ export function LogsView() {
     if (!connected) return;
 
     const unsub = gateway.on('log.line', (payload) => {
-      if (paused) return;
+      if (pausedRef.current) return;
       const entry = payload as { line: string; agentId?: string; timestamp?: number };
       const parsed = parseLine(entry.line ?? JSON.stringify(entry));
       setLogs((prev) => [...prev.slice(-2500), parsed]);

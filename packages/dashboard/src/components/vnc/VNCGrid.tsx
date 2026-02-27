@@ -30,10 +30,6 @@ export function VNCGrid() {
   const [statuses, setStatuses] = useState<Record<string, VNCStatus>>({});
   const [viewOnly, setViewOnly] = useState(false);
 
-  // Stable status change handler using ref to avoid triggering VNCViewer re-renders
-  const statusesRef = useRef(statuses);
-  statusesRef.current = statuses;
-
   // Fetch VNC endpoints from gateway — only once when first connected (not on every reconnect)
   const fetchedRef = useRef(false);
   useEffect(() => {

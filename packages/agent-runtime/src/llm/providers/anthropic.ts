@@ -232,7 +232,7 @@ export class AnthropicProvider implements LLMProvider {
                   usage: event.usage ? {
                     inputTokens: 0,
                     outputTokens: event.usage.output_tokens ?? 0,
-                    totalTokens: event.usage.output_tokens ?? 0,
+                    totalTokens: 0,
                   } : undefined,
                 };
                 break;
@@ -247,7 +247,7 @@ export class AnthropicProvider implements LLMProvider {
                       outputTokens: 0,
                       cacheReadTokens: event.message.usage.cache_read_input_tokens,
                       cacheWriteTokens: event.message.usage.cache_creation_input_tokens,
-                      totalTokens: event.message.usage.input_tokens ?? 0,
+                      totalTokens: 0,
                     },
                   };
                 }

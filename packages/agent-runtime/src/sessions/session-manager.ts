@@ -129,7 +129,14 @@ export class SessionManager {
       return content
         .split('\n')
         .filter((line) => line.trim())
-        .map((line) => JSON.parse(line) as SessionEntry);
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as SessionEntry];
+          } catch {
+            log.warn(`Skipping malformed JSONL line in session ${sessionId}: ${line.slice(0, 80)}`);
+            return [];
+          }
+        });
     } catch {
       return [];
     }

@@ -324,6 +324,39 @@ class HassAPI {
       return 'Areas API requires WebSocket connection. Use the HA UI for area management.';
     }
   }
+
+  async getDevices(): Promise<string> {
+    const states = (await this.fetch('/states')) as HassEntity[];
+
+    if (states.length === 0) {
+      return 'No entities/devices found.';
+    }
+
+    // Group entities by domain as a proxy for device type
+    const grouped: Record<string, HassEntity[]> = {};
+    for (const entity of states) {
+      const domain = entity.entity_id.split('.')[0]!;
+      if (!grouped[domain]) grouped[domain] = [];
+      grouped[domain]!.push(entity);
+    }
+
+    const lines: string[] = [`Devices by domain (${states.length} entities total):\n`];
+    for (const [domain, entities] of Object.entries(grouped).sort((a, b) => b[1].length - a[1].length)) {
+      lines.push(`── ${domain} (${entities.length}) ──`);
+      for (const e of entities.slice(0, 20)) {
+        const name = (e.attributes['friendly_name'] as string) || e.entity_id;
+        const unit = (e.attributes['unit_of_measurement'] as string) || '';
+        const stateStr = e.state + (unit ? ` ${unit}` : '');
+        const icon = getStateIcon(e);
+        lines.push(`  ${icon} ${name} [${e.entity_id}]: ${stateStr}`);
+      }
+      if (entities.length > 20) {
+        lines.push(`  ... and ${entities.length - 20} more`);
+      }
+    }
+
+    return lines.join('\n');
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -507,7 +540,7 @@ export class HomeAssistantTool implements AgentTool {
           return createToolResult(await this.api.getAreas());
 
         case 'devices':
-          return createToolResult(await this.api.getAreas()); // HA devices require websocket
+          return createToolResult(await this.api.getDevices());
 
         default:
           return createErrorResult(`Unknown action: ${action}`);

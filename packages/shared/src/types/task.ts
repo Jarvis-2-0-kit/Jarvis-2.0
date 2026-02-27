@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AgentCapability } from './agent.js';
 
 export const TaskPriority = z.enum(['low', 'normal', 'high', 'critical']);
 export type TaskPriority = z.infer<typeof TaskPriority>;
@@ -20,7 +21,7 @@ export const TaskDefinition = z.object({
   description: z.string(),
   priority: TaskPriority.default('normal'),
   status: TaskStatus.default('pending'),
-  requiredCapabilities: z.array(z.string()),
+  requiredCapabilities: z.array(AgentCapability),
   assignedAgent: z.string().nullable().default(null),
   parentTaskId: z.string().nullable().default(null),
   subtaskIds: z.array(z.string()).default([]),
