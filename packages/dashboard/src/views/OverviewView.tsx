@@ -87,6 +87,8 @@ export function OverviewView() {
   const update = useGatewayStore((s) => s.update);
   const updateInProgress = useGatewayStore((s) => s.updateInProgress);
   const applyUpdate = useGatewayStore((s) => s.applyUpdate);
+  const checkForUpdate = useGatewayStore((s) => s.checkForUpdate);
+  const [checking, setChecking] = useState(false);
   const [detailedHealth, setDetailedHealth] = useState<DetailedHealth | null>(null);
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
   const [processes, setProcesses] = useState<ProcessInfo[]>([]);
@@ -186,29 +188,56 @@ export function OverviewView() {
         }}>
           {lastPoll > 0 ? `polled ${Math.floor((Date.now() - lastPoll) / 1000)}s ago` : ''}
         </span>
-        <button
-          onClick={() => void fetchAll()}
-          aria-label="Refresh system overview"
-          style={{
-            marginLeft: 'auto',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: 10,
-            padding: '4px 12px',
-            opacity: refreshing ? 0.5 : 1,
-            background: 'var(--bg-tertiary)',
-            border: '1px solid var(--border-primary)',
-            borderRadius: 4,
-            color: 'var(--text-secondary)',
-            cursor: 'pointer',
-            fontFamily: 'var(--font-display)',
-            letterSpacing: 1,
-          }}
-        >
-          <RefreshCw size={10} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
-          {refreshing ? 'REFRESHING...' : 'REFRESH'}
-        </button>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+          <button
+            onClick={() => {
+              setChecking(true);
+              checkForUpdate();
+              setTimeout(() => setChecking(false), 3000);
+            }}
+            aria-label="Check for updates"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 10,
+              padding: '4px 12px',
+              opacity: checking ? 0.5 : 1,
+              background: 'var(--bg-tertiary)',
+              border: '1px solid rgba(0,255,255,0.2)',
+              borderRadius: 4,
+              color: 'var(--cyan-bright)',
+              cursor: checking ? 'not-allowed' : 'pointer',
+              fontFamily: 'var(--font-display)',
+              letterSpacing: 1,
+            }}
+          >
+            <Download size={10} style={{ animation: checking ? 'spin 1s linear infinite' : 'none' }} />
+            {checking ? 'CHECKING...' : 'CHECK UPDATES'}
+          </button>
+          <button
+            onClick={() => void fetchAll()}
+            aria-label="Refresh system overview"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              fontSize: 10,
+              padding: '4px 12px',
+              opacity: refreshing ? 0.5 : 1,
+              background: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-primary)',
+              borderRadius: 4,
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontFamily: 'var(--font-display)',
+              letterSpacing: 1,
+            }}
+          >
+            <RefreshCw size={10} style={{ animation: refreshing ? 'spin 1s linear infinite' : 'none' }} />
+            {refreshing ? 'REFRESHING...' : 'REFRESH'}
+          </button>
+        </div>
       </div>
 
       {/* OTA Update Banner */}

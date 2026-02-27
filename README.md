@@ -24,6 +24,36 @@
 
 <img src="assets/divider.svg" alt="" width="100%">
 
+## ░ NEW FEATURES
+
+<table>
+<tr>
+<td width="60%">
+
+### Automatic OTA Updates
+
+One-click over-the-air updates — right from the dashboard. Gateway polls GitHub every 5 minutes and notifies you when new commits are available. Hit **UPDATE NOW** and the system pulls, builds, and restarts itself automatically.
+
+- **CHECK UPDATES** button in the top-right corner of **System Overview**
+- Cyan banner appears below the page title when updates are available
+- Shows commit count, HEAD range, and latest commit message
+- Automatic rollback if the build fails
+
+> **Where to find it:** Open the Dashboard → **System Overview** (first page) → look for the **CHECK UPDATES** button in the top-right corner next to REFRESH.
+
+</td>
+<td width="40%">
+
+<img src="screenshots/ota-update.png" alt="OTA Update — System Overview" width="100%">
+<br>
+<samp>System Overview with CHECK UPDATES button (top-right)</samp>
+
+</td>
+</tr>
+</table>
+
+<img src="assets/divider.svg" alt="" width="100%">
+
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║  JARVIS SYSTEM v2.0.0  ◆  STATUS: OPERATIONAL  ◆  NODES: 3  ◆  UPLINK: OK ║
