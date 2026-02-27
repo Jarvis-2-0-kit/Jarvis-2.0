@@ -83,6 +83,7 @@ interface HealthInfo {
 
 interface GatewayStore {
   connected: boolean;
+  initialized: boolean;
   agents: Map<string, AgentState>;
   tasks: TaskDef[];
   chatMessages: ChatMessage[];
@@ -94,14 +95,14 @@ interface GatewayStore {
 
   // Actions
   init: () => void;
+  destroy: () => void;
   sendChat: (to: string, content: string) => void;
   createTask: (task: Partial<TaskDef>) => void;
 }
 
-let initialized = false;
-
-export const useGatewayStore = create<GatewayStore>((set) => ({
+export const useGatewayStore = create<GatewayStore>((set, get) => ({
   connected: false,
+  initialized: false,
   agents: new Map(),
   tasks: [],
   chatMessages: [],
@@ -112,11 +113,15 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
   consoleLines: [],
 
   init: () => {
-    if (initialized) return;
-    initialized = true;
+    if (get().initialized) return;
+    set({ initialized: true });
+
+    // Track all unsub functions so we can clean up on destroy / re-init
+    const unsubs: Array<() => void> = [];
+
     gateway.connect();
 
-    gateway.on('_connected', () => {
+    unsubs.push(gateway.on('_connected', () => {
       set({ connected: true });
       // Fetch initial state
       void gateway.request('agents.list').then((agents) => {
@@ -129,13 +134,13 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
       void gateway.request('tasks.list').then((tasks) => {
         set({ tasks: tasks as TaskDef[] });
       });
-    });
+    }));
 
-    gateway.on('_disconnected', () => {
+    unsubs.push(gateway.on('_disconnected', () => {
       set({ connected: false });
-    });
+    }));
 
-    gateway.on('agent.status', (payload) => {
+    unsubs.push(gateway.on('agent.status', (payload) => {
       const state = payload as AgentState;
       set((prev) => {
         const agents = new Map(prev.agents);
@@ -161,9 +166,9 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
 
         return { agents };
       });
-    });
+    }));
 
-    gateway.on('agent.activity', (payload) => {
+    unsubs.push(gateway.on('agent.activity', (payload) => {
       const entry = payload as ActivityEntry;
 
       // Also push tool_call entries to activityFeed
@@ -187,9 +192,9 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
           activityLog: [...prev.activityLog.slice(-200), entry],
         }));
       }
-    });
+    }));
 
-    gateway.on('task.progress', (payload) => {
+    unsubs.push(gateway.on('task.progress', (payload) => {
       const data = payload as { taskId: string; agentId: string; progress: number; detail?: string; title?: string };
       const feedEntry: FeedEntry = {
         id: `feed-tp-${data.taskId}-${Date.now()}`,
@@ -213,9 +218,9 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
           taskProgress,
         };
       });
-    });
+    }));
 
-    gateway.on('coordination.request', (payload) => {
+    unsubs.push(gateway.on('coordination.request', (payload) => {
       const data = payload as { fromAgent: string; toAgent: string; taskId?: string; detail?: string };
       const feedEntry: FeedEntry = {
         id: `feed-del-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -230,9 +235,9 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
       set((prev) => ({
         activityFeed: [...prev.activityFeed.slice(-299), feedEntry],
       }));
-    });
+    }));
 
-    gateway.on('coordination.response', (payload) => {
+    unsubs.push(gateway.on('coordination.response', (payload) => {
       const data = payload as { fromAgent: string; toAgent: string; taskId?: string; detail?: string };
       const feedEntry: FeedEntry = {
         id: `feed-delr-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -247,66 +252,76 @@ export const useGatewayStore = create<GatewayStore>((set) => ({
       set((prev) => ({
         activityFeed: [...prev.activityFeed.slice(-299), feedEntry],
       }));
-    });
+    }));
 
-    gateway.on('task.created', (payload) => {
+    unsubs.push(gateway.on('task.created', (payload) => {
       const task = payload as TaskDef;
       set((prev) => ({ tasks: [...prev.tasks.slice(-499), task] }));
-    });
+    }));
 
-    gateway.on('task.completed', (payload) => {
+    unsubs.push(gateway.on('task.completed', (payload) => {
       const result = payload as { taskId: string };
       set((prev) => ({
         tasks: prev.tasks.map((t) =>
           t.id === result.taskId ? { ...t, status: 'completed' } : t
         ),
       }));
-    });
+    }));
 
-    gateway.on('task.cancelled', (payload) => {
+    unsubs.push(gateway.on('task.cancelled', (payload) => {
       const result = payload as { taskId: string };
       set((prev) => ({
         tasks: prev.tasks.map((t) =>
           t.id === result.taskId ? { ...t, status: 'cancelled', assignedAgent: null } : t
         ),
       }));
-    });
+    }));
 
-    gateway.on('task.assigned', (payload) => {
+    unsubs.push(gateway.on('task.assigned', (payload) => {
       const result = payload as { taskId: string; agentId: string };
       set((prev) => ({
         tasks: prev.tasks.map((t) =>
           t.id === result.taskId ? { ...t, status: 'assigned', assignedAgent: result.agentId } : t
         ),
       }));
-    });
+    }));
 
-    gateway.on('task.failed', (payload) => {
+    unsubs.push(gateway.on('task.failed', (payload) => {
       const result = payload as { taskId: string };
       set((prev) => ({
         tasks: prev.tasks.map((t) =>
           t.id === result.taskId ? { ...t, status: 'failed' } : t
         ),
       }));
-    });
+    }));
 
-    gateway.on('chat.message', (payload) => {
+    unsubs.push(gateway.on('chat.message', (payload) => {
       const msg = payload as ChatMessage;
       set((prev) => ({
         chatMessages: [...prev.chatMessages.slice(-500), msg],
       }));
-    });
+    }));
 
-    gateway.on('system.health', (payload) => {
+    unsubs.push(gateway.on('system.health', (payload) => {
       set({ health: payload as HealthInfo });
-    });
+    }));
 
-    gateway.on('log.line', (payload) => {
+    unsubs.push(gateway.on('log.line', (payload) => {
       const line = payload as { agentId: string; line: string; timestamp: number };
       set((prev) => ({
         consoleLines: [...prev.consoleLines.slice(-1000), line],
       }));
-    });
+    }));
+
+    // Store cleanup function on the store so destroy() can call it
+    (useGatewayStore as unknown as { _unsubs: Array<() => void> })._unsubs = unsubs;
+  },
+
+  destroy: () => {
+    const unsubs = (useGatewayStore as unknown as { _unsubs?: Array<() => void> })._unsubs ?? [];
+    for (const unsub of unsubs) unsub();
+    (useGatewayStore as unknown as { _unsubs: Array<() => void> })._unsubs = [];
+    set({ initialized: false, connected: false });
   },
 
   sendChat: (to: string, content: string) => {

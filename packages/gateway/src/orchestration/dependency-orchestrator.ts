@@ -101,11 +101,14 @@ export class DependencyOrchestrator {
     log.info('Dependency orchestrator started');
 
     this.pollInterval = setInterval(() => {
-      void this.pollDelegations().then(() => this.processReadyTasks());
+      void this.pollDelegations()
+        .then(() => this.processReadyTasks())
+        .catch((err: unknown) => log.error(`Orchestrator poll error: ${(err as Error).message}`));
     }, POLL_INTERVAL_MS);
 
     // Initial poll
-    void this.pollDelegations();
+    void this.pollDelegations()
+      .catch((err: unknown) => log.error(`Orchestrator initial poll error: ${(err as Error).message}`));
   }
 
   /** Stop the orchestrator */

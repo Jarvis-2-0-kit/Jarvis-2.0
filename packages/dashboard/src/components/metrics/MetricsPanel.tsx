@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useGatewayStore } from '../../store/gateway-store.js';
 
 export function MetricsPanel() {
@@ -5,10 +6,22 @@ export function MetricsPanel() {
   const agents = useGatewayStore((s) => s.agents);
   const tasks = useGatewayStore((s) => s.tasks);
 
-  const totalCompleted = Array.from(agents.values()).reduce((sum, a) => sum + a.completedTasks, 0);
-  const totalFailed = Array.from(agents.values()).reduce((sum, a) => sum + a.failedTasks, 0);
-  const activeTasks = tasks.filter((t) => t.status === 'in-progress' || t.status === 'assigned').length;
-  const pendingTasks = tasks.filter((t) => !t.status || t.status === 'pending' || t.status === 'queued').length;
+  const { totalCompleted, totalFailed } = useMemo(() => {
+    const agentList = Array.from(agents.values());
+    return {
+      totalCompleted: agentList.reduce((sum, a) => sum + a.completedTasks, 0),
+      totalFailed: agentList.reduce((sum, a) => sum + a.failedTasks, 0),
+    };
+  }, [agents]);
+
+  const activeTasks = useMemo(
+    () => tasks.filter((t) => t.status === 'in-progress' || t.status === 'assigned').length,
+    [tasks],
+  );
+  const pendingTasks = useMemo(
+    () => tasks.filter((t) => !t.status || t.status === 'pending' || t.status === 'queued').length,
+    [tasks],
+  );
 
   return (
     <div className="panel" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>

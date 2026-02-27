@@ -47,36 +47,37 @@ const DEFAULT_CONFIG: RateLimitConfig = {
 
 export function createRateLimiterPlugin(): JarvisPluginDefinition {
   const config = { ...DEFAULT_CONFIG };
-  const state: RateState = {
-    toolCallsThisMinute: 0,
-    toolCallsThisSession: 0,
-    tokensThisSession: 0,
-    minuteWindowStart: Date.now(),
-    lastToolName: '',
-    consecutiveSameToolCount: 0,
-    totalBlocked: 0,
-    perToolCounts: {},
-  };
 
-  let lastCallTime = 0;
+  // Keyed by sessionId so concurrent sessions don't corrupt each other's state
+  const sessionStateMap = new Map<string, RateState & { lastCallTime: number }>();
 
-  function resetMinuteWindow(): void {
+  function createSessionState(): RateState & { lastCallTime: number } {
+    return {
+      toolCallsThisMinute: 0,
+      toolCallsThisSession: 0,
+      tokensThisSession: 0,
+      minuteWindowStart: Date.now(),
+      lastToolName: '',
+      consecutiveSameToolCount: 0,
+      totalBlocked: 0,
+      perToolCounts: {},
+      lastCallTime: 0,
+    };
+  }
+
+  function getOrCreateState(sessionId: string): RateState & { lastCallTime: number } {
+    if (!sessionStateMap.has(sessionId)) {
+      sessionStateMap.set(sessionId, createSessionState());
+    }
+    return sessionStateMap.get(sessionId)!;
+  }
+
+  function resetMinuteWindow(state: RateState): void {
     const now = Date.now();
     if (now - state.minuteWindowStart > 60_000) {
       state.toolCallsThisMinute = 0;
       state.minuteWindowStart = now;
     }
-  }
-
-  function resetSession(): void {
-    state.toolCallsThisMinute = 0;
-    state.toolCallsThisSession = 0;
-    state.tokensThisSession = 0;
-    state.minuteWindowStart = Date.now();
-    state.lastToolName = '';
-    state.consecutiveSameToolCount = 0;
-    state.perToolCounts = {};
-    lastCallTime = 0;
   }
 
   return {
@@ -101,8 +102,10 @@ export function createRateLimiterPlugin(): JarvisPluginDefinition {
         name: 'rate_limiter_status',
         description: 'Check current rate limiter status, showing usage vs limits for tool calls and tokens.',
         inputSchema: { type: 'object' as const, properties: {} },
-        execute: async () => {
-          resetMinuteWindow();
+        execute: async (_params, ctx) => {
+          const sessionId = (ctx as { sessionId?: string }).sessionId ?? '';
+          const state = getOrCreateState(sessionId);
+          resetMinuteWindow(state);
           const lines = [
             '=== Rate Limiter Status ===',
             '',
@@ -126,8 +129,9 @@ export function createRateLimiterPlugin(): JarvisPluginDefinition {
         name: 'rate_limiter_reset',
         description: 'Reset all rate limiter counters. Use if you hit a limit and need to continue.',
         inputSchema: { type: 'object' as const, properties: {} },
-        execute: async () => {
-          resetSession();
+        execute: async (_params, ctx) => {
+          const sessionId = (ctx as { sessionId?: string }).sessionId ?? '';
+          sessionStateMap.set(sessionId, createSessionState());
           log.info('Rate limiter counters reset');
           return { type: 'text' as const, text: 'Rate limiter counters have been reset.' };
         },
@@ -135,8 +139,9 @@ export function createRateLimiterPlugin(): JarvisPluginDefinition {
 
       // --- Hooks ---
 
-      api.on('before_tool_call', (event) => {
-        resetMinuteWindow();
+      api.on('before_tool_call', (event, ctx) => {
+        const state = getOrCreateState(ctx.sessionId ?? '');
+        resetMinuteWindow(state);
         const now = Date.now();
         const toolName = event.toolName;
 
@@ -194,16 +199,17 @@ export function createRateLimiterPlugin(): JarvisPluginDefinition {
         }
 
         // Enforce minimum cooldown between calls
-        if (config.cooldownMs > 0 && (now - lastCallTime) < config.cooldownMs) {
+        if (config.cooldownMs > 0 && (now - state.lastCallTime) < config.cooldownMs) {
           // Don't block, just note it — the cooldown is very short
         }
-        lastCallTime = now;
+        state.lastCallTime = now;
 
         return undefined;
       }, { priority: 100 }); // High priority — runs before other hooks
 
       // Track token consumption
-      api.on('llm_output', (event) => {
+      api.on('llm_output', (event, ctx) => {
+        const state = getOrCreateState(ctx.sessionId ?? '');
         state.tokensThisSession += event.usage.totalTokens;
 
         if (state.tokensThisSession > config.maxTokensPerSession * 0.9) {
@@ -211,10 +217,14 @@ export function createRateLimiterPlugin(): JarvisPluginDefinition {
         }
       });
 
-      // Reset on new session
-      api.on('session_start', () => {
-        resetSession();
-        log.debug('Rate limiter counters reset for new session');
+      // Initialize session state on session_start; clean up on session_end
+      api.on('session_start', (event) => {
+        sessionStateMap.set(event.sessionId, createSessionState());
+        log.debug('Rate limiter counters initialized for new session');
+      });
+
+      api.on('session_end', (event) => {
+        sessionStateMap.delete(event.sessionId);
       });
 
       // Prompt section

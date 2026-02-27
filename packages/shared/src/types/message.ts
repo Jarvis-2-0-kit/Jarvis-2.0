@@ -37,7 +37,7 @@ export type ChatMessage = z.infer<typeof ChatMessage>;
 
 /** Strip chars dangerous for NATS subjects and Redis keys */
 export function sanitizeToken(token: string): string {
-  return token.replace(/[.*>\s\r\n\x00-\x1f]/g, '');
+  return token.replace(/[.*>\s\r\n\x00-\x1f:{}]/g, '');
 }
 
 /** NATS subject helpers */

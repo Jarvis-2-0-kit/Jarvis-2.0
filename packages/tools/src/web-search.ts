@@ -74,13 +74,17 @@ export class WebSearchTool implements AgentTool {
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
-
     if (!response.ok) {
+      clearTimeout(timeoutId);
       throw new Error(`Brave API error ${response.status}`);
     }
 
-    const data = await response.json() as BraveSearchResponse;
+    let data: BraveSearchResponse;
+    try {
+      data = await response.json() as BraveSearchResponse;
+    } finally {
+      clearTimeout(timeoutId);
+    }
     const results = (data.web?.results ?? []).map((r, i) => (
       `${i + 1}. ${r.title}\n   ${r.url}\n   ${r.description ?? ''}`
     ));
@@ -112,13 +116,17 @@ export class WebSearchTool implements AgentTool {
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
-
     if (!response.ok) {
+      clearTimeout(timeoutId);
       throw new Error(`Perplexity API error ${response.status}`);
     }
 
-    const data = await response.json() as PerplexityResponse;
+    let data: PerplexityResponse;
+    try {
+      data = await response.json() as PerplexityResponse;
+    } finally {
+      clearTimeout(timeoutId);
+    }
     const answer = data.choices?.[0]?.message?.content ?? '';
     const citations = (data.citations ?? []).map((c, i) => `[${i + 1}] ${c}`).join('\n');
 

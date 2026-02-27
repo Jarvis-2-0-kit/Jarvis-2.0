@@ -515,6 +515,14 @@ export class ExecTool implements AgentTool {
 
   private isSafeBin(bin: string): boolean {
     const baseName = bin.split('/').pop() ?? bin;
-    return this.security.safeBins?.includes(baseName) ?? false;
+    if (!(this.security.safeBins?.includes(baseName) ?? false)) {
+      return false;
+    }
+    // If the binary is an absolute path, verify it lives in a trusted directory.
+    if (bin.startsWith('/') && this.security.safeBinTrustedDirs && this.security.safeBinTrustedDirs.length > 0) {
+      const binDir = bin.substring(0, bin.lastIndexOf('/'));
+      return this.security.safeBinTrustedDirs.includes(binDir);
+    }
+    return true;
   }
 }

@@ -89,15 +89,30 @@ export function ChatPanel() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const prevMessageCount = useRef(chatMessages.length);
 
-  // Inject CSS
+  // Inject CSS — ref-counted so multiple instances and HMR are safe
   useEffect(() => {
     const styleId = 'chat-panel-styles';
-    if (document.getElementById(styleId)) return;
-    const style = document.createElement('style');
-    style.id = styleId;
-    style.textContent = CHAT_CSS;
-    document.head.appendChild(style);
-    return () => { style.remove(); };
+    const countAttr = 'data-refcount';
+    let style = document.getElementById(styleId) as HTMLStyleElement | null;
+    if (style) {
+      style.setAttribute(countAttr, String(Number(style.getAttribute(countAttr) ?? '0') + 1));
+    } else {
+      style = document.createElement('style');
+      style.id = styleId;
+      style.setAttribute(countAttr, '1');
+      style.textContent = CHAT_CSS;
+      document.head.appendChild(style);
+    }
+    return () => {
+      const el = document.getElementById(styleId);
+      if (!el) return;
+      const count = Number(el.getAttribute(countAttr) ?? '1') - 1;
+      if (count <= 0) {
+        el.remove();
+      } else {
+        el.setAttribute(countAttr, String(count));
+      }
+    };
   }, []);
 
   // Auto-scroll with smart detection

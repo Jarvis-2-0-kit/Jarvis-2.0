@@ -40,6 +40,8 @@ export class PluginRegistry {
   private promptSections: Array<{ pluginId: string; section: PromptSection }> = [];
   private runtimeConfig: PluginRuntimeConfig;
   private pluginConfigs: Record<string, Record<string, unknown>> = {};
+  /** Stop functions collected when startServices() is called */
+  private storedStopFns: Array<() => void> = [];
 
   constructor(config: PluginRuntimeConfig, pluginConfigs?: Record<string, Record<string, unknown>>) {
     this.runtimeConfig = config;
@@ -82,6 +84,12 @@ export class PluginRegistry {
     // Create the API object for this plugin
     const api = this.createPluginApi(definition);
 
+    // Snapshot indices before registration so we can roll back on failure
+    const toolsBefore = this.toolRegistrations.length;
+    const hooksBefore = this.hookRegistrations.length;
+    const servicesBefore = this.services.length;
+    const promptsBefore = this.promptSections.length;
+
     try {
       // Register phase
       await definition.register(api);
@@ -95,6 +103,12 @@ export class PluginRegistry {
     } catch (err) {
       record.enabled = false;
       log.error(`Plugin registration failed: ${definition.id} - ${(err as Error).message}`);
+      // Roll back any registrations made before the error
+      this.toolRegistrations.splice(toolsBefore);
+      this.hookRegistrations.splice(hooksBefore);
+      this.services.splice(servicesBefore);
+      this.promptSections.splice(promptsBefore);
+      log.warn(`Rolled back partial registrations for plugin: ${definition.id}`);
     }
   }
 
@@ -290,7 +304,8 @@ export class PluginRegistry {
   // ─── Services ────────────────────────────────────────────────────
 
   /**
-   * Start all registered services.
+   * Start all registered services. Stop functions are stored internally so
+   * cleanup() can always stop them even if the caller loses the reference.
    */
   async startServices(): Promise<Array<() => void>> {
     const stopFns: Array<() => void> = [];
@@ -305,6 +320,9 @@ export class PluginRegistry {
       }
     }
 
+    // Store internally so cleanup() can always call them
+    this.storedStopFns.push(...stopFns);
+
     return stopFns;
   }
 
@@ -312,16 +330,19 @@ export class PluginRegistry {
 
   /**
    * Clean up all registered resources. Call on shutdown to prevent leaks.
+   * Always stops services started via startServices(), plus any additional
+   * stop functions passed as argument.
    */
   async cleanup(stopFns?: Array<() => void>): Promise<void> {
-    // Stop all services
-    if (stopFns) {
-      for (const stop of stopFns) {
-        try {
-          stop();
-        } catch (err) {
-          log.error(`Service stop failed: ${(err as Error).message}`);
-        }
+    // Combine internally stored stop fns with any explicitly passed ones
+    const allStopFns = [...this.storedStopFns, ...(stopFns ?? [])];
+    this.storedStopFns = [];
+
+    for (const stop of allStopFns) {
+      try {
+        stop();
+      } catch (err) {
+        log.error(`Service stop failed: ${(err as Error).message}`);
       }
     }
 

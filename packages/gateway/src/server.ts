@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSy
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { hostname, cpus, totalmem, freemem, loadavg, networkInterfaces, uptime as osUptime } from 'node:os';
-import { execSync, execFile } from 'node:child_process';
+import { execSync, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -48,7 +48,7 @@ const ALL_AGENTS = ['jarvis', 'agent-smith', 'agent-johny'] as const;
 
 // Rate limiters
 const wsRateLimiter = new RateLimiter(30);   // 30 msgs/min per WS connection
-const apiRateLimiter = new RateLimiter(60);  // 60 req/min per IP
+const apiRateLimiter = new RateLimiter(120);  // 120 req/min per IP
 
 // Zod schema for chat.send validation
 const chatSendSchema = z.object({
@@ -167,7 +167,11 @@ export class GatewayServer {
     this.startHealthMonitoring();
 
     // Start HTTP+WS server
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
+      this.httpServer.once('error', (err: NodeJS.ErrnoException) => {
+        log.error(`HTTP server failed to start: ${err.message}`, { code: err.code });
+        process.exit(1);
+      });
       this.httpServer.listen(this.config.port, this.config.host, () => {
         log.info(`Gateway listening on http://${this.config.host}:${this.config.port}`);
         resolve();
@@ -215,7 +219,7 @@ export class GatewayServer {
       res.setHeader('X-Frame-Options', 'DENY');
       res.setHeader('X-XSS-Protection', '1; mode=block');
       res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-      res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws: wss:; img-src 'self' data: blob:");
+      res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:; img-src 'self' data: blob:");
       if (_req.secure || _req.headers['x-forwarded-proto'] === 'https') {
         res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
       }
@@ -234,7 +238,7 @@ export class GatewayServer {
 
       if (!apiRateLimiter.allow(ip)) {
         getAuditLogger().logEvent('rate_limit.exceeded', 'gateway:http', { ip, path: req.path });
-        res.status(429).json({ error: 'Rate limit exceeded. Max 60 requests per minute.' });
+        res.status(429).json({ error: 'Rate limit exceeded. Max 120 requests per minute.' });
         return;
       }
       next();
@@ -541,6 +545,9 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('tasks.create', async (params) => {
+      if (typeof (params as Record<string, unknown>)?.title !== 'string' || !(params as Record<string, unknown>).title) {
+        throw new Error('Invalid task.create params: title must be a non-empty string');
+      }
       const task = params as TaskDefinition;
       task.id = task.id || shortId();
       task.status = task.status || 'pending';
@@ -558,6 +565,9 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('tasks.cancel', async (params) => {
+      if (typeof (params as Record<string, unknown>)?.taskId !== 'string') {
+        throw new Error('Invalid tasks.cancel params: taskId must be a string');
+      }
       const { taskId } = params as { taskId: string };
       await this.store.updateTask(taskId, { assignedAgent: null, status: 'cancelled' });
       this.protocol.broadcast('task.cancelled', { taskId });
@@ -997,12 +1007,20 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('environment.set', async (params) => {
-      const { key, value } = params as { key: string; value: string };
+      const p = params as Record<string, unknown>;
+      if (typeof p?.key !== 'string' || !p.key || typeof p?.value !== 'string') {
+        throw new Error('Invalid environment.set params: key and value must be strings');
+      }
+      const { key, value } = p as { key: string; value: string };
       return this.setEnvironmentVar(key, value);
     });
 
     this.protocol.registerMethod('environment.delete', async (params) => {
-      const { key } = params as { key: string };
+      const p = params as Record<string, unknown>;
+      if (typeof p?.key !== 'string' || !p.key) {
+        throw new Error('Invalid environment.delete params: key must be a non-empty string');
+      }
+      const { key } = p as { key: string };
       return this.deleteEnvironmentVar(key);
     });
 
@@ -2118,7 +2136,7 @@ export class GatewayServer {
     // Disk usage via df
     const diskEntries: Array<{ filesystem: string; size: string; used: string; available: string; usedPercent: number; mount: string }> = [];
     try {
-      const dfOutput = execSync('df -h / /Volumes/* 2>/dev/null || df -h /', { encoding: 'utf-8', timeout: 5000 });
+      const dfOutput = execFileSync('df', ['-h', '/'], { encoding: 'utf-8', timeout: 5000 });
       const lines = dfOutput.trim().split('\n').slice(1); // skip header
       for (const line of lines) {
         const parts = line.split(/\s+/);
@@ -2146,11 +2164,14 @@ export class GatewayServer {
         let rx = 0;
         let tx = 0;
         try {
-          const stat = execSync(`netstat -ibn | grep -E "^${name}\\s" | head -1`, { encoding: 'utf-8', timeout: 3000 });
-          const cols = stat.trim().split(/\s+/);
-          if (cols.length >= 10) {
-            rx = parseInt(cols[6]) || 0;
-            tx = parseInt(cols[9]) || 0;
+          const netstatOut = execFileSync('netstat', ['-ibn'], { encoding: 'utf-8', timeout: 3000 });
+          const matchLine = netstatOut.split('\n').find(l => l.startsWith(name + ' ') || l.startsWith(name + '\t'));
+          if (matchLine) {
+            const cols = matchLine.trim().split(/\s+/);
+            if (cols.length >= 10) {
+              rx = parseInt(cols[6]) || 0;
+              tx = parseInt(cols[9]) || 0;
+            }
           }
         } catch { /* ignore */ }
         netSummary[name] = { rx, tx, ip: ipv4.address };
@@ -2192,7 +2213,8 @@ export class GatewayServer {
   }> {
     const results: Array<{ pid: number; name: string; cpu: number; mem: number; user: string }> = [];
     try {
-      const output = execSync('ps aux --sort=-%cpu 2>/dev/null || ps aux -r', { encoding: 'utf-8', timeout: 5000 });
+      // Use -r flag (macOS sort by CPU) since --sort is Linux-only
+      const output = execFileSync('ps', ['aux', '-r'], { encoding: 'utf-8', timeout: 5000 });
       const lines = output.trim().split('\n').slice(1, 16); // top 15 processes
       for (const line of lines) {
         const cols = line.trim().split(/\s+/);
@@ -2276,8 +2298,12 @@ export class GatewayServer {
 
   private startHealthMonitoring(): void {
     this.healthInterval = setInterval(async () => {
-      const health = await this.getHealthStatus();
-      this.protocol.broadcast('system.health', health);
+      try {
+        const health = await this.getHealthStatus();
+        this.protocol.broadcast('system.health', health);
+      } catch (err) {
+        log.error('Health monitoring error', { error: (err as Error).message });
+      }
     }, 15_000);
   }
 
@@ -2390,6 +2416,7 @@ export class GatewayServer {
     'JARVIS_AUTH_TOKEN', 'NATS_TOKEN', 'NATS_USER', 'NATS_PASS',
     'REDIS_URL', 'NATS_URL', 'NODE_TLS_REJECT_UNAUTHORIZED',
     'NODE_OPTIONS', 'LD_PRELOAD', 'DYLD_INSERT_LIBRARIES',
+    'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_AI_API_KEY', 'OPENROUTER_API_KEY',
   ]);
 
   private static readonly BLOCKED_ENV_PREFIXES = [
@@ -3056,6 +3083,11 @@ export class GatewayServer {
             } else {
               // Route to agent via NATS chat — same as dashboard, gives full computer control
               const sessionId = `whatsapp-${from.split('@')[0]}`;
+              // Evict oldest entry if the map has reached its size cap
+              if (this.waActiveChats.size >= 10_000 && !this.waActiveChats.has(sessionId)) {
+                const oldestKey = this.waActiveChats.keys().next().value;
+                if (oldestKey !== undefined) this.waActiveChats.delete(oldestKey);
+              }
               this.waActiveChats.set(sessionId, from);
 
               const chatMsg: ChatMessage = {

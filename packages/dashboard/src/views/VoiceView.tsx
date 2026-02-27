@@ -196,7 +196,7 @@ export function VoiceView() {
     if (lastMsg?.role === 'user' && !processingRef.current && !processedIdsRef.current.has(lastMsg.id)) {
       processUserMessage(lastMsg.content, lastMsg.id);
     }
-  }, [messages.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [messages.length, processUserMessage]);
 
   // Text input submit
   const handleTextSubmit = () => {

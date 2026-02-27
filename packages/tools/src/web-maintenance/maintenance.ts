@@ -3,7 +3,7 @@ import type { AgentTool, ToolContext, ToolResult } from '../base.js';
 import { createToolResult, createErrorResult } from '../base.js';
 import { ExecTool } from '../exec.js';
 
-const exec = new ExecTool();
+const exec = new ExecTool({ mode: 'full' });
 
 /**
  * Web deployment tool.

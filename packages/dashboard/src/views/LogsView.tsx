@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useGatewayStore } from '../store/gateway-store.js';
 import { gateway } from '../gateway/client.js';
 import {
@@ -128,25 +128,25 @@ export function LogsView() {
   }, [logs, autoFollow]);
 
   // Get unique sources
-  const sources = Array.from(new Set(logs.map(l => l.source))).sort();
+  const sources = useMemo(() => Array.from(new Set(logs.map(l => l.source))).sort(), [logs]);
 
   // Filtered logs
-  const filteredLogs = logs.filter((entry) => {
+  const filteredLogs = useMemo(() => logs.filter((entry) => {
     if (levelFilter !== 'all' && entry.level !== levelFilter) return false;
     if (sourceFilter !== 'all' && entry.source !== sourceFilter) return false;
     if (search && !entry.raw.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
-  });
+  }), [logs, levelFilter, sourceFilter, search]);
 
   // Stats
-  const stats = {
+  const stats = useMemo(() => ({
     total: logs.length,
     info: logs.filter(l => l.level === 'INFO').length,
     warn: logs.filter(l => l.level === 'WARN').length,
     error: logs.filter(l => l.level === 'ERROR').length,
     debug: logs.filter(l => l.level === 'DEBUG').length,
     sources: sources.length,
-  };
+  }), [logs, sources]);
 
   return (
     <div style={{

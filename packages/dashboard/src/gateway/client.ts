@@ -16,6 +16,8 @@ export class GatewayClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1000;
   private _connected = false;
+  private connectTime = 0;
+  private authRetried = false;
 
   constructor(
     private url: string = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`,
@@ -62,6 +64,8 @@ export class GatewayClient {
     this.ws.onopen = () => {
       this._connected = true;
       this.reconnectDelay = 1000;
+      this.connectTime = Date.now();
+      this.authRetried = false;
       this.emit('_connected', null);
     };
 
@@ -75,6 +79,7 @@ export class GatewayClient {
     };
 
     this.ws.onclose = () => {
+      const wasConnected = this._connected;
       this._connected = false;
       // Reject all pending requests immediately instead of letting them hang 30s
       const disconnectError = new Error('WebSocket disconnected');
@@ -83,6 +88,28 @@ export class GatewayClient {
       }
       this.pending.clear();
       this.emit('_disconnected', null);
+
+      // If WS closed immediately after open (within 2s) and we had a token,
+      // it's likely a stale token — clear it and re-fetch from /auth/token
+      const quickDisconnect = !wasConnected || (Date.now() - this.connectTime < 2000);
+      if (quickDisconnect && this.token && !this.authRetried) {
+        this.authRetried = true;
+        this.token = '';
+        localStorage.removeItem('jarvis_gateway_token');
+        // Fetch fresh token then reconnect
+        fetch('/auth/token')
+          .then(r => r.ok ? r.json() : null)
+          .then((data: { token?: string } | null) => {
+            if (data?.token) {
+              this.token = data.token;
+              localStorage.setItem('jarvis_gateway_token', data.token);
+            }
+            this.scheduleReconnect();
+          })
+          .catch(() => this.scheduleReconnect());
+        return;
+      }
+
       this.scheduleReconnect();
     };
 
@@ -176,8 +203,10 @@ export class GatewayClient {
   }
 
   private scheduleReconnect(): void {
+    if (this.reconnectTimer) return; // Prevent duplicate timers
     this.reconnectTimer = setTimeout(() => {
-      this.reconnectDelay = Math.min(this.reconnectDelay * 1.5, 10_000);
+      this.reconnectTimer = null;
+      this.reconnectDelay = Math.min(this.reconnectDelay * 2, 15_000);
       this.connect();
     }, this.reconnectDelay);
   }

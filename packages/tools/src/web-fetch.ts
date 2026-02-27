@@ -46,20 +46,25 @@ export class WebFetchTool implements AgentTool {
         redirect: 'follow',
       });
 
-      clearTimeout(timeoutId);
-
       // Post-redirect SSRF check: verify the final URL after redirects
       const finalUrl = response.url;
       if (finalUrl && finalUrl !== url && isPrivateUrl(finalUrl)) {
+        clearTimeout(timeoutId);
         return createErrorResult('Blocked: redirect targets a private or internal network address');
       }
 
       if (!response.ok) {
+        clearTimeout(timeoutId);
         return createErrorResult(`HTTP ${response.status}: ${response.statusText} for ${url}`);
       }
 
       const contentType = response.headers.get('content-type') ?? '';
-      let body = await response.text();
+      let body: string;
+      try {
+        body = await response.text();
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       // Truncate if needed
       if (body.length > MAX_CONTENT_LENGTH) {

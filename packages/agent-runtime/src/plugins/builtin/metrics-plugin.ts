@@ -25,57 +25,85 @@ export function createMetricsPlugin(): JarvisPluginDefinition {
         mkdirSync(metricsDir, { recursive: true });
       } catch { /* exists */ }
 
-      // Accumulate metrics in memory during session
-      const sessionMetrics = {
-        inputTokens: 0,
-        outputTokens: 0,
-        totalTokens: 0,
-        llmCalls: 0,
-        toolCalls: 0,
-        toolErrors: 0,
-        toolTimeMs: 0,
-        toolBreakdown: {} as Record<string, { calls: number; errors: number; totalMs: number }>,
-        models: {} as Record<string, { calls: number; inputTokens: number; outputTokens: number }>,
+      type MetricsState = {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+        llmCalls: number;
+        toolCalls: number;
+        toolErrors: number;
+        toolTimeMs: number;
+        toolBreakdown: Record<string, { calls: number; errors: number; totalMs: number }>;
+        models: Record<string, { calls: number; inputTokens: number; outputTokens: number }>;
       };
 
+      function createMetricsState(): MetricsState {
+        return {
+          inputTokens: 0,
+          outputTokens: 0,
+          totalTokens: 0,
+          llmCalls: 0,
+          toolCalls: 0,
+          toolErrors: 0,
+          toolTimeMs: 0,
+          toolBreakdown: {},
+          models: {},
+        };
+      }
+
+      // Keyed by sessionId so concurrent sessions don't share state
+      const sessionMetricsMap = new Map<string, MetricsState>();
+
+      function getOrCreate(sessionId: string): MetricsState {
+        if (!sessionMetricsMap.has(sessionId)) {
+          sessionMetricsMap.set(sessionId, createMetricsState());
+        }
+        return sessionMetricsMap.get(sessionId)!;
+      }
+
       // ─── LLM output hook: track token usage ───
-      api.on('llm_output', (event) => {
-        sessionMetrics.llmCalls++;
-        sessionMetrics.inputTokens += event.usage.inputTokens;
-        sessionMetrics.outputTokens += event.usage.outputTokens;
-        sessionMetrics.totalTokens += event.usage.totalTokens;
+      api.on('llm_output', (event, ctx) => {
+        const m = getOrCreate(ctx.sessionId ?? '');
+        m.llmCalls++;
+        m.inputTokens += event.usage.inputTokens;
+        m.outputTokens += event.usage.outputTokens;
+        m.totalTokens += event.usage.totalTokens;
 
         const model = event.model ?? 'unknown';
-        if (!sessionMetrics.models[model]) {
-          sessionMetrics.models[model] = { calls: 0, inputTokens: 0, outputTokens: 0 };
+        if (!m.models[model]) {
+          m.models[model] = { calls: 0, inputTokens: 0, outputTokens: 0 };
         }
-        sessionMetrics.models[model].calls++;
-        sessionMetrics.models[model].inputTokens += event.usage.inputTokens;
-        sessionMetrics.models[model].outputTokens += event.usage.outputTokens;
+        m.models[model].calls++;
+        m.models[model].inputTokens += event.usage.inputTokens;
+        m.models[model].outputTokens += event.usage.outputTokens;
       });
 
       // ─── Tool execution hook: track performance ───
-      api.on('after_tool_call', (event) => {
-        sessionMetrics.toolCalls++;
-        sessionMetrics.toolTimeMs += event.elapsed;
+      api.on('after_tool_call', (event, ctx) => {
+        const m = getOrCreate(ctx.sessionId ?? '');
+        m.toolCalls++;
+        m.toolTimeMs += event.elapsed;
 
         if (event.result.type === 'error') {
-          sessionMetrics.toolErrors++;
+          m.toolErrors++;
         }
 
         const name = event.toolName;
-        if (!sessionMetrics.toolBreakdown[name]) {
-          sessionMetrics.toolBreakdown[name] = { calls: 0, errors: 0, totalMs: 0 };
+        if (!m.toolBreakdown[name]) {
+          m.toolBreakdown[name] = { calls: 0, errors: 0, totalMs: 0 };
         }
-        sessionMetrics.toolBreakdown[name].calls++;
-        sessionMetrics.toolBreakdown[name].totalMs += event.elapsed;
+        m.toolBreakdown[name].calls++;
+        m.toolBreakdown[name].totalMs += event.elapsed;
         if (event.result.type === 'error') {
-          sessionMetrics.toolBreakdown[name].errors++;
+          m.toolBreakdown[name].errors++;
         }
       });
 
       // ─── Session end: persist metrics ───
       api.on('session_end', (event) => {
+        const sessionMetrics = sessionMetricsMap.get(event.sessionId) ?? createMetricsState();
+        sessionMetricsMap.delete(event.sessionId);
+
         const metricsData = {
           sessionId: event.sessionId,
           agentId: event.agentId,
@@ -94,17 +122,6 @@ export function createMetricsPlugin(): JarvisPluginDefinition {
         } catch (err) {
           api.logger.error(`Failed to save metrics: ${(err as Error).message}`);
         }
-
-        // Reset for next session
-        sessionMetrics.inputTokens = 0;
-        sessionMetrics.outputTokens = 0;
-        sessionMetrics.totalTokens = 0;
-        sessionMetrics.llmCalls = 0;
-        sessionMetrics.toolCalls = 0;
-        sessionMetrics.toolErrors = 0;
-        sessionMetrics.toolTimeMs = 0;
-        sessionMetrics.toolBreakdown = {};
-        sessionMetrics.models = {};
       });
 
       api.logger.info('Metrics plugin registered with 3 hooks');

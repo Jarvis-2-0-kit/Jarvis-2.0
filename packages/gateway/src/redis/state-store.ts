@@ -81,7 +81,8 @@ export class StateStore {
   }
 
   async getTasksByPriority(priority: string, limit = 50): Promise<string[]> {
-    return this.redis.zrange(RedisKeys.taskQueue(priority), 0, limit - 1);
+    const cap = Math.max(1, Math.min(limit, 1000));
+    return this.redis.zrange(RedisKeys.taskQueue(priority), 0, cap - 1);
   }
 
   async getPendingTasks(limit = 50): Promise<TaskDefinition[]> {

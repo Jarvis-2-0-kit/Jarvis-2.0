@@ -368,7 +368,14 @@ export class BrowserTool implements AgentTool {
 
     const page = await this.ensureBrowser();
     await page.evaluate(
-      `(function(sel) { document.querySelector(sel)?.scrollIntoView({block:'center'}); })(${JSON.stringify(selector)})`
+      `(function(sel) {
+        const el = document.querySelector(sel);
+        if (el) {
+          el.scrollIntoView({block:'center'});
+          el.dispatchEvent(new MouseEvent('mouseover', {bubbles: true}));
+          el.dispatchEvent(new MouseEvent('mouseenter', {bubbles: true}));
+        }
+      })(${JSON.stringify(selector)})`
     );
     return createToolResult(`Hovered: ${selector}`);
   }
@@ -469,8 +476,9 @@ export class BrowserTool implements AgentTool {
       }
 
       if (waitConfig['load']) {
-        await page.evaluate(`document.readyState`);
-        return createToolResult(`Page load state: ${waitConfig['load']}`);
+        const state = waitConfig['load'];
+        await page.evaluate(`new Promise(r => { if (document.readyState === '${state}') r(); else window.addEventListener('load', r); })`);
+        return createToolResult(`Page load state: ${state}`);
       }
     }
 
@@ -531,11 +539,13 @@ export class BrowserTool implements AgentTool {
 
     this.tabs.delete(tabId);
 
-    // Actually close the page to release browser resources
+    // Verify page is still alive (window.close() does not work in Playwright).
+    // PageInstance has no close() method — the page is removed from tracking;
+    // the underlying browser context will be released when the browser closes.
     try {
-      await page.evaluate('window.close()');
+      await page.evaluate(() => {});
     } catch {
-      // Page may already be closed
+      // Page may already be detached — that's fine
     }
 
     if (tabId === this.activeTabId) {

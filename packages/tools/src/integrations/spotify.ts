@@ -243,6 +243,11 @@ class SpotifyAPI {
     return `Spotify Devices:\n\n${devs.join('\n')}`;
   }
 
+  async resume(): Promise<string> {
+    await this.fetch('/me/player/play', { method: 'PUT', body: '{}' });
+    return 'Playback resumed';
+  }
+
   async addToQueue(uri: string): Promise<string> {
     await this.fetch(`/me/player/queue?uri=${encodeURIComponent(uri)}`, { method: 'POST' });
     return `Added to queue: ${uri}`;
@@ -348,7 +353,7 @@ export class SpotifyTool implements AgentTool {
         // ── Playback control (AppleScript or API) ──
         case 'play': {
           if (this.api) {
-            return createToolResult(await this.api.getStatus().catch(() => 'Resuming playback...'));
+            return createToolResult(await this.api.resume());
           }
           return createToolResult(await appleScript.play());
         }

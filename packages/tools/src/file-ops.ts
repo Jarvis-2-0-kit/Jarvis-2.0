@@ -331,8 +331,10 @@ function resolvePath(rawPath: string, context: ToolContext, operation: 'read' | 
 
   // Resolve symlinks to prevent jail escape
   let realPath: string;
+  let fileExists = false;
   try {
     realPath = realpathSync(resolved);
+    fileExists = true;
   } catch {
     // File doesn't exist yet (write operation) - use resolved path
     realPath = resolved;
@@ -372,7 +374,9 @@ function resolvePath(rawPath: string, context: ToolContext, operation: 'read' | 
     throw new Error(`Access denied: path '${rawPath}' is outside allowed directories`);
   }
 
-  return resolved;
+  // Return the fully resolved real path (post-symlink) when the file exists,
+  // so subsequent file operations cannot follow a symlink to escape the jail.
+  return fileExists ? realPath : resolved;
 }
 
 const BYTES_PER_KB = 1024;

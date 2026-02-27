@@ -28,6 +28,9 @@ interface ToastStore {
 
 let toastIdCounter = 0;
 
+// Track auto-dismiss timer handles so we can cancel them in removeToast / clearAll
+const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 // Deduplication tracking - prevent same title+message within cooldown
 const recentToasts = new Map<string, number>();
 const DEDUP_COOLDOWN_MS = 15_000; // 15 seconds cooldown for identical toasts
@@ -92,21 +95,32 @@ export const useToastStore = create<ToastStore>((set) => ({
 
     // Auto-remove after duration
     if (newToast.duration && newToast.duration > 0) {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        dismissTimers.delete(id);
         set((prev) => ({
           toasts: prev.toasts.filter((t) => t.id !== id),
         }));
       }, newToast.duration);
+      dismissTimers.set(id, timer);
     }
   },
 
   removeToast: (id) => {
+    const timer = dismissTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      dismissTimers.delete(id);
+    }
     set((prev) => ({
       toasts: prev.toasts.filter((t) => t.id !== id),
     }));
   },
 
-  clearAll: () => set({ toasts: [] }),
+  clearAll: () => {
+    for (const timer of dismissTimers.values()) clearTimeout(timer);
+    dismissTimers.clear();
+    set({ toasts: [] });
+  },
 
   setPaused: (paused) => set({ paused }),
 

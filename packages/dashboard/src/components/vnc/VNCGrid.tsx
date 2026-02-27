@@ -34,9 +34,11 @@ export function VNCGrid() {
   const statusesRef = useRef(statuses);
   statusesRef.current = statuses;
 
-  // Fetch VNC endpoints from gateway (wait for WS connected so auth token is in localStorage)
+  // Fetch VNC endpoints from gateway — only once when first connected (not on every reconnect)
+  const fetchedRef = useRef(false);
   useEffect(() => {
-    if (!connected) return;
+    if (!connected || fetchedRef.current) return;
+    fetchedRef.current = true;
     const fetchVncEndpoints = async () => {
       try {
         const res = await authFetch('/api/vnc');
@@ -75,11 +77,11 @@ export function VNCGrid() {
           }
           if (fetched.length > 0) setEndpoints(fetched);
           setThunderboltActive(!!data.thunderboltEnabled);
-          setEndpointsLoaded(true);
         }
       } catch {
         // Use defaults on error
       }
+      setEndpointsLoaded(true);
     };
     void fetchVncEndpoints();
   }, [connected]);

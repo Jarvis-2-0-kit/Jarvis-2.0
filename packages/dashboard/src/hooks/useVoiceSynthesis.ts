@@ -212,7 +212,7 @@ export function useVoiceSynthesis() {
       if (provider === 'browser') {
         await synthesizeBrowser(text, language);
       } else {
-        let audioUrl: string;
+        let audioUrl = '';
 
         try {
           if (provider === 'elevenlabs') {
@@ -223,6 +223,7 @@ export function useVoiceSynthesis() {
         } catch (err) {
           // API failed — fall back to browser TTS
           if ((err as Error).name === 'AbortError') return;
+          if (audioUrl) URL.revokeObjectURL(audioUrl);
           console.warn(`${provider} TTS failed, falling back to browser:`, (err as Error).message);
           await synthesizeBrowser(text, language);
           return;

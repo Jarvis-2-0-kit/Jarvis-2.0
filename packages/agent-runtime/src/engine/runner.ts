@@ -180,14 +180,24 @@ function shrinkMessage(msg: Message, aggressive: boolean): Message {
 
   // Drop excess blocks (keep first few + last few for context)
   if (blocks.length > maxBlocks) {
-    const keepStart = Math.ceil(maxBlocks / 2);
-    const keepEnd = Math.floor(maxBlocks / 2);
-    const dropped = blocks.length - maxBlocks;
-    blocks = [
-      ...blocks.slice(0, keepStart),
-      { type: msg.role === 'assistant' ? 'text' : 'tool_result', ...(msg.role !== 'assistant' ? { tool_use_id: 'trimmed', is_error: false } : {}), content: `[...${dropped} blocks removed to save context...]` } as Record<string, unknown>,
-      ...blocks.slice(blocks.length - keepEnd),
-    ];
+    if (msg.role === 'user') {
+      // User messages contain tool_result blocks — each must keep its original tool_use_id
+      // to match the preceding assistant's tool_use blocks. Inserting a synthetic block
+      // with a fake tool_use_id causes an API 400. Instead, truncate content of all kept
+      // blocks more aggressively rather than dropping any.
+      const hardLimit = Math.min(500, maxLen);
+      blocks = blocks.map((b) => truncateBlockContent(b, hardLimit));
+    } else {
+      // Assistant messages: safe to insert a text placeholder for dropped blocks
+      const keepStart = Math.ceil(maxBlocks / 2);
+      const keepEnd = Math.floor(maxBlocks / 2);
+      const dropped = blocks.length - maxBlocks;
+      blocks = [
+        ...blocks.slice(0, keepStart),
+        { type: 'text', content: `[...${dropped} blocks removed to save context...]` } as Record<string, unknown>,
+        ...blocks.slice(blocks.length - keepEnd),
+      ];
+    }
   }
 
   return { ...msg, content: blocks as ContentBlock[] };
@@ -553,7 +563,7 @@ export class AgentRunner {
       // Fire session_end hook
       if (this.hooks) {
         await this.hooks.runSessionEnd(
-          { sessionId, agentId: this.config.agentId, tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } },
+          { sessionId, agentId: this.config.agentId, tokenUsage: result.usage },
           { agentId: this.config.agentId, sessionId },
         );
       }
@@ -679,27 +689,27 @@ export class AgentRunner {
       log.warn('Chat already being processed, dropping message');
       return;
     }
+
     this.chatProcessing = true;
-
-    if (!this.currentSessionId) {
-      const sessionId = await this.sessions.createSession();
-      this.currentSessionId = sessionId;
-
-      // Fire session_start hook for new chat session
-      if (this.hooks) {
-        await this.hooks.runSessionStart(
-          { sessionId, agentId: this.config.agentId },
-          { agentId: this.config.agentId, sessionId },
-        );
-      }
-    }
-
     // Track the external session ID for routing responses back
     const externalSessionId = msg.sessionId;
 
-    const systemPrompt = await this.buildEnhancedSystemPrompt();
-
     try {
+      if (!this.currentSessionId) {
+        const sessionId = await this.sessions.createSession();
+        this.currentSessionId = sessionId;
+
+        // Fire session_start hook for new chat session
+        if (this.hooks) {
+          await this.hooks.runSessionStart(
+            { sessionId, agentId: this.config.agentId },
+            { agentId: this.config.agentId, sessionId },
+          );
+        }
+      }
+
+      const systemPrompt = await this.buildEnhancedSystemPrompt();
+
       await this.nats.updateStatus('busy', undefined, `Chat: ${msg.content.slice(0, 60)}`);
       log.info(`Processing chat from ${msg.from}: ${msg.content.slice(0, 100)}`);
 
@@ -724,7 +734,7 @@ export class AgentRunner {
       // Fire session_end hook for chat session
       if (this.hooks && this.currentSessionId) {
         await this.hooks.runSessionEnd(
-          { sessionId: this.currentSessionId, agentId: this.config.agentId, tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } },
+          { sessionId: this.currentSessionId, agentId: this.config.agentId, tokenUsage: result.usage },
           { agentId: this.config.agentId, sessionId: this.currentSessionId },
         );
       }
@@ -1043,7 +1053,7 @@ export class AgentRunner {
     systemPrompt: string,
     userMessage: string,
     streamSessionId?: string,
-  ): Promise<{ output: string; artifacts: string[]; thinking?: string }> {
+  ): Promise<{ output: string; artifacts: string[]; thinking?: string; usage: TokenUsage }> {
     let messages: Message[] = [];
     const usage = createUsageAccumulator();
     const artifacts: string[] = [];
@@ -1197,6 +1207,7 @@ export class AgentRunner {
           output: textContent || '(Task completed with no text output)',
           artifacts,
           thinking: allThinking || undefined,
+          usage,
         };
       }
 
@@ -1212,6 +1223,7 @@ export class AgentRunner {
           output: textContent || '(Task completed)',
           artifacts,
           thinking: allThinking || undefined,
+          usage,
         };
       }
 
@@ -1367,6 +1379,7 @@ export class AgentRunner {
       output: lastText ?? `(Task ended after ${MAX_TOOL_ROUNDS} rounds)`,
       artifacts,
       thinking: allThinking || undefined,
+      usage,
     };
   }
 

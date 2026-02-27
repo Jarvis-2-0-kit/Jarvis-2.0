@@ -75,7 +75,7 @@ class AuditLogger {
         // Remove if the block has expired, or if the tracking window has lapsed and it was never blocked
         const stale = tracker.blocked
           ? now > tracker.blockedUntil
-          : now - tracker.firstAttempt > BLOCK_DURATION_MS;
+          : now - tracker.firstAttempt > FAILED_AUTH_WINDOW_MS;
         if (stale) {
           this.failedAuth.delete(ip);
         }
@@ -116,7 +116,7 @@ class AuditLogger {
     const now = Date.now();
     let tracker = this.failedAuth.get(ip);
 
-    if (!tracker || (now - tracker.firstAttempt > FAILED_AUTH_WINDOW_MS)) {
+    if (!tracker || (now - tracker.firstAttempt > FAILED_AUTH_WINDOW_MS && !tracker.blocked)) {
       // Evict oldest entry if map is at capacity
       if (!this.failedAuth.has(ip) && this.failedAuth.size >= FAILED_AUTH_MAP_CAP) {
         const oldestKey = this.failedAuth.keys().next().value;
@@ -128,9 +128,13 @@ class AuditLogger {
       this.failedAuth.set(ip, tracker);
     }
 
+    if (tracker.blocked) {
+      return true;
+    }
+
     tracker.count++;
 
-    if (tracker.count >= FAILED_AUTH_MAX) {
+    if (tracker.count === FAILED_AUTH_MAX) {
       tracker.blocked = true;
       tracker.blockedUntil = now + BLOCK_DURATION_MS;
       this.logEvent('auth.blocked', 'auth', {

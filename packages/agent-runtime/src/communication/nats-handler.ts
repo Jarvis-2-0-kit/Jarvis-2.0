@@ -504,6 +504,15 @@ export class NatsHandler {
     else this.failedTasks++;
   }
 
+  /**
+   * Sanitize an external ID for safe use in a NATS subject.
+   * Strips NATS wildcard characters (`*`, `>`), subject delimiters (`.`),
+   * and any whitespace to prevent subject injection.
+   */
+  private sanitizeSubjectToken(id: string): string {
+    return id.replace(/[*.>\s]/g, '_');
+  }
+
   async publishResult(taskId: string, result: { success: boolean; output: string; artifacts?: string[] }): Promise<void> {
     await this.publish(NatsSubjects.agentResult(this.config.agentId), {
       agentId: this.config.agentId,
@@ -514,7 +523,8 @@ export class NatsHandler {
   }
 
   async publishProgress(taskId: string, progress: { step: string; percentage?: number; log?: string }): Promise<void> {
-    await this.publish(`jarvis.task.${taskId}.progress`, {
+    const safeTaskId = this.sanitizeSubjectToken(taskId);
+    await this.publish(`jarvis.task.${safeTaskId}.progress`, {
       agentId: this.config.agentId,
       taskId,
       ...progress,
@@ -539,7 +549,7 @@ export class NatsHandler {
       role: this.config.role,
       content,
       timestamp: Date.now(),
-      ...metadata,
+      metadata: metadata ?? {},
     });
   }
 

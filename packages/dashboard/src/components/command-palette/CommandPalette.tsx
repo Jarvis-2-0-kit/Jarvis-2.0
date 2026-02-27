@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search,
@@ -44,7 +44,7 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
 
-  const commands: CommandItem[] = [
+  const commands: CommandItem[] = useMemo(() => [
     // Navigation
     { id: 'nav-dashboard', label: 'Dashboard', description: 'Main dashboard view', icon: LayoutDashboard, category: 'navigate', action: () => navigate('/'), keywords: ['home', 'main'] },
     { id: 'nav-overview', label: 'Overview', description: 'System overview with metrics', icon: Activity, category: 'navigate', action: () => navigate('/overview'), keywords: ['system', 'metrics', 'cpu', 'memory'] },
@@ -74,7 +74,7 @@ export function CommandPalette() {
     { id: 'rpc-agents', label: 'List Agents', description: 'agents.list', icon: Terminal, category: 'rpc', action: () => { navigate('/debug'); setTimeout(() => { /* method auto-fills in debug view */ }, 100); }, keywords: ['agent', 'status'] },
     { id: 'rpc-tasks', label: 'List Tasks', description: 'tasks.list', icon: Terminal, category: 'rpc', action: () => { navigate('/debug'); }, keywords: ['task', 'queue'] },
     { id: 'rpc-metrics', label: 'System Metrics', description: 'system.metrics', icon: Zap, category: 'rpc', action: () => { navigate('/overview'); }, keywords: ['cpu', 'memory', 'disk'] },
-  ];
+  ], [navigate]);
 
   const filtered = query.trim()
     ? commands.filter((cmd) => {
