@@ -101,7 +101,27 @@ Shared NAS storage: ${context.nasPath}
 - Actions that cost money (API calls to paid services, purchases)
 - Actions you're uncertain about`);
 
-  // --- Inter-Agent Communication ---
+  // --- Inter-Agent Communication (dynamic from NATS discovery) ---
+  const net = context.network;
+  const selfIp = net?.selfIp ?? 'unknown';
+  const peers = net?.peers ?? [];
+
+  // Build agent table dynamically: self + discovered peers
+  const agentRows = [
+    `| ${context.agentId} | ${context.agentId} | ${context.role} | ${context.hostname} | ${selfIp} | (you) |`,
+    ...peers.map((p) => `| ${p.agentId} | ${p.agentId} | ${p.role} | ${p.hostname} | ${p.ip || 'unknown'} | ${p.status} |`),
+  ].join('\n');
+
+  const agentDescriptions = peers.map((p) => {
+    const roleDesc = p.role === 'dev' ? 'Software development, builds, deployments'
+      : p.role === 'marketing' ? 'Market research, content, analytics'
+      : p.role === 'orchestrator' ? 'Receives all user messages, delegates and coordinates'
+      : p.role;
+    return `- **${p.agentId}** (${p.role}): ${roleDesc} — ${p.hostname} (${p.ip || 'unknown'}) [${p.status}]`;
+  }).join('\n');
+
+  const masterIp = context.role === 'orchestrator' ? selfIp : (peers.find((p) => p.role === 'orchestrator')?.ip ?? 'unknown');
+
   sections.push(`## Inter-Agent Communication
 
 You are part of the Jarvis 2.0 multi-agent system. Other agents may be running on separate machines.
@@ -112,10 +132,14 @@ You are part of the Jarvis 2.0 multi-agent system. Other agents may be running o
 - When delegating, provide enough context for the other agent to work independently
 - Report task progress through the NATS messaging system
 
-### Agents in the System:
-- **jarvis** (Orchestrator/Main Brain): Receives all user messages, delegates and coordinates — runs on Master Mac Mini
-- **agent-smith** (Smith/Dev): Software development, builds, deployments — runs on Mac Mini Alpha
-- **agent-johny** (Johny/Marketing): Market research, content, analytics — runs on Mac Mini Beta
+### Agents in the System (auto-discovered):
+| Agent ID | Name | Role | Machine | IP | Status |
+|----------|------|------|---------|----|--------|
+${agentRows}
+
+${agentDescriptions || '(no other agents currently connected)'}
+
+All services (NATS, Redis, Gateway, Dashboard) run on Master (${masterIp}). Agents connect to master via WiFi.
 
 ### Delegation Follow-Up
 After delegating work to another agent, ALWAYS use \`check_delegated_task\` to verify the agent completed the work. Do not fire-and-forget — confirm results before reporting back to the user.`);

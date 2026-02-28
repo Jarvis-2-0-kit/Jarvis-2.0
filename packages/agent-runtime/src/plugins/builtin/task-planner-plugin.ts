@@ -503,13 +503,17 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
       api.registerTool({
         definition: {
           name: 'check_delegated_task',
-          description: 'Check the status and result of a task delegated to another agent.',
+          description: 'Check the status and result of a task delegated to another agent. Use waitSeconds to poll for short tasks instead of getting "pending" immediately.',
           input_schema: {
             type: 'object',
             properties: {
               taskId: {
                 type: 'string',
                 description: 'The delegated task ID. If omitted, lists all delegated tasks.',
+              },
+              waitSeconds: {
+                type: 'number',
+                description: 'Wait up to N seconds for result (max 60, default 0 = no wait). Polls every 3s.',
               },
             },
           },
@@ -533,30 +537,64 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
             return { type: 'text', content: `Delegated tasks:\n${lines.join('\n')}` };
           }
 
-          const task = delegatedTasks.get(params.taskId as string);
+          const waitSeconds = Math.min(Math.max(Number(params.waitSeconds) || 0, 0), 60);
+          const pollIntervalMs = 3000;
+          const deadline = Date.now() + waitSeconds * 1000;
 
-          // Check NAS result file (written by the target agent on completion)
-          const resultFile = join(nasPath, 'plans', `result-${params.taskId}.json`);
-          if (existsSync(resultFile)) {
-            try {
-              const result = JSON.parse(readFileSync(resultFile, 'utf-8'));
-              // Update in-memory state if we have it
-              if (task) {
-                task.status = result.status ?? 'completed';
-                task.result = result.output;
-              }
+          const checkResult = (): { type: string; content: string } | null => {
+            const resultFile = join(nasPath, 'plans', `result-${params.taskId}.json`);
+            if (existsSync(resultFile)) {
+              try {
+                const result = JSON.parse(readFileSync(resultFile, 'utf-8'));
+                const task = delegatedTasks.get(params.taskId as string);
+                if (task) {
+                  task.status = result.status ?? 'completed';
+                  task.result = result.output;
+                }
+                return {
+                  type: 'text',
+                  content: [
+                    `Task: ${result.title ?? task?.title ?? params.taskId}`,
+                    `Status: ${result.status ?? 'completed'}`,
+                    `Agent: ${result.agentId ?? task?.targetAgent ?? 'unknown'}`,
+                    `Result: ${result.output ?? '(no output)'}`,
+                  ].join('\n'),
+                };
+              } catch { /* ignore parse errors */ }
+            }
+
+            // Check in-memory state for completion
+            const task = delegatedTasks.get(params.taskId as string);
+            if (task && (task.status === 'completed' || task.status === 'failed')) {
               return {
                 type: 'text',
                 content: [
-                  `Task: ${result.title ?? task?.title ?? params.taskId}`,
-                  `Status: ${result.status ?? 'completed'}`,
-                  `Agent: ${result.agentId ?? task?.targetAgent ?? 'unknown'}`,
-                  `Result: ${result.output ?? '(no output)'}`,
-                ].join('\n'),
+                  `Task: ${task.title}`,
+                  `ID: ${task.taskId}`,
+                  `Target: ${task.targetAgent}`,
+                  `Status: ${task.status}`,
+                  task.result ? `Result: ${task.result}` : '',
+                ].filter(Boolean).join('\n'),
               };
-            } catch { /* ignore parse errors, fall through */ }
+            }
+
+            return null;
+          };
+
+          // Immediate check
+          const immediate = checkResult();
+          if (immediate) return immediate;
+
+          // Poll if waitSeconds > 0
+          if (waitSeconds > 0) {
+            while (Date.now() < deadline) {
+              await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+              const polled = checkResult();
+              if (polled) return polled;
+            }
           }
 
+          const task = delegatedTasks.get(params.taskId as string);
           if (!task) {
             return { type: 'error', content: `Delegated task not found: ${params.taskId}` };
           }
@@ -574,6 +612,7 @@ export function createTaskPlannerPlugin(): JarvisPluginDefinition {
               `Target: ${task.targetAgent}`,
               `Status: ${task.status}`,
               `Sent: ${elapsedStr} ago`,
+              waitSeconds > 0 ? `(waited ${waitSeconds}s, still not complete)` : '',
               task.result ? `Result: ${task.result}` : '',
             ].filter(Boolean).join('\n'),
           };

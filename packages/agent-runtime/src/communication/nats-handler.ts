@@ -1,5 +1,26 @@
 import { connect, StringCodec, type NatsConnection, type Subscription } from 'nats';
+import { networkInterfaces } from 'node:os';
 import { createLogger, NatsSubjects, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, type AgentId, type AgentState, type AgentRole, type ChatStreamDelta } from '@jarvis/shared';
+
+/** Detect the primary LAN IPv4 address of this machine. */
+function getLocalIp(): string {
+  const nets = networkInterfaces();
+  // Prefer en0 (WiFi/Ethernet on macOS), then any non-internal IPv4
+  for (const name of ['en0', 'en1', 'eth0', 'wlan0']) {
+    const iface = nets[name];
+    if (iface) {
+      const v4 = iface.find((n) => n.family === 'IPv4' && !n.internal);
+      if (v4) return v4.address;
+    }
+  }
+  // Fallback: any non-internal IPv4
+  for (const iface of Object.values(nets)) {
+    if (!iface) continue;
+    const v4 = iface.find((n) => n.family === 'IPv4' && !n.internal);
+    if (v4) return v4.address;
+  }
+  return '127.0.0.1';
+}
 
 const log = createLogger('agent:nats');
 const sc = StringCodec();
@@ -35,6 +56,7 @@ export interface PeerAgent {
   capabilities: string[];
   machineId: string;
   hostname: string;
+  ip: string;
   status: string;
   lastSeen: number;
 }
@@ -79,7 +101,12 @@ export class NatsHandler {
   /** Known peer agents in the system */
   readonly peers: Map<string, PeerAgent> = new Map();
 
-  constructor(private config: NatsHandlerConfig) {}
+  /** Auto-detected local IP address */
+  readonly localIp: string;
+
+  constructor(private config: NatsHandlerConfig) {
+    this.localIp = getLocalIp();
+  }
 
   async connect(): Promise<void> {
     const servers = [
@@ -94,7 +121,12 @@ export class NatsHandler {
           name: this.config.agentId,
           reconnect: true,
           maxReconnectAttempts: -1,
-          reconnectTimeWait: 2000,
+          reconnectTimeWait: 5000,
+          reconnectJitter: 1000,
+          pingInterval: 20_000,   // Send ping every 20s (keep WiFi alive)
+          maxPingOut: 5,          // Allow 5 missed pongs before disconnect
+          timeout: 30_000,        // Connection timeout 30s
+          noEcho: true,           // Don't echo messages back to sender (reduce WiFi traffic)
         };
 
         // NATS authentication via env vars
@@ -165,6 +197,7 @@ export class NatsHandler {
         role: this.config.role,
         machineId: this.config.machineId,
         hostname: this.config.hostname,
+        ip: this.localIp,
       },
       status: this.currentStatus as AgentState['status'],
       activeTaskId: this.activeTaskId,
@@ -276,7 +309,7 @@ export class NatsHandler {
           try {
             const data = JSON.parse(sc.decode(msg.data)) as {
               agentId: string; role: string; capabilities: string[];
-              machineId: string; hostname: string; status: string; timestamp: number;
+              machineId: string; hostname: string; ip?: string; status: string; timestamp: number;
             };
             if (data.agentId === this.config.agentId) continue; // skip self
 
@@ -291,6 +324,7 @@ export class NatsHandler {
                 capabilities: data.capabilities,
                 machineId: data.machineId,
                 hostname: data.hostname,
+                ip: data.ip ?? '',
                 status: data.status,
                 lastSeen: Date.now(),
               });
@@ -428,6 +462,7 @@ export class NatsHandler {
       capabilities: this.config.capabilities,
       machineId: this.config.machineId,
       hostname: this.config.hostname,
+      ip: this.localIp,
       status,
       timestamp: Date.now(),
     });

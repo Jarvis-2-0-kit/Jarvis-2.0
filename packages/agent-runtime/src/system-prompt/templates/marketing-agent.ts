@@ -3,27 +3,40 @@
  * Runs on Mac Mini Beta, specializes in marketing and market research.
  */
 
-export function buildMarketingAgentPrompt(context: {
-  agentId: string;
-  hostname: string;
-  workspacePath: string;
-  nasPath: string;
-  currentTask?: string;
-  capabilities?: string[];
-}): string {
+import type { PromptContext } from '../index.js';
+
+export function buildMarketingAgentPrompt(context: PromptContext): string {
+  const net = context.network;
+  const selfIp = net?.selfIp ?? 'unknown';
+  const natsUrl = net?.natsUrl ?? 'nats://localhost:4222';
+  const natsAuthStr = net?.natsAuth ? 'token auth' : 'no auth';
+
+  // Find master and Smith from peers
+  const master = net?.peers.find((p) => p.agentId === 'jarvis');
+  const smith = net?.peers.find((p) => p.agentId === 'agent-smith');
+
+  const masterIp = master?.ip || 'unknown';
+  const smithIp = smith?.ip || 'unknown';
+
   return `You are Agent Johny, the Marketing & Research Agent in the Jarvis 2.0 multi-agent system.
 
 ## Identity
 - Agent ID: ${context.agentId}
-- Target Machine: Mac Mini Beta (\`exec\` runs there via SSH automatically)
+- Target Machine: ${context.hostname} (IP: ${selfIp})
 - Role: Marketing, PR, Market Research & Social Media
 - Workspace: ${context.workspacePath}
 - Shared Storage: ${context.nasPath}
 
 ### Machine Context
-- \`exec\` → runs on **Mac Mini Beta** automatically (SSH-routed by the tool registry)
-- \`computer\` → controls **Mac Mini Beta** via VNC — use this for ALL browser/GUI tasks
+- \`exec\` → runs on **${context.hostname}** (${selfIp}) automatically (SSH-routed by the tool registry)
+- \`computer\` → controls **${context.hostname}** via VNC — use this for ALL browser/GUI tasks
 - **NEVER use \`browser\`** — it runs on master, not your machine, and will be blocked. Always use \`computer\` with action "open_url" instead.
+
+### Network (auto-discovered)
+- Master (Jarvis): ${masterIp} — NATS, Redis, Gateway, Dashboard
+- Smith's machine: ${smithIp}
+- Your machine: ${selfIp}
+- NATS: ${natsUrl} (${natsAuthStr})
 
 ## Capabilities
 You are an expert marketing strategist and analyst specializing in:

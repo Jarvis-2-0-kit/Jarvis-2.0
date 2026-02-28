@@ -3,14 +3,36 @@
  * Runs on Master Mac Mini, orchestrates work across all agents.
  */
 
-export function buildOrchestratorPrompt(context: {
-  agentId: string;
-  hostname: string;
-  workspacePath: string;
-  nasPath: string;
-  currentTask?: string;
-  capabilities?: string[];
-}): string {
+import type { PromptContext } from '../index.js';
+
+export function buildOrchestratorPrompt(context: PromptContext): string {
+  const net = context.network;
+  const selfIp = net?.selfIp ?? 'unknown';
+  const natsUrl = net?.natsUrl ?? 'nats://localhost:4222';
+  const natsAuthStr = net?.natsAuth ? 'token auth' : 'no auth';
+  const gatewayUrl = net?.gatewayUrl ?? 'http://localhost:18900';
+
+  // Build team table dynamically from peers
+  const peers = net?.peers ?? [];
+  const smith = peers.find((p) => p.agentId === 'agent-smith');
+  const johny = peers.find((p) => p.agentId === 'agent-johny');
+
+  const teamRows = [
+    smith
+      ? `| agent-smith | Smith | dev | ${smith.hostname} | ${smith.ip || 'unknown'} | [${smith.status}] |`
+      : `| agent-smith | Smith | dev | (not connected) | — | offline |`,
+    johny
+      ? `| agent-johny | Johny | marketing | ${johny.hostname} | ${johny.ip || 'unknown'} | [${johny.status}] |`
+      : `| agent-johny | Johny | marketing | (not connected) | — | offline |`,
+  ].join('\n');
+
+  const smithDesc = smith
+    ? `- **Agent Smith (agent-smith)**: Dev specialist on ${smith.hostname} (${smith.ip || 'unknown'}) — software development, builds, deployments, CI/CD, app store submissions, code review [${smith.status}]`
+    : `- **Agent Smith (agent-smith)**: Dev specialist — currently offline`;
+  const johnyDesc = johny
+    ? `- **Agent Johny (agent-johny)**: Marketing/research specialist on ${johny.hostname} (${johny.ip || 'unknown'}) — market research, content creation, social media, analytics, PR, financial analysis [${johny.status}]`
+    : `- **Agent Johny (agent-johny)**: Marketing/research specialist — currently offline`;
+
   return `You are Jarvis, the Main Brain of the Jarvis 2.0 multi-agent system.
 
 ## Identity
@@ -21,8 +43,19 @@ export function buildOrchestratorPrompt(context: {
 - Shared Storage: ${context.nasPath}
 
 ## Your Team
-- **Agent Smith (agent-smith)**: Dev specialist on Mac Mini Alpha — software development, builds, deployments, CI/CD, app store submissions, code review
-- **Agent Johny (agent-johny)**: Marketing/research specialist on Mac Mini Beta — market research, content creation, social media, analytics, PR, financial analysis
+
+| Agent ID | Name | Role | Machine | IP | Status |
+|----------|------|------|---------|----|--------|
+${teamRows}
+
+${smithDesc}
+${johnyDesc}
+
+### Network (auto-discovered)
+- Master (you): ${selfIp}
+- NATS: ${natsUrl} (${natsAuthStr})
+- Gateway: ${gatewayUrl}
+- Dashboard: http://${selfIp}:3000
 
 ## Decision Framework
 
@@ -48,7 +81,7 @@ When you receive a message, decide:
 
 ## Capabilities
 You have all capabilities available:
-${(context.capabilities ?? ['exec', 'read', 'write', 'edit', 'list', 'search', 'browser', 'web_fetch', 'web_search', 'message_agent']).map((t) => `- \`${t}\``).join('\n')}
+${(context.capabilities ?? ['exec', 'read', 'write', 'edit', 'list', 'search', 'browser', 'web_fetch', 'web_search', 'message_agent']).map((t) => '- `' + t + '`').join('\n')}
 
 ## Machine Boundaries — CRITICAL
 

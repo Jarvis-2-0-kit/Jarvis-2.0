@@ -3,27 +3,40 @@
  * Runs on Mac Mini Alpha, specializes in software development.
  */
 
-export function buildDevAgentPrompt(context: {
-  agentId: string;
-  hostname: string;
-  workspacePath: string;
-  nasPath: string;
-  currentTask?: string;
-  capabilities?: string[];
-}): string {
+import type { PromptContext } from '../index.js';
+
+export function buildDevAgentPrompt(context: PromptContext): string {
+  const net = context.network;
+  const selfIp = net?.selfIp ?? 'unknown';
+  const natsUrl = net?.natsUrl ?? 'nats://localhost:4222';
+  const natsAuthStr = net?.natsAuth ? 'token auth' : 'no auth';
+
+  // Find master and Johny from peers
+  const master = net?.peers.find((p) => p.agentId === 'jarvis');
+  const johny = net?.peers.find((p) => p.agentId === 'agent-johny');
+
+  const masterIp = master?.ip || 'unknown';
+  const johnyIp = johny?.ip || 'unknown';
+
   return `You are Agent Smith, the Development Agent in the Jarvis 2.0 multi-agent system.
 
 ## Identity
 - Agent ID: ${context.agentId}
-- Target Machine: Mac Mini Alpha (\`exec\` runs there via SSH automatically)
+- Target Machine: ${context.hostname} (IP: ${selfIp})
 - Role: Software Development & Deployment
 - Workspace: ${context.workspacePath}
 - Shared Storage: ${context.nasPath}
 
 ### Machine Context
-- \`exec\` → runs on **Mac Mini Alpha** automatically (SSH-routed by the tool registry)
-- \`computer\` → controls **Mac Mini Alpha** via VNC — use this for ALL browser/GUI tasks
+- \`exec\` → runs on **${context.hostname}** (${selfIp}) automatically (SSH-routed by the tool registry)
+- \`computer\` → controls **${context.hostname}** via VNC — use this for ALL browser/GUI tasks
 - **NEVER use \`browser\`** — it runs on master, not your machine, and will be blocked. Always use \`computer\` with action "open_url" instead.
+
+### Network (auto-discovered)
+- Master (Jarvis): ${masterIp} — NATS, Redis, Gateway, Dashboard
+- Your machine: ${selfIp}
+- Johny's machine: ${johnyIp}
+- NATS: ${natsUrl} (${natsAuthStr})
 
 ## Capabilities
 You are an expert full-stack developer specializing in:

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 ###############################################################################
 #  JARVIS 2.0 // AGENT MANAGEMENT SCRIPT
-#  Uzycie: ./jarvis-agent.sh {start|stop|restart|status|logs}
+#  Uzycie: bash scripts/jarvis-agent.sh {start|stop|restart|status|logs}
+#
+#  NOTE: This script requires bash. On zsh systems, invoke explicitly:
+#        bash scripts/jarvis-agent.sh start
 #
 #  Zarzadza procesami agenta (tsx cli.ts) i websockify na maszynach slave.
 ###############################################################################
@@ -25,8 +28,24 @@ fi
 # ─── Konfiguracja ────────────────────────────────────────────────────────────
 AGENT_ID="${JARVIS_AGENT_ID:-}"
 ROLE="${JARVIS_AGENT_ROLE:-}"
-NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
-GATEWAY_URL="${GATEWAY_URL:-http://127.0.0.1:18900}"
+# Auto-detect master IP: try mDNS hostname first, then env MASTER_IP, then fallback
+if [[ -z "${NATS_URL:-}" ]]; then
+  MASTER_RESOLVED=""
+  # Try resolving master hostname via mDNS (.local)
+  if command -v dscacheutil &>/dev/null; then
+    MASTER_RESOLVED=$(dscacheutil -q host -a name mac-mini-master.local 2>/dev/null | awk '/ip_address:/{print $2; exit}')
+  fi
+  if [[ -z "$MASTER_RESOLVED" ]]; then
+    MASTER_RESOLVED=$(getent hosts mac-mini-master.local 2>/dev/null | awk '{print $1; exit}' || true)
+  fi
+  if [[ -z "$MASTER_RESOLVED" ]]; then
+    MASTER_RESOLVED="${MASTER_IP:-192.168.1.105}"
+  fi
+  NATS_URL="nats://${MASTER_RESOLVED}:4222"
+  GATEWAY_URL="http://${MASTER_RESOLVED}:18900"
+else
+  GATEWAY_URL="${GATEWAY_URL:-http://$(echo "$NATS_URL" | sed 's|nats://||;s|:.*||'):18900}"
+fi
 NAS_MOUNT="${JARVIS_NAS_MOUNT:-$JARVIS_DIR/../jarvis-nas}"
 
 # Port websockify: 6080 dla alpha, 6081 dla beta
@@ -41,7 +60,14 @@ PID_FILE="/tmp/jarvis-${AGENT_ID}.pid"
 WSOCK_PID_FILE="/tmp/jarvis-websockify-${AGENT_ID}.pid"
 AGENT_LOG="${NAS_MOUNT}/logs/${AGENT_ID}.log"
 WSOCK_LOG="${NAS_MOUNT}/logs/websockify-${AGENT_ID}.log"
-TSX_BIN="$JARVIS_DIR/node_modules/.pnpm/node_modules/.bin/tsx"
+# Try .pnpm path first, then standard node_modules
+if [[ -x "$JARVIS_DIR/node_modules/.pnpm/node_modules/.bin/tsx" ]]; then
+  TSX_BIN="$JARVIS_DIR/node_modules/.pnpm/node_modules/.bin/tsx"
+elif [[ -x "$JARVIS_DIR/node_modules/.bin/tsx" ]]; then
+  TSX_BIN="$JARVIS_DIR/node_modules/.bin/tsx"
+else
+  TSX_BIN=""
+fi
 
 # ─── Funkcje ─────────────────────────────────────────────────────────────────
 ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
@@ -87,7 +113,7 @@ do_start() {
   check_agent_id
   echo ""
   echo -e "${CYAN}╔═══════════════════════════════════════════════════════════╗${RESET}"
-  echo -e "${CYAN}║${RESET}  ${BOLD}JARVIS 2.0${RESET} ${DIM}// STARTING ${AGENT_ID^^}${RESET}                      ${CYAN}║${RESET}"
+  echo -e "${CYAN}║${RESET}  ${BOLD}JARVIS 2.0${RESET} ${DIM}// STARTING $(echo "$AGENT_ID" | tr '[:lower:]' '[:upper:]')${RESET}                      ${CYAN}║${RESET}"
   echo -e "${CYAN}╚═══════════════════════════════════════════════════════════╝${RESET}"
   echo ""
 
@@ -113,6 +139,16 @@ do_start() {
     fi
   fi
 
+  # --- Keychain unlock (needed for Claude CLI auth over SSH) ---
+  if [[ -f "$HOME/Library/Keychains/login.keychain-db" ]]; then
+    KEYCHAIN_PASS="${KEYCHAIN_PASSWORD:-137009}"
+    security unlock-keychain -p "$KEYCHAIN_PASS" "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null && \
+      ok "Keychain unlocked" || warn "Keychain unlock failed (may need manual unlock)"
+  fi
+
+  # --- Ensure ANTHROPIC_AUTH_MODE is set ---
+  export ANTHROPIC_AUTH_MODE="${ANTHROPIC_AUTH_MODE:-claude-cli}"
+
   # --- Agent Runtime ---
   echo -e "${BOLD}▸ Agent Runtime${RESET} (${AGENT_ID})"
   if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
@@ -120,7 +156,7 @@ do_start() {
   else
     cd "$JARVIS_DIR"
 
-    if [[ -f "$TSX_BIN" ]]; then
+    if [[ -n "$TSX_BIN" && -f "$TSX_BIN" ]]; then
       nohup "$TSX_BIN" packages/agent-runtime/src/cli.ts >> "$AGENT_LOG" 2>&1 &
     elif command -v tsx &>/dev/null; then
       nohup tsx packages/agent-runtime/src/cli.ts >> "$AGENT_LOG" 2>&1 &
@@ -154,7 +190,7 @@ do_stop() {
     if kill -0 "$PID" 2>/dev/null; then
       kill "$PID" 2>/dev/null || true
       # Wait up to 5s for graceful shutdown (agent may be mid-task)
-      for i in $(seq 1 5); do
+      for i in 1 2 3 4 5; do
         kill -0 "$PID" 2>/dev/null || break
         sleep 1
       done
@@ -282,12 +318,36 @@ do_logs() {
 }
 
 # ─── Main ────────────────────────────────────────────────────────────────────
+do_start_websockify() {
+  check_agent_id
+  echo -e "${BOLD}▸ Websockify${RESET} (port ${WSOCK_PORT} -> VNC ${VNC_PORT})"
+  if is_port_open "$WSOCK_PORT"; then
+    ok "Websockify juz dziala (port $WSOCK_PORT)"
+  else
+    WSOCK_BIN=$(find_websockify)
+    if [[ -n "$WSOCK_BIN" ]]; then
+      mkdir -p "$NAS_MOUNT/logs" 2>/dev/null || true
+      nohup "$WSOCK_BIN" "$WSOCK_PORT" "localhost:${VNC_PORT}" >> "$WSOCK_LOG" 2>&1 &
+      echo $! > "$WSOCK_PID_FILE"
+      sleep 2
+      if is_port_open "$WSOCK_PORT"; then
+        ok "Websockify uruchomiony (PID: $(cat "$WSOCK_PID_FILE"))"
+      else
+        fail "Websockify nie startowal - sprawdz: $WSOCK_LOG"
+      fi
+    else
+      warn "Nie znaleziono websockify. Zainstaluj: pip3 install websockify"
+    fi
+  fi
+}
+
 case "${1:-help}" in
-  start)    do_start ;;
-  stop)     do_stop ;;
-  restart)  do_stop; sleep 2; do_start ;;
-  status)   do_status ;;
-  logs)     do_logs "${2:-all}" ;;
+  start)              do_start ;;
+  stop)               do_stop ;;
+  restart)            do_stop; sleep 2; do_start ;;
+  status)             do_status ;;
+  logs)               do_logs "${2:-all}" ;;
+  start-websockify)   do_start_websockify ;;
   *)
     echo ""
     echo -e "${BOLD}JARVIS 2.0 // Agent Management${RESET}"
@@ -295,11 +355,12 @@ case "${1:-help}" in
     echo "Uzycie: $0 {command}"
     echo ""
     echo "Komendy:"
-    echo "  start       Uruchom agenta i websockify"
-    echo "  stop        Zatrzymaj agenta i websockify"
-    echo "  restart     Restart agenta"
-    echo "  status      Pokaz status agenta, procesow i polaczen"
-    echo "  logs        Pokaz logi (all|agent|websockify|follow)"
+    echo "  start             Uruchom agenta i websockify"
+    echo "  stop              Zatrzymaj agenta i websockify"
+    echo "  restart           Restart agenta"
+    echo "  status            Pokaz status agenta, procesow i polaczen"
+    echo "  logs              Pokaz logi (all|agent|websockify|follow)"
+    echo "  start-websockify  Uruchom tylko websockify"
     echo ""
     exit 1
     ;;

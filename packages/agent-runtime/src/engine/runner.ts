@@ -353,6 +353,11 @@ export class AgentRunner {
   private chatProcessing = false;
   private currentSessionId: string | null = null;
   private taskSessionId: string | null = null; // separate from chat session
+  private chatSessionTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  /** Pending chat queue — chats that arrive while busy are queued instead of dropped */
+  private chatQueue: Array<{ from: string; content: string; sessionId?: string; metadata?: Record<string, unknown>; queuedAt: number }> = [];
+  private static readonly MAX_CHAT_QUEUE_SIZE = 3;
 
   // Plugin system
   private runtimeConfig!: PluginRuntimeConfig;
@@ -693,7 +698,21 @@ export class AgentRunner {
   /** Handle chat messages from dashboard or external channels (WhatsApp, etc.) */
   private async handleChat(msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<void> {
     if (this.chatProcessing) {
-      log.warn('Chat already being processed, dropping message');
+      // Queue instead of dropping
+      if (this.chatQueue.length < AgentRunner.MAX_CHAT_QUEUE_SIZE) {
+        this.chatQueue.push({ ...msg, queuedAt: Date.now() });
+        log.info(`Chat queued from ${msg.from} (queue size: ${this.chatQueue.length})`);
+        await this.nats.sendChatResponse(
+          `Your message has been queued (position ${this.chatQueue.length}). I'm currently processing another message and will get to yours shortly.`,
+          msg.sessionId ? { sessionId: msg.sessionId } : undefined,
+        );
+      } else {
+        log.warn(`Chat queue full (${AgentRunner.MAX_CHAT_QUEUE_SIZE}), dropping message from ${msg.from}`);
+        await this.nats.sendChatResponse(
+          `I'm currently busy and my message queue is full. Please try again in a moment.`,
+          msg.sessionId ? { sessionId: msg.sessionId } : undefined,
+        );
+      }
       return;
     }
 
@@ -702,6 +721,12 @@ export class AgentRunner {
     const externalSessionId = msg.sessionId;
 
     try {
+      // Clear idle timeout since we're starting a new chat
+      if (this.chatSessionTimeout) {
+        clearTimeout(this.chatSessionTimeout);
+        this.chatSessionTimeout = null;
+      }
+
       if (!this.currentSessionId) {
         const sessionId = await this.sessions.createSession();
         this.currentSessionId = sessionId;
@@ -752,10 +777,23 @@ export class AgentRunner {
       await this.nats.sendChatResponse(`Error: ${(err as Error).message}`, Object.keys(errorMeta).length > 0 ? errorMeta : undefined);
     } finally {
       this.chatProcessing = false;
-      // Reset session so next chat gets a fresh context
-      this.currentSessionId = null;
+      // Keep session alive for multi-turn conversation.
+      // Session will be reset after idle timeout (10 min) or when a new task starts.
+      this.chatSessionTimeout = setTimeout(() => {
+        this.currentSessionId = null;
+        this.chatSessionTimeout = null;
+      }, 10 * 60 * 1000);
       if (!this.currentTask) {
         await this.nats.updateStatus('idle');
+      }
+
+      // Drain next queued chat message if any
+      if (this.chatQueue.length > 0) {
+        const next = this.chatQueue.shift()!;
+        log.info(`Dequeuing next chat from ${next.from} (remaining: ${this.chatQueue.length})`);
+        this.handleChat(next).catch((err) => {
+          log.error(`Queued chat handler error: ${(err as Error).message}`);
+        });
       }
     }
   }
@@ -777,14 +815,26 @@ export class AgentRunner {
 
   /** Handle coordination/delegation requests from other agents */
   private async handleCoordinationRequest(msg: InterAgentMsg): Promise<void> {
-    if (this.currentTask) {
-      // Already busy, reject
-      await this.nats.respondCoordination(msg.id, false, `busy with task ${this.currentTask.taskId}`);
-      return;
+    const payload = msg.payload as { taskId?: string; title?: string; description?: string; priority?: string } | undefined;
+
+    if (this.currentTask || this.chatProcessing) {
+      // Busy — accept and queue instead of rejecting
+      if (payload?.title) {
+        const taskId = payload.taskId || `delegated-${msg.id}`;
+        await this.nats.respondCoordination(msg.id, true);
+        // Queue via handleTask which has built-in queueing
+        await this.handleTask({
+          taskId,
+          title: payload.title,
+          description: payload.description || payload.title,
+          priority: payload.priority || 'normal',
+          context: { delegatedBy: msg.from },
+        });
+        return;
+      }
     }
 
     // Accept delegation and process as task
-    const payload = msg.payload as { taskId?: string; title?: string; description?: string; priority?: string } | undefined;
     if (payload?.title) {
       // Use the originator's taskId if provided, otherwise generate one
       const taskId = payload.taskId || `delegated-${msg.id}`;
@@ -805,6 +855,24 @@ export class AgentRunner {
    * Build enhanced system prompt with plugin sections and skills.
    */
   private async buildEnhancedSystemPrompt(options?: { currentTask?: string }): Promise<string> {
+    // Build dynamic network info from NATS peer discovery
+    const peers = this.nats.getPeers();
+    const natsUrl = process.env['NATS_URL'] ?? 'nats://localhost:4222';
+    const gatewayUrl = process.env['GATEWAY_URL'] ?? `http://${this.nats.localIp}:18900`;
+    const networkInfo = {
+      selfIp: this.nats.localIp,
+      natsUrl,
+      gatewayUrl,
+      natsAuth: !!(process.env['NATS_TOKEN'] || process.env['NATS_USER']),
+      peers: peers.map((p) => ({
+        agentId: p.agentId,
+        role: p.role,
+        hostname: p.hostname,
+        ip: p.ip || '',
+        status: p.status,
+      })),
+    };
+
     // Base prompt from templates
     let systemPrompt = buildSystemPrompt({
       agentId: this.config.agentId,
@@ -814,6 +882,7 @@ export class AgentRunner {
       nasPath: this.config.nasMountPath,
       currentTask: options?.currentTask,
       capabilities: this.tools.listTools(),
+      network: networkInfo,
     });
 
     // ─── Add skills section ───
@@ -823,10 +892,9 @@ export class AgentRunner {
     }
 
     // ─── Add inter-agent awareness ───
-    const peers = this.nats.getPeers();
     if (peers.length > 0) {
       const peerLines = peers.map((p) =>
-        `- **${p.agentId}** (role: ${p.role}, machine: ${p.hostname}, status: ${p.status}, capabilities: ${p.capabilities.join(', ')})`
+        `- **${p.agentId}** (role: ${p.role}, machine: ${p.hostname}${p.ip ? ` / ${p.ip}` : ''}, status: ${p.status}, capabilities: ${p.capabilities.join(', ')})`
       ).join('\n');
       systemPrompt += `\n\n## Connected Agents\n\nYou are part of a multi-agent system. The following agents are currently online:\n${peerLines}\n\nYou can coordinate with them using:\n- \`message_agent\` — send messages, queries, notifications, or delegation requests to other agents\n- \`delegate_to_agent\` — delegate a structured task to another agent (non-blocking, with progress tracking)`;
     } else {
