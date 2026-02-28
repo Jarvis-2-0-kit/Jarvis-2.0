@@ -698,7 +698,15 @@ export class AgentRunner {
   /** Handle chat messages from dashboard or external channels (WhatsApp, etc.) */
   private async handleChat(msg: { from: string; content: string; sessionId?: string; metadata?: Record<string, unknown> }): Promise<void> {
     if (this.chatProcessing) {
-      // Queue instead of dropping
+      // Never queue inter-agent messages — they are responses/DMs that would cause
+      // re-processing loops (agent responds → queued as chat → LLM acts again → loop)
+      const isAgentMessage = msg.metadata?.source === 'agent-dm';
+      if (isAgentMessage) {
+        log.info(`Dropping inter-agent message from ${msg.from} (busy with chat)`);
+        return;
+      }
+
+      // Queue user messages instead of dropping
       if (this.chatQueue.length < AgentRunner.MAX_CHAT_QUEUE_SIZE) {
         this.chatQueue.push({ ...msg, queuedAt: Date.now() });
         log.info(`Chat queued from ${msg.from} (queue size: ${this.chatQueue.length})`);
@@ -787,13 +795,17 @@ export class AgentRunner {
         await this.nats.updateStatus('idle');
       }
 
-      // Drain next queued chat message if any
+      // Drain next queued user chat message if any
       if (this.chatQueue.length > 0) {
-        const next = this.chatQueue.shift()!;
-        log.info(`Dequeuing next chat from ${next.from} (remaining: ${this.chatQueue.length})`);
-        this.handleChat(next).catch((err) => {
-          log.error(`Queued chat handler error: ${(err as Error).message}`);
-        });
+        // Filter out any agent messages that may have been queued
+        this.chatQueue = this.chatQueue.filter((m) => m.metadata?.source !== 'agent-dm');
+        if (this.chatQueue.length > 0) {
+          const next = this.chatQueue.shift()!;
+          log.info(`Dequeuing next chat from ${next.from} (remaining: ${this.chatQueue.length})`);
+          this.handleChat(next).catch((err) => {
+            log.error(`Queued chat handler error: ${(err as Error).message}`);
+          });
+        }
       }
     }
   }
