@@ -117,14 +117,29 @@ export interface SshHostConfig {
 
 /** Build the ssh2 connection config from a SshHostConfig */
 function buildConnectConfig(host: SshHostConfig): Record<string, unknown> {
-  return {
+  const config: Record<string, unknown> = {
     host: host.host,
     port: host.port || 22,
     username: host.username,
-    password: host.password,
     hostVerifier: createHostVerifier(host.host),
     readyTimeout: SSH_READY_TIMEOUT,
   };
+
+  // Prefer key-based auth over password
+  if (host.privateKeyPath) {
+    try {
+      config['privateKey'] = readFileSync(host.privateKeyPath);
+      log.info(`SSH using private key: ${host.privateKeyPath}`);
+    } catch (err) {
+      log.warn(`Failed to read private key ${host.privateKeyPath}: ${(err as Error).message}`);
+      // Fall back to password if key read fails
+      if (host.password) config['password'] = host.password;
+    }
+  } else if (host.password) {
+    config['password'] = host.password;
+  }
+
+  return config;
 }
 
 export interface SshToolConfig {

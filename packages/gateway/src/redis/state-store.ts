@@ -29,9 +29,13 @@ export class StateStore {
   }
 
   async getAllAgentStates(): Promise<AgentState[]> {
+    const keys = await this.redis.raw.keys('jarvis:agent:*:status');
     const states: AgentState[] = [];
-    for (const id of ['jarvis', 'agent-smith', 'agent-johny']) {
-      const state = await this.getAgentState(id);
+    for (const key of keys) {
+      // Extract agentId from key pattern jarvis:agent:<agentId>:status
+      const agentId = key.split(':')[2];
+      if (!agentId) continue;
+      const state = await this.getAgentState(agentId);
       if (state) states.push(state);
     }
     return states;

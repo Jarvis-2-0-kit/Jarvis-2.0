@@ -128,7 +128,7 @@ export class PluginRegistry {
     const api: PluginApi = {
       id: pluginId,
       name: definition.name,
-      config: Object.freeze({ ...this.runtimeConfig }),
+      config: this.runtimeConfig,
       pluginConfig,
       logger,
 

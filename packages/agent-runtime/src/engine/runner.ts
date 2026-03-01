@@ -436,7 +436,26 @@ export class AgentRunner {
       );
     }
 
-    // Connect to NATS
+    // ─── Connect to NATS ───
+    // Pre-warm TCP connection (workaround for macOS EHOSTUNREACH in long-running processes)
+    {
+      const { connect: rawTcp } = await import('node:net');
+      const url = new URL(this.config.natsUrl);
+      const host = url.hostname;
+      const port = parseInt(url.port || '4222');
+      for (let i = 0; i < 3; i++) {
+        const ok = await new Promise<boolean>((resolve) => {
+          const sock = rawTcp({ host, port, family: 4, timeout: 3000 }, () => {
+            sock.destroy(); resolve(true);
+          });
+          sock.on('error', () => { sock.destroy(); resolve(false); });
+          sock.on('timeout', () => { sock.destroy(); resolve(false); });
+        });
+        if (ok) { log.info(`TCP warmup OK: ${host}:${port}`); break; }
+        log.warn(`TCP warmup attempt ${i + 1}/3 failed, retrying...`);
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
     await this.nats.connect();
 
     // ─── Wire inter-agent tools to NATS ───

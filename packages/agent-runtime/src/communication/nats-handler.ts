@@ -1,6 +1,12 @@
 import { connect, StringCodec, type NatsConnection, type Subscription } from 'nats';
 import { networkInterfaces } from 'node:os';
+import { connect as tcpConnect } from 'node:net';
+import dns from 'node:dns';
 import { createLogger, NatsSubjects, HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, type AgentId, type AgentState, type AgentRole, type ChatStreamDelta } from '@jarvis/shared';
+
+// Force IPv4-first DNS resolution — nats.js createConnection() doesn't set family:4,
+// causing EHOSTUNREACH on macOS when Node.js tries IPv6-mapped addresses.
+dns.setDefaultResultOrder('ipv4first');
 
 /** Detect the primary LAN IPv4 address of this machine. */
 function getLocalIp(): string {
@@ -25,10 +31,10 @@ function getLocalIp(): string {
 const log = createLogger('agent:nats');
 const sc = StringCodec();
 
-/** Maximum NATS connection retries on startup */
-const MAX_CONNECT_RETRIES = 30;
+/** Maximum NATS connection retries per cycle */
+const MAX_CONNECT_RETRIES = 10;
 /** Delay between NATS connection retries (ms) */
-const CONNECT_RETRY_DELAY_MS = 3000;
+const CONNECT_RETRY_DELAY_MS = 5000;
 /** Timeout for NATS drain on disconnect (ms) */
 const DRAIN_TIMEOUT_MS = 5000;
 
@@ -97,6 +103,7 @@ export class NatsHandler {
   private currentStatus: string = 'starting';
   private activeTaskId: string | null = null;
   private activeTaskDescription: string | null = null;
+  private running = true;
 
   /** Known peer agents in the system */
   readonly peers: Map<string, PeerAgent> = new Map();
@@ -108,76 +115,129 @@ export class NatsHandler {
     this.localIp = getLocalIp();
   }
 
-  async connect(): Promise<void> {
+  /** TCP probe: warm up ARP cache and verify reachability before nats.js connect */
+  private async tcpProbe(host: string, port: number, timeoutMs = 3000): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const sock = tcpConnect({ host, port, family: 4, timeout: timeoutMs }, () => {
+        sock.destroy();
+        resolve(true);
+      });
+      sock.on('error', (err) => { log.warn(`TCP probe error: ${(err as Error).message}`); sock.destroy(); resolve(false); });
+      sock.on('timeout', () => { sock.destroy(); resolve(false); });
+    });
+  }
+
+  /** Parse servers list into {host, port} tuples */
+  private get serverAddrs(): Array<{ host: string; port: number }> {
+    const servers = [
+      this.config.natsUrlThunderbolt,
+      this.config.natsUrl,
+    ].filter((s): s is string => !!s);
+    return servers.map((srv) => {
+      const url = new URL(srv);
+      return { host: url.hostname, port: parseInt(url.port || '4222', 10) };
+    });
+  }
+
+  /** Build nats.js connection options */
+  private buildNatsOpts(): Record<string, unknown> {
     const servers = [
       this.config.natsUrlThunderbolt,
       this.config.natsUrl,
     ].filter((s): s is string => !!s);
 
+    const opts: Record<string, unknown> = {
+      servers,
+      name: this.config.agentId,
+      reconnect: true,
+      reconnectTimeWait: 3_000,   // Wait 3s between reconnect attempts
+      maxReconnectAttempts: -1,   // Infinite reconnect attempts
+      pingInterval: 5_000,        // Client ping every 5s to keep TCP alive on WiFi
+      maxPingOut: 5,              // Allow 5 missed pongs (= 25s before disconnect)
+      timeout: 10_000,            // Initial connection timeout
+      noEcho: true,
+    };
+
+    if (process.env['NATS_USER'] && process.env['NATS_PASS']) {
+      opts.user = process.env['NATS_USER'];
+      opts.pass = process.env['NATS_PASS'];
+    } else if (process.env['NATS_TOKEN']) {
+      opts.token = process.env['NATS_TOKEN'];
+    }
+    return opts;
+  }
+
+  /** Establish NATS connection with retry */
+  private async connectOnce(): Promise<NatsConnection> {
+    const opts = this.buildNatsOpts();
+
     for (let attempt = 1; attempt <= MAX_CONNECT_RETRIES; attempt++) {
+      // Use subprocess ping to warm ARP cache before each attempt
       try {
-        const natsOpts: Record<string, unknown> = {
-          servers,
-          name: this.config.agentId,
-          reconnect: true,
-          maxReconnectAttempts: -1,
-          reconnectTimeWait: 5000,
-          reconnectJitter: 1000,
-          pingInterval: 20_000,   // Send ping every 20s (keep WiFi alive)
-          maxPingOut: 5,          // Allow 5 missed pongs before disconnect
-          timeout: 30_000,        // Connection timeout 30s
-          noEcho: true,           // Don't echo messages back to sender (reduce WiFi traffic)
-        };
-
-        // NATS authentication via env vars
-        if (process.env['NATS_USER'] && process.env['NATS_PASS']) {
-          natsOpts.user = process.env['NATS_USER'];
-          natsOpts.pass = process.env['NATS_PASS'];
-        } else if (process.env['NATS_TOKEN']) {
-          natsOpts.token = process.env['NATS_TOKEN'];
+        const { execSync } = await import('node:child_process');
+        for (const addr of this.serverAddrs) {
+          try {
+            execSync(`ping -c1 -W1 ${addr.host}`, { stdio: 'pipe', timeout: 3000 });
+          } catch { /* ignore - just warming ARP */ }
         }
+      } catch { /* ignore */ }
 
-        this.nc = await connect(natsOpts as Parameters<typeof connect>[0]);
-        break;
+      try {
+        return await connect(opts as Parameters<typeof connect>[0]);
       } catch (err) {
         if (attempt === MAX_CONNECT_RETRIES) throw err;
         log.warn(`NATS connect attempt ${attempt}/${MAX_CONNECT_RETRIES} failed: ${(err as Error).message}. Retrying in ${CONNECT_RETRY_DELAY_MS / 1000}s...`);
         await new Promise(r => setTimeout(r, CONNECT_RETRY_DELAY_MS));
       }
     }
+    throw new Error('Unreachable');
+  }
 
-    log.info(`Connected to NATS (servers: ${servers.join(', ')})`);
+  async connect(): Promise<void> {
+    this.nc = await this.connectOnce();
+    log.info(`Connected to NATS — server: ${this.nc.getServer()}`);
+    this.setupAfterConnect();
+  }
 
-    // Monitor connection status (tracked for clean shutdown)
+  /** Wire up subscriptions, heartbeat, and status monitor after a (re)connect */
+  private setupAfterConnect(): void {
+    if (!this.nc) return;
+
+    // Clear old subscriptions
+    for (const sub of this.subscriptions) {
+      sub.unsubscribe();
+    }
+    this.subscriptions = [];
+
+    // Monitor connection status and trigger manual reconnect on disconnect
     this.subscriptionLoops.push((async () => {
       if (!this.nc) return;
       try {
         for await (const status of this.nc.status()) {
           switch (status.type) {
-            case 'reconnecting':
-              log.warn(`NATS reconnecting... (${String(status.data)})`);
+            case 'disconnect':
+              log.warn(`NATS disconnected — nats.js will auto-reconnect`);
               break;
             case 'reconnect':
-              log.info(`NATS reconnected successfully`);
-              await this.register();
-              await this.announcePresence('online');
-              break;
-            case 'disconnect':
-              log.warn(`NATS disconnected: ${String(status.data)}`);
+              log.info(`NATS reconnected to ${String(status.data)}`);
+              // Re-register and re-announce after reconnect
+              this.register().catch(() => {});
+              this.announcePresence('online').catch(() => {});
               break;
             case 'error':
               log.error(`NATS error: ${String(status.data)}`);
               break;
             default:
-              log.info(`NATS status: ${status.type}`, { data: String(status.data) });
+              log.info(`NATS status: ${status.type} data=${String(status.data)}`);
           }
         }
       } catch (err) {
         log.warn(`NATS status monitor ended: ${(err as Error).message}`);
+        this.scheduleReconnect();
       }
     })());
 
-    await this.register();
+    this.register().catch(() => {});
     this.startHeartbeat();
     this.subscribeToTasks();
     this.subscribeToChat();
@@ -185,7 +245,42 @@ export class NatsHandler {
     this.subscribeToDM();
     this.subscribeToAgentsBroadcast();
     this.subscribeToCoordination();
-    await this.announcePresence('online');
+    this.announcePresence('online').catch(() => {});
+  }
+
+  /** Manual reconnect loop with TCP warmup */
+  private scheduleReconnect(): void {
+    if (!this.running) return;
+
+    // Stop heartbeat during reconnect
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+
+    const doReconnect = async () => {
+      for (let i = 1; this.running; i++) {
+        try {
+          // Close old connection if it exists
+          if (this.nc && !this.nc.isClosed()) {
+            try { await this.nc.close(); } catch { /* ignore */ }
+          }
+
+          log.info(`Reconnect attempt ${i}...`);
+          this.nc = await this.connectOnce();
+          log.info(`Reconnected to NATS — server: ${this.nc.getServer()}`);
+          this.setupAfterConnect();
+          return; // Success
+        } catch (err) {
+          log.warn(`Reconnect cycle ${i} failed: ${(err as Error).message}. Waiting 10s...`);
+          await new Promise(r => setTimeout(r, 10_000));
+        }
+      }
+    };
+
+    doReconnect().catch((err) => {
+      log.error(`Reconnect loop crashed: ${(err as Error).message}`);
+    });
   }
 
   // ─── Agent State ──────────────────────────────────
@@ -244,7 +339,7 @@ export class NatsHandler {
           }
         }
       } catch (err) {
-        log.error(`Heartbeat failed: ${(err as Error).message}`);
+        log.error(`Heartbeat failed: ${(err as Error).message} — closed=${this.nc?.isClosed()} stack=${(err as Error).stack?.split('\n').slice(1, 3).join(' | ')}`);
       }
     }, HEARTBEAT_INTERVAL);
   }
@@ -612,10 +707,21 @@ export class NatsHandler {
 
   async publish(subject: string, data: unknown): Promise<void> {
     if (!this.nc) throw new Error('Not connected to NATS');
-    this.nc.publish(subject, sc.encode(JSON.stringify(data)));
+    if (this.nc.isClosed()) {
+      log.warn(`Publish to ${subject} skipped — connection closed`);
+      return;
+    }
+    try {
+      this.nc.publish(subject, sc.encode(JSON.stringify(data)));
+    } catch (err) {
+      log.error(`Publish to ${subject} FAILED: ${(err as Error).message}`);
+      throw err;
+    }
   }
 
   async disconnect(): Promise<void> {
+    this.running = false; // Prevent reconnect loop from restarting
+
     // Announce offline before disconnecting
     try {
       await this.announcePresence('offline');

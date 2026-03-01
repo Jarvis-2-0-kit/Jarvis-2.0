@@ -51,17 +51,19 @@ let anthropicAuthMode = (process.env['ANTHROPIC_AUTH_MODE'] ?? 'api-key') as 'ap
 const sshAlphaHost = process.env['SSH_ALPHA_HOST'] ?? process.env['VNC_ALPHA_HOST'];
 const sshAlphaUser = process.env['SSH_ALPHA_USER'] ?? process.env['VNC_ALPHA_USERNAME'];
 const sshAlphaPass = process.env['SSH_ALPHA_PASSWORD'] ?? process.env['VNC_ALPHA_PASSWORD'];
+const sshAlphaKey = process.env['SSH_ALPHA_KEY'];
 const sshBetaHost = process.env['SSH_BETA_HOST'] ?? process.env['BETA_IP'];
 const sshBetaUser = process.env['SSH_BETA_USER'] ?? process.env['VNC_BETA_USERNAME'] ?? process.env['BETA_USER'];
 const sshBetaPass = process.env['SSH_BETA_PASSWORD'] ?? process.env['VNC_BETA_PASSWORD'];
+const sshBetaKey = process.env['SSH_BETA_KEY'];
 
 // Build SSH hosts map
-const sshHosts: Record<string, { host: string; username: string; password?: string }> = {};
+const sshHosts: Record<string, { host: string; username: string; password?: string; privateKeyPath?: string }> = {};
 if (sshAlphaHost && sshAlphaUser) {
-  sshHosts['agent-smith'] = { host: sshAlphaHost, username: sshAlphaUser, password: sshAlphaPass };
+  sshHosts['agent-smith'] = { host: sshAlphaHost, username: sshAlphaUser, password: sshAlphaPass, privateKeyPath: sshAlphaKey };
 }
 if (sshBetaHost && sshBetaUser) {
-  sshHosts['agent-johny'] = { host: sshBetaHost, username: sshBetaUser, password: sshBetaPass };
+  sshHosts['agent-johny'] = { host: sshBetaHost, username: sshBetaUser, password: sshBetaPass, privateKeyPath: sshBetaKey };
 }
 
 // VNC host config for computer use (screenshots + mouse/keyboard via VNC protocol)

@@ -42,6 +42,17 @@ const CHANNEL_DEFAULTS: Record<string, Record<string, unknown>> = {
     jarvisMode: true,
     notifyOnMessage: true,
   },
+  slack: {
+    botToken: process.env['SLACK_BOT_TOKEN'] ?? '',
+    appToken: process.env['SLACK_APP_TOKEN'] ?? '',
+    signingSecret: process.env['SLACK_SIGNING_SECRET'] ?? '',
+    defaultChannel: process.env['SLACK_DEFAULT_CHANNEL'] ?? '#general',
+    mode: 'socket',
+    autoReplyEnabled: false,
+    autoReplyLanguage: 'pl',
+    jarvisMode: true,
+    notifyOnMessage: true,
+  },
 };
 
 /** Load channel config from NAS, falling back to defaults */

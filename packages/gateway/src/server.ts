@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { hostname, cpus, totalmem, freemem, loadavg, networkInterfaces, uptime as osUptime } from 'node:os';
 import { execSync, execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { timingSafeEqual, createHash } from 'node:crypto';
+import { timingSafeEqual, createHash, createHmac } from 'node:crypto';
 
 const execFileAsync = promisify(execFile);
 import { z } from 'zod';
@@ -45,7 +45,7 @@ import {
 
 const log = createLogger('gateway:server');
 
-const ALL_AGENTS = ['jarvis', 'agent-smith', 'agent-johny'] as const;
+const knownAgents = new Set<string>(['jarvis', 'agent-smith', 'agent-johny']);
 
 // Rate limiters
 const wsRateLimiter = new RateLimiter(30);   // 30 msgs/min per WS connection
@@ -322,9 +322,65 @@ export class GatewayServer {
       try { await this.handleDiscordWebhook(req.body as Record<string, unknown>); res.sendStatus(200); }
       catch (err) { log.error('Discord webhook error', { error: String(err) }); res.sendStatus(500); }
     });
+    this.app.post('/api/slack/events', express.raw({ type: '*/*' }), async (req, res) => {
+      try {
+        const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body));
+        const bodyStr = rawBody.toString('utf-8');
+        let payload: Record<string, unknown>;
+        try { payload = JSON.parse(bodyStr) as Record<string, unknown>; }
+        catch { res.status(400).json({ error: 'Invalid JSON' }); return; }
+
+        // url_verification challenge (Slack Event API setup)
+        if (payload.type === 'url_verification') {
+          res.json({ challenge: payload.challenge });
+          return;
+        }
+
+        // Verify signing secret
+        const config = this.getChannelConfig('slack');
+        const signingSecret = config.signingSecret as string;
+        if (signingSecret) {
+          const timestamp = req.headers['x-slack-request-timestamp'] as string;
+          const slackSig = req.headers['x-slack-signature'] as string;
+          if (!timestamp || !slackSig) { res.sendStatus(401); return; }
+          const age = Math.abs(Math.floor(Date.now() / 1000) - parseInt(timestamp, 10));
+          if (age > 300) { res.status(403).json({ error: 'Timestamp too old' }); return; }
+          const baseString = `v0:${timestamp}:${bodyStr}`;
+          const computed = 'v0=' + createHmac('sha256', signingSecret).update(baseString).digest('hex');
+          if (!timingSafeEqual(Buffer.from(computed), Buffer.from(slackSig))) {
+            res.sendStatus(401);
+            return;
+          }
+        }
+
+        if (payload.type === 'event_callback') {
+          await this.handleSlackWebhook(payload);
+        }
+        res.sendStatus(200);
+      } catch (err) {
+        log.error('Slack events webhook error', { error: String(err) });
+        res.sendStatus(500);
+      }
+    });
 
     // Apply auth to all remaining /api/* routes
     this.app.use('/api', requireAuth);
+
+    // Serve iMessage attachment files (images, videos, etc.)
+    this.app.get('/api/imessage/attachment', (req, res) => {
+      const filePath = req.query.path as string;
+      if (!filePath) { res.status(400).json({ error: 'path required' }); return; }
+      // Security: only allow files under ~/Library/Messages/Attachments
+      const home = process.env['HOME'] ?? '';
+      const allowedPrefix = join(home, 'Library/Messages/Attachments');
+      const resolved = resolve(filePath);
+      if (!resolved.startsWith(allowedPrefix)) {
+        res.status(403).json({ error: 'Access denied' });
+        return;
+      }
+      if (!existsSync(resolved)) { res.status(404).json({ error: 'File not found' }); return; }
+      res.sendFile(resolved);
+    });
 
     this.app.get('/api/agents', async (_req, res) => {
       const agents = await this.store.getAllAgentStates();
@@ -623,7 +679,38 @@ export class GatewayServer {
 
       // Route to the appropriate agent via NATS
       // Default to jarvis (orchestrator) if no specific target or 'all'
-      const target = (!msg.to || msg.to === 'all') ? 'jarvis' : msg.to;
+      let target = (!msg.to || msg.to === 'all') ? 'jarvis' : msg.to;
+
+      // Smart routing: check if target agent is online, if not find an available agent
+      const targetState = await this.store.getAgentState(target);
+      const isOnline = targetState && targetState.status !== 'offline' &&
+        (Date.now() - targetState.lastHeartbeat) < HEARTBEAT_TIMEOUT;
+
+      if (!isOnline) {
+        log.warn(`Chat target '${target}' is offline, searching for available agent...`);
+        const allStates = await this.store.getAllAgentStates();
+        const available = allStates.find(s =>
+          s.status !== 'offline' &&
+          (Date.now() - s.lastHeartbeat) < HEARTBEAT_TIMEOUT
+        );
+        if (available) {
+          target = available.identity.agentId;
+          log.info(`Chat rerouted to available agent: ${target}`);
+        } else {
+          log.error(`No online agents available to handle chat message`);
+          // Still publish to original target — it will be picked up when agent comes online
+          // Also send error feedback to dashboard
+          this.protocol.broadcast('chat.message', {
+            id: shortId(),
+            from: 'system',
+            to: 'user',
+            content: 'No agents are currently online. Start an agent first: ./jarvis.sh agents-start',
+            timestamp: Date.now(),
+          });
+        }
+      }
+
+      log.info(`Chat from '${msg.from}' → '${target}': ${(msg.content as string).slice(0, 80)}`);
       await this.nats.publish(NatsSubjects.chat(target), msg);
 
       // Broadcast to dashboard for display
@@ -650,7 +737,7 @@ export class GatewayServer {
     this.protocol.registerMethod('chat.abort', async (params) => {
       const { sessionId } = params as { sessionId: string };
       // Broadcast abort to all agents
-      for (const id of ALL_AGENTS) {
+      for (const id of knownAgents) {
         await this.nats.publish(NatsSubjects.chat(id), { type: 'abort', sessionId });
       }
       return { success: true };
@@ -1209,12 +1296,39 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('slack.connect', async () => {
-      // Mark as connected (actual Slack SDK integration is future work)
       const config = this.getChannelConfig('slack') as Record<string, unknown>;
-      if (config.botToken) {
-        return { success: true, message: 'Slack connection initiated' };
+      const botToken = config.botToken as string;
+      if (!botToken) {
+        return { success: false, error: 'Bot token not configured' };
       }
-      return { success: false, error: 'Bot token not configured' };
+      const mode = (config.mode as string) ?? 'socket';
+      if (mode === 'socket') {
+        const appToken = config.appToken as string;
+        if (!appToken) {
+          return { success: false, error: 'App token not configured (required for Socket Mode)' };
+        }
+        try {
+          await this.connectSlackSocketMode(botToken, appToken);
+          return { success: true, message: 'Slack Socket Mode connected' };
+        } catch (err) {
+          return { success: false, error: (err as Error).message };
+        }
+      } else {
+        // HTTP mode — validate config and return webhook URL
+        if (!config.signingSecret) {
+          return { success: false, error: 'Signing secret not configured (required for HTTP mode)' };
+        }
+        return {
+          success: true,
+          message: 'Slack HTTP mode ready',
+          webhookUrl: `/api/slack/events`,
+        };
+      }
+    });
+
+    this.protocol.registerMethod('slack.disconnect', async () => {
+      this.disconnectSlackSocketMode();
+      return { success: true, message: 'Slack disconnected' };
     });
 
     this.protocol.registerMethod('slack.send', async (params) => {
@@ -1376,72 +1490,76 @@ export class GatewayServer {
   // --- NATS Subscriptions ---
 
   private setupNatsSubscriptions(): void {
-    // Agent status updates
-    for (const agentId of ALL_AGENTS) {
-      this.nats.subscribe(NatsSubjects.agentStatus(agentId), (data) => {
-        const raw = data as Record<string, unknown>;
-        let state: AgentState;
+    // Agent status updates — wildcard subscription for all agents
+    this.nats.subscribe('jarvis.agent.*.status', (data, msg) => {
+      const agentId = msg.subject.split('.')[2];
+      knownAgents.add(agentId);
 
-        // Support both nested AgentState format and legacy flat format
-        if (raw?.identity && typeof raw.identity === 'object') {
-          // New format: already nested AgentState
-          state = raw as unknown as AgentState;
+      const raw = data as Record<string, unknown>;
+      let state: AgentState;
+
+      // Support both nested AgentState format and legacy flat format
+      if (raw?.identity && typeof raw.identity === 'object') {
+        // New format: already nested AgentState
+        state = raw as unknown as AgentState;
+      } else {
+        // Legacy flat format: reconstruct AgentState from flat fields
+        const defaults = AGENT_DEFAULTS[agentId as AgentId];
+        const now = Date.now();
+        state = {
+          identity: {
+            agentId: agentId as AgentId,
+            role: (raw?.role as string) ?? defaults?.role ?? 'dev',
+            machineId: (raw?.machineId as string) ?? 'unknown',
+            hostname: (raw?.hostname as string) ?? 'unknown',
+          },
+          status: (raw?.status as AgentState['status']) ?? 'idle',
+          activeTaskId: (raw?.activeTaskId as string) ?? null,
+          activeTaskDescription: (raw?.activeTask as string) ?? (raw?.activeTaskDescription as string) ?? null,
+          lastHeartbeat: (raw?.timestamp as number) ?? now,
+          startedAt: (raw?.startedAt as number) ?? now,
+          completedTasks: (raw?.completedTasks as number) ?? 0,
+          failedTasks: (raw?.failedTasks as number) ?? 0,
+        };
+        log.warn(`Agent ${agentId} sent legacy flat status, reconstructed AgentState`);
+      }
+
+      void this.store.setAgentState(state);
+      this.protocol.broadcast('agent.status', state);
+    });
+
+    this.nats.subscribe('jarvis.agent.*.heartbeat', (_data, msg) => {
+      const agentId = msg.subject.split('.')[2];
+      knownAgents.add(agentId);
+      void this.store.updateHeartbeat(agentId);
+      this.protocol.broadcast('agent.heartbeat', { agentId, timestamp: Date.now() });
+    });
+
+    this.nats.subscribe('jarvis.agent.*.result', (data, msg) => {
+      const agentId = msg.subject.split('.')[2];
+      knownAgents.add(agentId);
+      const result = data as { taskId: string; success?: boolean; output?: string; [key: string]: unknown };
+      const finalStatus = result.success !== false ? 'completed' : 'failed';
+
+      // Update task status in store
+      if (result.taskId) {
+        void this.store.updateTask(result.taskId, { status: finalStatus }).catch((err: unknown) => {
+          log.error(`Failed to update task ${result.taskId} status to ${finalStatus}: ${(err as Error).message}`);
+          throw err;
+        });
+      }
+
+      this.protocol.broadcast(result.success !== false ? 'task.completed' : 'task.failed', result);
+
+      // Notify dependency orchestrator of completion/failure
+      if (result.taskId) {
+        if (result.success !== false) {
+          this.orchestrator.completeTask(result.taskId, (result.output as string) ?? '');
         } else {
-          // Legacy flat format: reconstruct AgentState from flat fields
-          const defaults = AGENT_DEFAULTS[agentId as AgentId];
-          const now = Date.now();
-          state = {
-            identity: {
-              agentId: agentId as AgentId,
-              role: (raw?.role as string) ?? defaults?.role ?? 'dev',
-              machineId: (raw?.machineId as string) ?? 'unknown',
-              hostname: (raw?.hostname as string) ?? 'unknown',
-            },
-            status: (raw?.status as AgentState['status']) ?? 'idle',
-            activeTaskId: (raw?.activeTaskId as string) ?? null,
-            activeTaskDescription: (raw?.activeTask as string) ?? (raw?.activeTaskDescription as string) ?? null,
-            lastHeartbeat: (raw?.timestamp as number) ?? now,
-            startedAt: (raw?.startedAt as number) ?? now,
-            completedTasks: (raw?.completedTasks as number) ?? 0,
-            failedTasks: (raw?.failedTasks as number) ?? 0,
-          };
-          log.warn(`Agent ${agentId} sent legacy flat status, reconstructed AgentState`);
+          this.orchestrator.failTask(result.taskId, (result.output as string) ?? 'Task failed');
         }
-
-        void this.store.setAgentState(state);
-        this.protocol.broadcast('agent.status', state);
-      });
-
-      this.nats.subscribe(NatsSubjects.agentHeartbeat(agentId), () => {
-        void this.store.updateHeartbeat(agentId);
-        this.protocol.broadcast('agent.heartbeat', { agentId, timestamp: Date.now() });
-      });
-
-      this.nats.subscribe(NatsSubjects.agentResult(agentId), (data) => {
-        const result = data as { taskId: string; success?: boolean; output?: string; [key: string]: unknown };
-        const finalStatus = result.success !== false ? 'completed' : 'failed';
-
-        // Update task status in store
-        if (result.taskId) {
-          void this.store.updateTask(result.taskId, { status: finalStatus }).catch((err: unknown) => {
-            log.error(`Failed to update task ${result.taskId} status to ${finalStatus}: ${(err as Error).message}`);
-            throw err;
-          });
-        }
-
-        this.protocol.broadcast(result.success !== false ? 'task.completed' : 'task.failed', result);
-
-        // Notify dependency orchestrator of completion/failure
-        if (result.taskId) {
-          if (result.success !== false) {
-            this.orchestrator.completeTask(result.taskId, (result.output as string) ?? '');
-          } else {
-            this.orchestrator.failTask(result.taskId, (result.output as string) ?? 'Task failed');
-          }
-        }
-      });
-
-    }
+      }
+    });
 
     // Chat messages from agents (chatBroadcast subject) — OUTSIDE loop to avoid duplicate subscriptions
     this.nats.subscribe(NatsSubjects.chatBroadcast, (data) => {
@@ -1524,14 +1642,14 @@ export class GatewayServer {
       this.protocol.broadcast('coordination.response', msg);
     });
 
-    // Direct messages between agents (subscribe for both known agents)
-    for (const agentId of ALL_AGENTS) {
-      this.nats.subscribe(NatsSubjects.agentDM(agentId), (data) => {
-        const msg = data as { from?: string; to?: string; content?: string; timestamp?: number };
-        log.info(`Agent DM: ${msg.from ?? 'unknown'} → ${agentId}: ${(msg.content ?? '').slice(0, 80)}`);
-        this.protocol.broadcast('agent.dm', { ...msg as Record<string, unknown>, target: agentId });
-      });
-    }
+    // Direct messages between agents — wildcard subscription
+    this.nats.subscribe('jarvis.agent.*.dm', (data, msg) => {
+      const agentId = msg.subject.split('.')[2];
+      knownAgents.add(agentId);
+      const dmMsg = data as { from?: string; to?: string; content?: string; timestamp?: number };
+      log.info(`Agent DM: ${dmMsg.from ?? 'unknown'} → ${agentId}: ${(dmMsg.content ?? '').slice(0, 80)}`);
+      this.protocol.broadcast('agent.dm', { ...dmMsg as Record<string, unknown>, target: agentId });
+    });
   }
 
   // --- Sessions ---
@@ -1557,7 +1675,7 @@ export class GatewayServer {
       outputTokens: number;
     }> = [];
 
-    for (const agentId of ALL_AGENTS) {
+    for (const agentId of knownAgents) {
       try {
         const sessDir = this.nas.sessionsDir(agentId);
         if (!existsSync(sessDir)) continue;
@@ -1620,7 +1738,7 @@ export class GatewayServer {
     messages: Array<{ role: string; content: string; timestamp: number }>;
     usage: { totalTokens: number; inputTokens: number; outputTokens: number };
   } | null {
-    for (const agentId of ALL_AGENTS) {
+    for (const agentId of knownAgents) {
       try {
         const filePath = join(this.nas.sessionsDir(agentId), `${sessionId}.jsonl`);
         if (!existsSync(filePath)) continue;
@@ -2903,6 +3021,10 @@ export class GatewayServer {
   // --- WhatsApp (Baileys — QR Code Login) ---
 
   // Baileys socket and login state
+  private slackWs: WebSocket | null = null;
+  private slackWsConnected = false;
+  private slackWsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
   private waSocket: ReturnType<typeof import('@whiskeysockets/baileys').makeWASocket> | null = null;
   private waConnected = false;
   private waQrDataUrl: string | null = null;
@@ -3534,7 +3656,7 @@ export class GatewayServer {
       lastActivity?: number;
     }> = [];
 
-    for (const channel of ['whatsapp', 'telegram', 'discord', 'imessage'] as const) {
+    for (const channel of ['whatsapp', 'telegram', 'discord', 'slack', 'imessage'] as const) {
       const config = this.getChannelConfig(channel);
       const msgs = this.getChannelMessages(channel, 1);
       const lastMsg = msgs.messages[0];
@@ -3543,6 +3665,7 @@ export class GatewayServer {
       if (channel === 'whatsapp') connected = this.waConnected;
       else if (channel === 'telegram') connected = !!(config.botToken);
       else if (channel === 'discord') connected = !!(config.botToken || config.webhookUrl);
+      else if (channel === 'slack') connected = this.slackWsConnected || !!(config.botToken);
       else if (channel === 'imessage') connected = process.platform === 'darwin';
 
       // Read a reasonable upper bound of messages for counting (avoid loading huge files)
@@ -3569,9 +3692,9 @@ export class GatewayServer {
       if (channel === 'whatsapp') connected = this.waConnected;
       else if (channel === 'telegram') connected = !!(config.botToken);
       else if (channel === 'discord') connected = !!(config.botToken || config.webhookUrl);
-      else if (channel === 'slack') connected = !!(config.botToken);
+      else if (channel === 'slack') connected = this.slackWsConnected || !!(config.botToken);
       else if (channel === 'imessage') connected = process.platform === 'darwin';
-      result[channel] = { connected, config: { ...config, accessToken: config.accessToken ? '***' : '', botToken: config.botToken ? '***' : '' } };
+      result[channel] = { connected, config: { ...config, accessToken: config.accessToken ? '***' : '', botToken: config.botToken ? '***' : '', appToken: config.appToken ? '***' : '', signingSecret: config.signingSecret ? '***' : '' } };
     }
     return result;
   }
@@ -3580,12 +3703,17 @@ export class GatewayServer {
 
   private getSlackStatus(): Record<string, unknown> {
     const config = this.getChannelConfig('slack');
+    const mode = (config.mode as string) ?? 'socket';
+    const socketConnected = this.slackWsConnected;
+    const httpConfigured = !!(config.signingSecret);
     return {
-      connected: !!(config.botToken),
+      connected: mode === 'socket' ? socketConnected : (httpConfigured && !!(config.botToken)),
       botToken: !!(config.botToken),
       appToken: !!(config.appToken),
+      signingSecret: !!(config.signingSecret),
       workspace: (config.workspace as string) ?? '',
-      mode: (config.mode as string) ?? 'socket',
+      mode,
+      socketConnected,
       channels: (config.channels as number) ?? 0,
     };
   }
@@ -3633,6 +3761,180 @@ export class GatewayServer {
     } catch (err) {
       return { success: false, error: (err as Error).message };
     }
+  }
+
+  private async handleSlackWebhook(body: Record<string, unknown>): Promise<void> {
+    const event = body.event as Record<string, unknown> | undefined;
+    if (!event || event.type !== 'message') return;
+
+    // Ignore bot messages to prevent loops
+    if (event.bot_id || event.subtype === 'bot_message') return;
+    // Ignore message edits/deletes/etc. — only handle plain new messages
+    if (event.subtype && event.subtype !== 'file_share') return;
+
+    const text = (event.text as string) ?? '';
+    const user = (event.user as string) ?? 'unknown';
+    const channel = (event.channel as string) ?? '';
+    const ts = (event.ts as string) ?? '';
+    const files = event.files as Array<Record<string, unknown>> | undefined;
+
+    // Determine message type
+    let msgType: 'text' | 'image' | 'video' | 'file' = 'text';
+    const fileUrls: string[] = [];
+    if (files && files.length > 0) {
+      for (const f of files) {
+        const mimetype = (f.mimetype as string) ?? '';
+        if (mimetype.startsWith('image/')) msgType = 'image';
+        else if (mimetype.startsWith('video/')) msgType = 'video';
+        else msgType = 'file';
+        const url = (f.url_private as string) ?? (f.permalink as string) ?? '';
+        if (url) fileUrls.push(url);
+      }
+    }
+
+    const bodyText = text || (fileUrls.length > 0 ? `[${msgType}: ${fileUrls.join(', ')}]` : '');
+    if (!bodyText) return;
+
+    const incomingMsg = {
+      id: ts || `slack-in-${Date.now()}`,
+      from: user,
+      fromId: user,
+      to: 'jarvis',
+      body: bodyText,
+      channel,
+      timestamp: Date.now(),
+      direction: 'incoming' as const,
+      status: 'read' as const,
+      type: msgType,
+      files: fileUrls.length > 0 ? fileUrls : undefined,
+    };
+
+    this.appendChannelMessage('slack', incomingMsg);
+    this.protocol.broadcast('slack.message', incomingMsg);
+
+    log.info(`Slack message from ${user} in ${channel}: "${bodyText.substring(0, 80)}"`);
+
+    // Auto-reply if jarvisMode enabled
+    const config = this.getChannelConfig('slack');
+    if (config.jarvisMode) {
+      const lang = (config.autoReplyLanguage as string) ?? 'pl';
+      let reply: string;
+
+      if (text.startsWith('/') || text.startsWith('!')) {
+        reply = await this.handleChannelCommand(text, lang);
+      } else {
+        const processed = await this.processVoiceMessage({ message: text, language: lang });
+        reply = processed.reply;
+      }
+
+      await this.sendSlackMessage(channel, reply);
+    }
+  }
+
+  private async connectSlackSocketMode(botToken: string, appToken: string): Promise<void> {
+    // Clean up existing connection
+    this.disconnectSlackSocketMode();
+
+    // Step 1: Get a WebSocket URL via apps.connections.open
+    const openRes = await fetch('https://slack.com/api/apps.connections.open', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${appToken}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
+    const openData = await openRes.json() as Record<string, unknown>;
+    if (!openData.ok || !openData.url) {
+      throw new Error(`apps.connections.open failed: ${openData.error ?? 'unknown error'}`);
+    }
+
+    const wsUrl = openData.url as string;
+    log.info('Slack Socket Mode: connecting...');
+
+    // Step 2: Open WebSocket
+    const ws = new (await import('ws')).default(wsUrl);
+    this.slackWs = ws as unknown as WebSocket;
+
+    ws.on('open', () => {
+      this.slackWsConnected = true;
+      log.info('Slack Socket Mode: connected');
+      this.protocol.broadcast('slack.status', this.getSlackStatus());
+    });
+
+    ws.on('message', async (raw: Buffer | string) => {
+      try {
+        const envelope = JSON.parse(raw.toString()) as Record<string, unknown>;
+
+        // Acknowledge the envelope immediately (required by Socket Mode)
+        if (envelope.envelope_id) {
+          ws.send(JSON.stringify({ envelope_id: envelope.envelope_id }));
+        }
+
+        const envelopeType = envelope.type as string;
+
+        if (envelopeType === 'events_api') {
+          const payload = envelope.payload as Record<string, unknown>;
+          if (payload) {
+            await this.handleSlackWebhook(payload);
+          }
+        } else if (envelopeType === 'slash_commands') {
+          // Handle slash commands from Socket Mode
+          const payload = envelope.payload as Record<string, unknown>;
+          const text = (payload?.text as string) ?? '';
+          const channelId = (payload?.channel_id as string) ?? '';
+          if (text && channelId) {
+            const config = this.getChannelConfig('slack');
+            const lang = (config.autoReplyLanguage as string) ?? 'pl';
+            const reply = await this.handleChannelCommand(`/${text}`, lang);
+            await this.sendSlackMessage(channelId, reply);
+          }
+        }
+        // 'hello' and 'disconnect' types are silently handled
+      } catch (err) {
+        log.error('Slack Socket Mode message error', { error: String(err) });
+      }
+    });
+
+    ws.on('close', (code: number) => {
+      this.slackWsConnected = false;
+      this.slackWs = null;
+      log.warn(`Slack Socket Mode: disconnected (code=${code})`);
+      this.protocol.broadcast('slack.status', this.getSlackStatus());
+
+      // Auto-reconnect after 5s unless explicitly disconnected
+      if (!this.slackWsReconnectTimer) {
+        this.slackWsReconnectTimer = setTimeout(async () => {
+          this.slackWsReconnectTimer = null;
+          const cfg = this.getChannelConfig('slack');
+          const bt = cfg.botToken as string;
+          const at = cfg.appToken as string;
+          if (bt && at) {
+            log.info('Slack Socket Mode: reconnecting...');
+            try {
+              await this.connectSlackSocketMode(bt, at);
+            } catch (err) {
+              log.error('Slack Socket Mode reconnect failed', { error: String(err) });
+            }
+          }
+        }, 5000);
+      }
+    });
+
+    ws.on('error', (err: Error) => {
+      log.error('Slack Socket Mode WebSocket error', { error: err.message });
+    });
+  }
+
+  private disconnectSlackSocketMode(): void {
+    if (this.slackWsReconnectTimer) {
+      clearTimeout(this.slackWsReconnectTimer);
+      this.slackWsReconnectTimer = null;
+    }
+    if (this.slackWs) {
+      try { this.slackWs.close(); } catch { /* ignore */ }
+      this.slackWs = null;
+    }
+    this.slackWsConnected = false;
   }
 
   // --- iMessage (macOS only) ---
@@ -3687,7 +3989,106 @@ end tell`;
     if (process.platform !== 'darwin') return { conversations: [], error: 'macOS only' };
     try {
       const cap = Math.min(limit, 80);
-      const script = `
+      const dbPath = join(process.env['HOME'] ?? '', 'Library/Messages/chat.db');
+      const contactMap = await this.getContactsMap();
+
+      // Query chat.db for recent conversations with their last message
+      const sql = `
+SELECT
+  c.guid,
+  c.chat_identifier,
+  COALESCE(c.display_name, '') as display_name,
+  COALESCE(
+    NULLIF(m.text, ''),
+    CASE
+      WHEN m.attributedBody IS NOT NULL AND instr(m.attributedBody, X'012B') > 0 THEN
+        CASE
+          WHEN hex(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 2, 1)) <> '81'
+          THEN CAST(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 3,
+               instr(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 3), X'8684') - 1) AS TEXT)
+          ELSE CAST(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 5,
+               instr(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 5), X'8684') - 1) AS TEXT)
+        END
+      ELSE ''
+    END,
+    ''
+  ) as last_text,
+  m.is_from_me as last_from_me,
+  CAST((m.date / 1000000000 + 978307200) AS INTEGER) as last_unix_ts,
+  m.cache_has_attachments as last_has_attachment,
+  COALESCE(
+    (SELECT GROUP_CONCAT(h2.id, ';')
+     FROM chat_handle_join chj
+     JOIN handle h2 ON h2.ROWID = chj.handle_id
+     WHERE chj.chat_id = c.ROWID), ''
+  ) as handles,
+  (SELECT COUNT(*) FROM chat_message_join cmj2
+   JOIN message m2 ON m2.ROWID = cmj2.message_id
+   WHERE cmj2.chat_id = c.ROWID AND m2.associated_message_type = 0) as msg_count
+FROM chat c
+JOIN chat_message_join cmj ON cmj.chat_id = c.ROWID
+JOIN message m ON m.ROWID = cmj.message_id
+WHERE m.ROWID = (
+  SELECT cmj3.message_id
+  FROM chat_message_join cmj3
+  JOIN message m3 ON m3.ROWID = cmj3.message_id
+  WHERE cmj3.chat_id = c.ROWID AND m3.associated_message_type = 0
+  ORDER BY m3.date DESC LIMIT 1
+)
+ORDER BY m.date DESC
+LIMIT ${cap};`;
+
+      const { stdout } = await execFileAsync('sqlite3', ['-json', dbPath, sql], {
+        timeout: 15_000,
+        maxBuffer: 1024 * 1024 * 4,
+      });
+
+      const rows = JSON.parse(stdout || '[]') as Array<Record<string, unknown>>;
+      const conversations = rows.map((row) => {
+        const guid = String(row['guid'] ?? '');
+        const chatIdentifier = String(row['chat_identifier'] ?? '');
+        const displayNameRaw = String(row['display_name'] ?? '');
+        const lastText = String(row['last_text'] ?? '');
+        const lastFromMe = row['last_from_me'] === 1;
+        const lastUnixTs = Number(row['last_unix_ts'] ?? 0) * 1000;
+        const lastHasAttachment = row['last_has_attachment'] === 1;
+        const handlesStr = String(row['handles'] ?? '');
+        const msgCount = Number(row['msg_count'] ?? 0);
+
+        const handleList = handlesStr.split(';').filter(Boolean);
+        const primaryHandle = handleList[0] || chatIdentifier || '';
+
+        let displayName = displayNameRaw;
+        if (!displayName || displayName === 'missing value') {
+          displayName = contactMap.get(primaryHandle) || primaryHandle;
+        }
+
+        const lastMessage = lastText || (lastHasAttachment ? '[Attachment]' : '');
+
+        return {
+          chatId: guid,
+          displayName,
+          handle: primaryHandle,
+          handles: handleList,
+          lastMessage,
+          lastMessageDate: lastUnixTs ? new Date(lastUnixTs).toISOString() : '',
+          lastFromMe,
+          messageCount: msgCount,
+          unreadCount: 0,
+        };
+      }).filter((c) => c.chatId && c.handle);
+
+      return { conversations };
+    } catch (err) {
+      log.warn('chat.db conversations query failed, falling back to AppleScript', { error: String(err) });
+      // Fallback to original AppleScript approach
+      return this.getIMessageConversationsFallback(limit);
+    }
+  }
+
+  private async getIMessageConversationsFallback(limit: number): Promise<Record<string, unknown>> {
+    const cap = Math.min(limit, 80);
+    const script = `
 tell application "Messages"
   set output to ""
   set chatCount to count of chats
@@ -3711,50 +4112,32 @@ tell application "Messages"
   end repeat
   return output
 end tell`;
-      const raw = await this.runAppleScript(script);
-      if (!raw) return { conversations: [] };
+    const raw = await this.runAppleScript(script);
+    if (!raw) return { conversations: [] };
 
-      // Also load contacts for name resolution
-      const contactMap = await this.getContactsMap();
+    const contactMap = await this.getContactsMap();
+    const conversations = raw.split('\n').filter(Boolean).map((line) => {
+      const [chatId, chatName, handles] = line.split('|||');
+      const handleList = (handles || '').split(';').filter(Boolean);
+      const primaryHandle = handleList[0] || chatId?.replace('any;-;', '') || '';
+      let displayName = chatName || '';
+      if (!displayName || displayName === 'missing value') {
+        displayName = contactMap.get(primaryHandle) || primaryHandle;
+      }
+      return {
+        chatId: chatId || '',
+        displayName,
+        handle: primaryHandle,
+        handles: handleList,
+        lastMessage: '',
+        lastMessageDate: '',
+        lastFromMe: false,
+        messageCount: 0,
+        unreadCount: 0,
+      };
+    }).filter((c) => c.chatId && c.handle);
 
-      // Also load our JSONL messages to get last message per chat
-      const jarvisMessages = await this.getChannelMessages('imessage', 500);
-      const msgList = (jarvisMessages as { messages: Array<{ channel: string; text: string; timestamp: number; direction: string }> }).messages ?? [];
-
-      const conversations = raw.split('\n').filter(Boolean).map((line) => {
-        const [chatId, chatName, handles] = line.split('|||');
-        const handleList = (handles || '').split(';').filter(Boolean);
-        const primaryHandle = handleList[0] || chatId?.replace('any;-;', '') || '';
-
-        // Resolve display name: chatName > contact name > handle
-        let displayName = chatName || '';
-        if (!displayName || displayName === 'missing value') {
-          displayName = contactMap.get(primaryHandle) || primaryHandle;
-        }
-
-        // Find last JSONL message for this contact
-        const contactMsgs = msgList.filter((m) =>
-          m.channel === primaryHandle || handleList.some((h) => m.channel === h)
-        );
-        const lastMsg = contactMsgs.length > 0 ? contactMsgs[contactMsgs.length - 1] : null;
-
-        return {
-          chatId: chatId || '',
-          displayName,
-          handle: primaryHandle,
-          handles: handleList,
-          lastMessage: lastMsg?.text || '',
-          lastMessageDate: lastMsg ? new Date(lastMsg.timestamp).toISOString() : '',
-          lastFromMe: lastMsg?.direction === 'out',
-          messageCount: contactMsgs.length,
-          unreadCount: 0,
-        };
-      }).filter((c) => c.chatId && c.handle);
-
-      return { conversations };
-    } catch (err) {
-      return { conversations: [], error: (err as Error).message };
-    }
+    return { conversations };
   }
 
   private async getContactsMap(): Promise<Map<string, string>> {
@@ -3790,53 +4173,185 @@ end tell`;
     return map;
   }
 
-  private async getIMessageConversation(chatId: string, _limit: number): Promise<Record<string, unknown>> {
+  private async getIMessageConversation(chatId: string, limit: number): Promise<Record<string, unknown>> {
     if (process.platform !== 'darwin') return { messages: [], error: 'macOS only' };
     if (!chatId) return { messages: [], error: 'chatId required' };
 
-    // Get handle from chatId
     const handle = chatId.replace('any;-;', '').replace('any;+;', '');
+    const cap = Math.min(Math.max(limit, 1), 200);
+    const dbPath = join(process.env['HOME'] ?? '', 'Library/Messages/chat.db');
 
-    // Return messages from JSONL store matching this handle
-    const jarvisMessages = await this.getChannelMessages('imessage', 500);
-    const msgList = (jarvisMessages as { messages: Array<{ id: string; channel: string; text: string; timestamp: number; direction: string; user: string }> }).messages ?? [];
+    try {
+      // Query chat.db for messages in this conversation (both incoming + outgoing)
+      // Apple epoch offset: 978307200 seconds between Unix epoch and 2001-01-01
+      // Extract text: prefer m.text, fall back to attributedBody blob parsing
+      // attributedBody is NSArchiver typedstream: header ends with 0x012B,
+      // then length byte (<0x80 = 1 byte, 0x81 = 2-byte LE follows), then UTF-8 text, then 0x8684
+      const sql = `
+SELECT
+  m.ROWID,
+  COALESCE(
+    NULLIF(m.text, ''),
+    CASE
+      WHEN m.attributedBody IS NOT NULL AND instr(m.attributedBody, X'012B') > 0 THEN
+        CASE
+          WHEN hex(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 2, 1)) <> '81'
+          THEN CAST(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 3,
+               instr(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 3), X'8684') - 1) AS TEXT)
+          ELSE CAST(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 5,
+               instr(substr(m.attributedBody, instr(m.attributedBody, X'012B') + 5), X'8684') - 1) AS TEXT)
+        END
+      ELSE ''
+    END,
+    ''
+  ) as text,
+  m.is_from_me,
+  CAST((m.date / 1000000000 + 978307200) AS INTEGER) as unix_ts,
+  m.cache_has_attachments,
+  m.associated_message_type,
+  COALESCE(h.id, '') as sender_handle,
+  COALESCE(
+    (SELECT GROUP_CONCAT(a.filename || '<<>>' || COALESCE(a.mime_type, ''), '<<SEP>>')
+     FROM message_attachment_join maj
+     JOIN attachment a ON a.ROWID = maj.attachment_id
+     WHERE maj.message_id = m.ROWID), ''
+  ) as attachments
+FROM message m
+LEFT JOIN handle h ON m.handle_id = h.ROWID
+WHERE m.ROWID IN (
+  SELECT cmj.message_id
+  FROM chat_message_join cmj
+  JOIN chat c ON c.ROWID = cmj.chat_id
+  WHERE c.guid = '${chatId.replace(/'/g, "''")}'
+     OR c.chat_identifier = '${handle.replace(/'/g, "''")}'
+)
+AND m.associated_message_type = 0
+AND (m.text IS NOT NULL AND length(m.text) > 0 OR m.attributedBody IS NOT NULL OR m.cache_has_attachments = 1)
+ORDER BY m.date DESC
+LIMIT ${cap};`;
 
-    const messages = msgList
-      .filter((m) => m.channel === handle)
-      .map((m) => ({
-        id: m.id || '',
-        text: m.text || '',
-        isFromMe: m.direction === 'out',
-        date: new Date(m.timestamp).toISOString().replace('T', ' ').slice(0, 19),
-        sender: m.direction === 'out' ? 'jarvis' : m.channel,
-        hasAttachment: false,
-      }));
+      const { stdout } = await execFileAsync('sqlite3', ['-json', dbPath, sql], {
+        timeout: 15_000,
+        maxBuffer: 1024 * 1024 * 4,
+      });
 
-    return { messages, chatId, handle };
+      const rows = JSON.parse(stdout || '[]') as Array<Record<string, unknown>>;
+      const messages = rows.map((row) => {
+        const rowId = String(row['ROWID'] ?? '');
+        const rawText = String(row['text'] ?? '');
+        const isFromMe = row['is_from_me'] === 1;
+        const unixTs = Number(row['unix_ts'] ?? 0) * 1000;
+        const hasAttachment = row['cache_has_attachments'] === 1;
+        const senderHandle = String(row['sender_handle'] ?? '');
+        const attachmentsRaw = String(row['attachments'] ?? '');
+
+        // Parse attachments
+        const attachmentList: Array<{ filename: string; mimeType: string }> = [];
+        if (attachmentsRaw) {
+          for (const entry of attachmentsRaw.split('<<SEP>>')) {
+            const [filename, mimeType] = entry.split('<<>>');
+            if (filename) attachmentList.push({ filename: filename.replace(/^~/, process.env['HOME'] ?? ''), mimeType: mimeType ?? '' });
+          }
+        }
+
+        // Strip U+FFFC (object replacement character) used as attachment placeholder in iMessage
+        const text = rawText.replace(/\uFFFC/g, '').trim();
+
+        let type: 'text' | 'image' | 'video' | 'audio' | 'file' = 'text';
+        if (attachmentList.length > 0) {
+          const mime = attachmentList[0].mimeType;
+          if (mime.startsWith('image/')) type = 'image';
+          else if (mime.startsWith('video/')) type = 'video';
+          else if (mime.startsWith('audio/')) type = 'audio';
+          else type = 'file';
+        } else if (hasAttachment) {
+          type = 'file';
+        }
+
+        return {
+          id: rowId,
+          text,
+          isFromMe,
+          date: unixTs ? new Date(unixTs).toISOString().replace('T', ' ').slice(0, 19) : '',
+          timestamp: unixTs,
+          sender: isFromMe ? 'jarvis' : (senderHandle || handle),
+          hasAttachment,
+          type,
+          attachments: attachmentList.length > 0 ? attachmentList : undefined,
+        };
+      }).filter((m) => m.text || m.hasAttachment).reverse(); // filter empty messages, oldest first
+
+      return { messages, chatId, handle };
+    } catch (err) {
+      log.warn('chat.db query failed, falling back to JSONL', { error: String(err) });
+      // Fallback to JSONL store
+      const jarvisMessages = this.getChannelMessages('imessage', 500);
+      const msgList = (jarvisMessages as { messages: Array<{ id: string; channel: string; text: string; timestamp: number; direction: string }> }).messages ?? [];
+      const messages = msgList
+        .filter((m) => m.channel === handle)
+        .map((m) => ({
+          id: m.id || '',
+          text: m.text || '',
+          isFromMe: m.direction === 'out',
+          date: new Date(m.timestamp).toISOString().replace('T', ' ').slice(0, 19),
+          timestamp: m.timestamp,
+          sender: m.direction === 'out' ? 'jarvis' : m.channel,
+          hasAttachment: false,
+          type: 'text' as const,
+        }));
+      return { messages, chatId, handle };
+    }
   }
 
-  private async searchIMessages(query: string, _limit: number): Promise<Record<string, unknown>> {
+  private async searchIMessages(query: string, limit: number): Promise<Record<string, unknown>> {
     if (process.platform !== 'darwin') return { results: [], error: 'macOS only' };
     if (!query) return { results: [], error: 'query required' };
 
-    // Search in JSONL messages
-    const jarvisMessages = await this.getChannelMessages('imessage', 1000);
-    const msgList = (jarvisMessages as { messages: Array<{ channel: string; text: string; timestamp: number; direction: string }> }).messages ?? [];
+    const cap = Math.min(Math.max(limit, 1), 100);
+    const dbPath = join(process.env['HOME'] ?? '', 'Library/Messages/chat.db');
+    const escapedQuery = query.replace(/'/g, "''");
 
-    const lowerQ = query.toLowerCase();
-    const results = msgList
-      .filter((m) => m.text?.toLowerCase().includes(lowerQ) || m.channel?.toLowerCase().includes(lowerQ))
-      .slice(-30)
-      .map((m) => ({
-        text: m.text || '',
-        isFromMe: m.direction === 'out',
-        contact: m.channel || '',
-        chatId: `any;-;${m.channel}`,
-        displayName: m.channel || '',
-        date: new Date(m.timestamp).toISOString().replace('T', ' ').slice(0, 19),
-      }));
+    try {
+      const sql = `
+SELECT
+  COALESCE(m.text, '') as text,
+  m.is_from_me,
+  COALESCE(h.id, '') as sender_handle,
+  COALESCE(c.guid, '') as chat_guid,
+  COALESCE(c.display_name, h.id, '') as display_name,
+  CAST((m.date / 1000000000 + 978307200) AS INTEGER) as unix_ts
+FROM message m
+LEFT JOIN handle h ON m.handle_id = h.ROWID
+LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+LEFT JOIN chat c ON c.ROWID = cmj.chat_id
+WHERE m.text LIKE '%${escapedQuery}%'
+  AND m.associated_message_type = 0
+ORDER BY m.date DESC
+LIMIT ${cap};`;
 
-    return { results };
+      const { stdout } = await execFileAsync('sqlite3', ['-json', dbPath, sql], {
+        timeout: 15_000,
+        maxBuffer: 1024 * 1024 * 4,
+      });
+
+      const rows = JSON.parse(stdout || '[]') as Array<Record<string, unknown>>;
+      const results = rows.map((row) => {
+        const unixTs = Number(row['unix_ts'] ?? 0);
+        return {
+          text: String(row['text'] ?? ''),
+          isFromMe: row['is_from_me'] === 1,
+          contact: String(row['sender_handle'] ?? ''),
+          chatId: String(row['chat_guid'] ?? ''),
+          displayName: String(row['display_name'] ?? '') || String(row['sender_handle'] ?? ''),
+          date: unixTs ? new Date(unixTs * 1000).toISOString().replace('T', ' ').slice(0, 19) : '',
+        };
+      });
+
+      return { results };
+    } catch (err) {
+      log.warn('chat.db search failed', { error: String(err) });
+      return { results: [], error: (err as Error).message };
+    }
   }
 
   private async getIMessageContacts(): Promise<Record<string, unknown>> {

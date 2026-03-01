@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const AgentId = z.enum(['jarvis', 'agent-smith', 'agent-johny']);
+export const AgentId = z.string().min(1);
 export type AgentId = z.infer<typeof AgentId>;
 
 export const AgentRole = z.enum(['orchestrator', 'dev', 'marketing']);
@@ -68,7 +68,7 @@ export const AgentState = z.object({
 });
 export type AgentState = z.infer<typeof AgentState>;
 
-export const AGENT_DEFAULTS: Record<AgentId, { role: AgentRole; capabilities: readonly AgentCapability[] }> = Object.freeze({
+export const AGENT_DEFAULTS: Record<string, { role: AgentRole; capabilities: readonly AgentCapability[] }> = Object.freeze({
   'jarvis': Object.freeze({
     role: 'orchestrator',
     capabilities: Object.freeze([

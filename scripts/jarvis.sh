@@ -112,6 +112,24 @@ start_services() {
     wait_for_port "$GATEWAY_PORT" "Gateway" 20
   fi
 
+  # --- Jarvis Orchestrator Agent ---
+  echo -e "${BOLD}▸ Jarvis Orchestrator${RESET}"
+  if [[ -f /tmp/jarvis-orchestrator.pid ]] && kill -0 "$(cat /tmp/jarvis-orchestrator.pid 2>/dev/null)" 2>/dev/null; then
+    echo -e "  ${GREEN}✓${RESET} Orchestrator juz dziala (PID: $(cat /tmp/jarvis-orchestrator.pid))"
+  else
+    cd "$JARVIS_DIR"
+    JARVIS_AGENT_ID=jarvis JARVIS_AGENT_ROLE=orchestrator \
+      nohup "$TSX_BIN" packages/agent-runtime/src/cli.ts \
+        >> "$NAS_MOUNT/logs/jarvis.log" 2>&1 &
+    echo $! > /tmp/jarvis-orchestrator.pid
+    sleep 3
+    if kill -0 "$(cat /tmp/jarvis-orchestrator.pid 2>/dev/null)" 2>/dev/null; then
+      echo -e "  ${GREEN}✓${RESET} Orchestrator uruchomiony (PID: $(cat /tmp/jarvis-orchestrator.pid))"
+    else
+      echo -e "  ${RED}✗${RESET} Orchestrator nie startowal - sprawdz: $NAS_MOUNT/logs/jarvis.log"
+    fi
+  fi
+
   # --- Dashboard ---
   echo -e "${BOLD}▸ Dashboard${RESET}"
   if is_port_open "$DASHBOARD_PORT"; then
@@ -155,6 +173,22 @@ stop_services() {
     fi
   else
     echo -e "  ${DIM}  Dashboard nie dzialal${RESET}"
+  fi
+
+  # Orchestrator
+  echo -e "${BOLD}▸ Jarvis Orchestrator${RESET}"
+  if [[ -f /tmp/jarvis-orchestrator.pid ]]; then
+    PID=$(cat /tmp/jarvis-orchestrator.pid)
+    if kill -0 "$PID" 2>/dev/null; then
+      kill "$PID" 2>/dev/null || true
+      echo -e "  ${GREEN}✓${RESET} Orchestrator stopped (PID: $PID)"
+    else
+      echo -e "  ${DIM}  Orchestrator nie dzialal${RESET}"
+    fi
+    rm -f /tmp/jarvis-orchestrator.pid
+  else
+    # Try to find and kill by pattern
+    pkill -f "JARVIS_AGENT_ID=jarvis.*cli.ts" 2>/dev/null && echo -e "  ${GREEN}✓${RESET} Orchestrator stopped" || echo -e "  ${DIM}  Orchestrator nie dzialal${RESET}"
   fi
 
   # Gateway
@@ -248,6 +282,13 @@ show_status() {
     echo -e "  ${RED}●${RESET} Gateway          ${RED}STOPPED${RESET}"
   fi
 
+  # Orchestrator
+  if [[ -f /tmp/jarvis-orchestrator.pid ]] && kill -0 "$(cat /tmp/jarvis-orchestrator.pid 2>/dev/null)" 2>/dev/null; then
+    echo -e "  ${GREEN}●${RESET} Orchestrator     ${GREEN}RUNNING${RESET}  (PID: $(cat /tmp/jarvis-orchestrator.pid))"
+  else
+    echo -e "  ${RED}●${RESET} Orchestrator     ${RED}STOPPED${RESET}"
+  fi
+
   # Dashboard
   if is_port_open "$DASHBOARD_PORT"; then
     echo -e "  ${GREEN}●${RESET} Dashboard        ${GREEN}RUNNING${RESET}  (http://localhost:$DASHBOARD_PORT)"
@@ -329,14 +370,167 @@ show_health() {
   curl -s "http://localhost:$GATEWAY_PORT/health"
 }
 
+# ─── Remote Agent Management ─────────────────────────────────────────────────
+
+# Remote agent config (bash 3.2 compatible — no associative arrays)
+ALPHA_HOST_CFG="${ALPHA_IP:-${VNC_ALPHA_HOST:-}}"
+ALPHA_USER_CFG="${ALPHA_USER:-${VNC_ALPHA_USERNAME:-agent_smith}}"
+ALPHA_AGENT_ID="agent-smith"
+BETA_HOST_CFG="${BETA_IP:-${VNC_BETA_HOST:-}}"
+BETA_USER_CFG="${BETA_USER:-${VNC_BETA_USERNAME:-agent_johny}}"
+BETA_AGENT_ID="agent-johny"
+
+# Resolve agent config by name
+_agent_host()    { eval echo "\${${1}_HOST_CFG}"; }
+_agent_user()    { eval echo "\${${1}_USER_CFG}"; }
+_agent_id()      { eval echo "\${${1}_AGENT_ID}"; }
+
+ssh_to_agent() {
+  local name="$1" cmd="$2"
+  local host; host=$(_agent_host "$(echo "$name" | tr '[:lower:]' '[:upper:]')")
+  local user; user=$(_agent_user "$(echo "$name" | tr '[:lower:]' '[:upper:]')")
+  if [[ -z "$host" ]]; then
+    echo -e "  ${RED}✗${RESET} ${name}: no host configured"
+    return 1
+  fi
+  ssh -o ConnectTimeout=5 \
+      -o ServerAliveInterval=10 \
+      -o ServerAliveCountMax=3 \
+      -o StrictHostKeyChecking=accept-new \
+      "${user}@${host}" "$cmd"
+}
+
+agents_start() {
+  echo ""
+  echo -e "${CYAN}╔═══════════════════════════════════════════════════════════╗${RESET}"
+  echo -e "${CYAN}║${RESET}  ${BOLD}JARVIS 2.0${RESET} ${DIM}// STARTING REMOTE AGENTS${RESET}                    ${CYAN}║${RESET}"
+  echo -e "${CYAN}╚═══════════════════════════════════════════════════════════╝${RESET}"
+  echo ""
+
+  for name in alpha beta; do
+    local upper; upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+    local host; host=$(_agent_host "$upper")
+    local user; user=$(_agent_user "$upper")
+    local agent_id; agent_id=$(_agent_id "$upper")
+    if [[ -z "$host" ]]; then
+      warn "${name}: no host configured, skipping"
+      continue
+    fi
+
+    echo -e "${BOLD}▸ ${name}${RESET} (${user}@${host} — ${agent_id})"
+
+    # First start websockify via normal SSH (nohup OK for websockify — it's a simple proxy)
+    ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+        "${user}@${host}" \
+        "cd ~/Documents/Jarvis-2.0/jarvis && bash scripts/jarvis-agent.sh start-websockify" \
+        </dev/null 2>/dev/null || true
+
+    # Kill any existing agent process on remote
+    ssh -o ConnectTimeout=5 "${user}@${host}" \
+        "pkill -f 'tsx.*agent-runtime/src/cli.ts' 2>/dev/null; pkill -f 'node.*agent-runtime/src/cli.ts' 2>/dev/null" \
+        </dev/null 2>/dev/null || true
+
+    # Kill old SSH tunnel if exists
+    local pid_file="/tmp/jarvis-ssh-${agent_id}.pid"
+    if [[ -f "$pid_file" ]]; then
+      kill "$(cat "$pid_file")" 2>/dev/null || true
+      rm -f "$pid_file"
+    fi
+
+    sleep 1
+
+    # Start agent via PERSISTENT SSH session (foreground on remote, background here).
+    # macOS revokes network access for orphaned background processes (nohup/screen)
+    # when the SSH session closes. Keeping SSH alive prevents this.
+    local log_file="/tmp/jarvis-ssh-${agent_id}.log"
+    nohup ssh -o ConnectTimeout=10 \
+              -o ServerAliveInterval=10 \
+              -o ServerAliveCountMax=30 \
+              -o StrictHostKeyChecking=accept-new \
+              "${user}@${host}" \
+              "source ~/.nvm/nvm.sh 2>/dev/null && nvm use 22 2>/dev/null; cd ~/Documents/Jarvis-2.0/jarvis && set -a && source .env && set +a && export ANTHROPIC_AUTH_MODE=\${ANTHROPIC_AUTH_MODE:-claude-cli} && security unlock-keychain -p \${KEYCHAIN_PASSWORD:-137009} ~/Library/Keychains/login.keychain-db 2>/dev/null; exec node_modules/.bin/tsx packages/agent-runtime/src/cli.ts" \
+              > "$log_file" 2>&1 &
+
+    local ssh_pid=$!
+    echo "$ssh_pid" > "$pid_file"
+
+    # Wait briefly for connection
+    sleep 3
+    if kill -0 "$ssh_pid" 2>/dev/null; then
+      ok "Agent running via persistent SSH (PID: ${ssh_pid})"
+    else
+      fail "SSH session died — check: ${log_file}"
+    fi
+  done
+
+  echo ""
+}
+
+agents_stop() {
+  echo ""
+  echo -e "${CYAN}[JARVIS]${RESET} Stopping remote agents..."
+  echo ""
+
+  for name in alpha beta; do
+    local upper; upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+    local host; host=$(_agent_host "$upper")
+    local agent_id; agent_id=$(_agent_id "$upper")
+    if [[ -z "$host" ]]; then continue; fi
+
+    echo -e "${BOLD}▸ ${name}${RESET} (${agent_id})"
+
+    ssh_to_agent "$name" "cd ~/Documents/Jarvis-2.0/jarvis && bash scripts/jarvis-agent.sh stop" 2>/dev/null \
+      && echo -e "  ${GREEN}✓${RESET} Agent stopped on ${name}" \
+      || echo -e "  ${RED}✗${RESET} Could not reach ${name}"
+
+    local pid_file="/tmp/jarvis-ssh-${agent_id}.pid"
+    if [[ -f "$pid_file" ]]; then
+      kill "$(cat "$pid_file")" 2>/dev/null || true
+      rm -f "$pid_file"
+    fi
+  done
+
+  echo ""
+}
+
+agents_status() {
+  echo ""
+  echo -e "${CYAN}╔═══════════════════════════════════════════════════════════╗${RESET}"
+  echo -e "${CYAN}║${RESET}  ${BOLD}JARVIS 2.0 // REMOTE AGENT STATUS${RESET}                       ${CYAN}║${RESET}"
+  echo -e "${CYAN}╚═══════════════════════════════════════════════════════════╝${RESET}"
+  echo ""
+
+  for name in alpha beta; do
+    local upper; upper=$(echo "$name" | tr '[:lower:]' '[:upper:]')
+    local host; host=$(_agent_host "$upper")
+    local user; user=$(_agent_user "$upper")
+    if [[ -z "$host" ]]; then
+      echo -e "  ${DIM}${name}: not configured${RESET}"
+      continue
+    fi
+
+    echo -e "${BOLD}▸ ${name}${RESET} (${user}@${host})"
+    ssh_to_agent "$name" "cd ~/Documents/Jarvis-2.0/jarvis && bash scripts/jarvis-agent.sh status" 2>/dev/null \
+      || echo -e "  ${RED}✗${RESET} Could not reach ${name} (${host})"
+    echo ""
+  done
+}
+
+ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
+warn() { echo -e "  ${YELLOW}⚠${RESET} $1"; }
+fail() { echo -e "  ${RED}✗${RESET} $1"; }
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 case "${1:-help}" in
-  start)    start_services ;;
-  stop)     stop_services ;;
-  restart)  stop_services; sleep 2; start_services ;;
-  status)   show_status ;;
-  logs)     show_logs "$@" ;;
-  health)   show_health ;;
+  start)          start_services ;;
+  stop)           stop_services ;;
+  restart)        stop_services; sleep 2; start_services ;;
+  status)         show_status ;;
+  logs)           show_logs "$@" ;;
+  health)         show_health ;;
+  agents-start)   agents_start ;;
+  agents-stop)    agents_stop ;;
+  agents-status)  agents_status ;;
   *)
     echo ""
     echo -e "${BOLD}JARVIS 2.0 // Master Management${RESET}"
@@ -344,12 +538,16 @@ case "${1:-help}" in
     echo "Uzycie: $0 {command}"
     echo ""
     echo "Komendy:"
-    echo "  start       Uruchom wszystkie serwisy (NATS, Redis, Gateway, Dashboard)"
-    echo "  stop        Zatrzymaj wszystkie serwisy"
-    echo "  restart     Restart wszystkich serwisow"
-    echo "  status      Pokaz status systemu"
-    echo "  health      Pokaz health JSON z Gateway"
-    echo "  logs        Pokaz logi (all|gateway|nats|redis|dashboard)"
+    echo "  start          Uruchom wszystkie serwisy (NATS, Redis, Gateway, Dashboard)"
+    echo "  stop           Zatrzymaj wszystkie serwisy"
+    echo "  restart        Restart wszystkich serwisow"
+    echo "  status         Pokaz status systemu"
+    echo "  health         Pokaz health JSON z Gateway"
+    echo "  logs           Pokaz logi (all|gateway|nats|redis|dashboard)"
+    echo ""
+    echo "  agents-start   Uruchom agentow na zdalnych maszynach (Alpha/Beta)"
+    echo "  agents-stop    Zatrzymaj agentow na zdalnych maszynach"
+    echo "  agents-status  Pokaz status zdalnych agentow"
     echo ""
     exit 1
     ;;

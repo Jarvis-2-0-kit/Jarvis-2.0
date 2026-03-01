@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   MessageCircle, Send, RefreshCw, Search, X,
   Plus, User, ChevronRight, Paperclip, AlertTriangle,
-  Phone, Mail, ArrowLeft,
+  Phone, Mail, ArrowLeft, Image, Film, FileText, Volume2,
 } from 'lucide-react';
 import { gateway } from '../gateway/client.js';
 import { useGatewayStore } from '../store/gateway-store.js';
@@ -34,6 +34,11 @@ interface Contact {
   emails: string[];
 }
 
+interface ChatAttachment {
+  filename: string;
+  mimeType: string;
+}
+
 interface ChatMessage {
   id: string;
   text: string;
@@ -41,6 +46,8 @@ interface ChatMessage {
   date: string;
   sender: string;
   hasAttachment: boolean;
+  type?: 'text' | 'image' | 'video' | 'audio' | 'file';
+  attachments?: ChatAttachment[];
 }
 
 // ─── Helpers ─────────────────────────────────────────
@@ -714,8 +721,19 @@ function ContactRow({ contact, onClick }: { contact: Contact; onClick: () => voi
   );
 }
 
+function getAttachmentUrl(filename: string): string {
+  const token = localStorage.getItem('jarvis_gateway_token') || '';
+  return `/api/imessage/attachment?path=${encodeURIComponent(filename)}&token=${encodeURIComponent(token)}`;
+}
+
 function MessageBubble({ msg }: { msg: ChatMessage }) {
   const fromMe = msg.isFromMe;
+  const attachments = msg.attachments ?? [];
+  const hasMedia = attachments.length > 0;
+  const isImageType = msg.type === 'image' || attachments.some((a) => a.mimeType.startsWith('image/'));
+  const isVideoType = msg.type === 'video' || attachments.some((a) => a.mimeType.startsWith('video/'));
+  const isAudioType = msg.type === 'audio' || attachments.some((a) => a.mimeType.startsWith('audio/'));
+  const hasInlineMedia = hasMedia && (isImageType || isVideoType || isAudioType);
 
   return (
     <div style={{
@@ -724,24 +742,87 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
       marginBottom: 3,
     }}>
       <div style={{
-        maxWidth: '70%', padding: '8px 14px',
+        maxWidth: '70%',
+        padding: hasInlineMedia && !msg.text ? '4px' : '8px 14px',
         borderRadius: fromMe ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
         background: fromMe ? '#007AFF' : 'var(--bg-tertiary)',
         border: fromMe ? 'none' : '1px solid var(--border-dim)',
         color: fromMe ? '#fff' : 'var(--text-white)',
+        overflow: 'hidden',
       }}>
-        {msg.hasAttachment && !msg.text && (
+        {/* Inline media rendering */}
+        {hasMedia && attachments.map((att, i) => {
+          const url = getAttachmentUrl(att.filename);
+          const mime = att.mimeType;
+          if (mime.startsWith('image/')) {
+            return (
+              <div key={i} style={{ marginBottom: msg.text ? 6 : 0 }}>
+                <img
+                  src={url}
+                  alt="attachment"
+                  style={{
+                    maxWidth: '100%', maxHeight: 300, borderRadius: 12,
+                    display: 'block', cursor: 'pointer',
+                  }}
+                  onClick={() => window.open(url, '_blank')}
+                  loading="lazy"
+                />
+              </div>
+            );
+          }
+          if (mime.startsWith('video/')) {
+            return (
+              <div key={i} style={{ marginBottom: msg.text ? 6 : 0 }}>
+                <video
+                  src={url}
+                  controls
+                  preload="metadata"
+                  style={{ maxWidth: '100%', maxHeight: 300, borderRadius: 12, display: 'block' }}
+                />
+              </div>
+            );
+          }
+          if (mime.startsWith('audio/')) {
+            return (
+              <div key={i} style={{ marginBottom: msg.text ? 6 : 0, padding: '4px 8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  <Volume2 size={14} style={{ opacity: 0.7 }} />
+                  <span style={{ fontSize: 11, opacity: 0.7 }}>Audio</span>
+                </div>
+                <audio src={url} controls preload="metadata" style={{ width: '100%', height: 32 }} />
+              </div>
+            );
+          }
+          // Generic file
+          const name = att.filename.split('/').pop() ?? 'file';
+          return (
+            <a key={i} href={url} target="_blank" rel="noopener noreferrer" style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 8px', marginBottom: msg.text ? 6 : 0,
+              fontSize: 12, color: fromMe ? '#fff' : 'var(--text-secondary)',
+              textDecoration: 'none',
+            }}>
+              <FileText size={14} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+            </a>
+          );
+        })}
+        {/* Fallback: hasAttachment flag but no parsed attachments */}
+        {msg.hasAttachment && !hasMedia && !msg.text && (
           <div style={{
             display: 'flex', alignItems: 'center', gap: 4,
             fontSize: 11, opacity: 0.7, fontStyle: 'italic',
+            padding: hasInlineMedia ? '0 8px' : 0,
           }}>
-            <Paperclip size={12} /> Attachment
+            {isImageType ? <Image size={12} /> : isVideoType ? <Film size={12} /> : <Paperclip size={12} />}
+            {msg.type === 'image' ? 'Photo' : msg.type === 'video' ? 'Video' : 'Attachment'}
           </div>
         )}
         {msg.text && (
           <div style={{
             fontSize: 13, lineHeight: 1.4, fontFamily: 'var(--font-ui)',
             wordBreak: 'break-word',
+            padding: hasInlineMedia ? '0 8px 4px' : 0,
           }}>
             {msg.text}
           </div>
@@ -749,6 +830,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
         <div style={{
           fontSize: 9, marginTop: 3, opacity: 0.5, textAlign: 'right',
           fontFamily: 'var(--font-mono)',
+          padding: hasInlineMedia ? '0 8px 2px' : 0,
         }}>
           {msg.date ? msg.date.split(' ')[1] || '' : ''}
         </div>

@@ -9,8 +9,8 @@ export function MetricsPanel() {
   const { totalCompleted, totalFailed } = useMemo(() => {
     const agentList = Array.from(agents.values());
     return {
-      totalCompleted: agentList.reduce((sum, a) => sum + a.completedTasks, 0),
-      totalFailed: agentList.reduce((sum, a) => sum + a.failedTasks, 0),
+      totalCompleted: agentList.reduce((sum, a) => sum + (a.completedTasks || 0), 0),
+      totalFailed: agentList.reduce((sum, a) => sum + (a.failedTasks || 0), 0),
     };
   }, [agents]);
 
