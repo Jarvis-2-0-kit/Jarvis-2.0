@@ -91,6 +91,7 @@ export class GatewayServer {
   private updateCheckInterval: ReturnType<typeof setInterval> | null = null;
   private updateAvailable: { commitsBehind: number; latestCommit: string; latestMessage: string; localHead: string; remoteHead: string } | null = null;
   private updateInProgress = false;
+  private agentStates = new Map<string, { status: string; activeTaskId: string | null }>();
 
   constructor(private readonly config: GatewayConfig) {
     this.app = express();
@@ -1688,14 +1689,20 @@ export class GatewayServer {
       }
 
       void this.store.setAgentState(state);
-      this.protocol.broadcast('agent.status', state);
+      // Only broadcast to dashboard if status or activeTask changed (avoid spamming re-renders)
+      const prevState = this.agentStates?.get(state.identity.agentId);
+      if (!prevState || prevState.status !== state.status || prevState.activeTaskId !== state.activeTaskId) {
+        this.protocol.broadcast('agent.status', state);
+      }
+      if (!this.agentStates) this.agentStates = new Map();
+      this.agentStates.set(state.identity.agentId, state);
     });
 
     this.nats.subscribe('jarvis.agent.*.heartbeat', (_data, msg) => {
       const agentId = msg.subject.split('.')[2];
       knownAgents.add(agentId);
       void this.store.updateHeartbeat(agentId);
-      this.protocol.broadcast('agent.heartbeat', { agentId, timestamp: Date.now() });
+      // Don't broadcast heartbeats to dashboard — agent.status already covers state changes
     });
 
     this.nats.subscribe('jarvis.agent.*.result', (data, msg) => {
@@ -1776,9 +1783,15 @@ export class GatewayServer {
 
     // ─── Inter-Agent Communication ───────────────────
 
-    // Agent discovery (online/offline announcements)
+    // Agent discovery (online/offline announcements) — throttled to avoid flooding dashboard
+    const lastDiscovery = new Map<string, { status: string; time: number }>();
     this.nats.subscribe(NatsSubjects.agentsDiscovery, (data) => {
       const msg = data as { agentId: string; role?: string; status?: string; capabilities?: string[]; hostname?: string; timestamp?: number };
+      const prev = lastDiscovery.get(msg.agentId);
+      const now = Date.now();
+      // Only broadcast if status changed OR 60s elapsed since last broadcast
+      if (prev && prev.status === (msg.status ?? 'online') && now - prev.time < 60_000) return;
+      lastDiscovery.set(msg.agentId, { status: msg.status ?? 'online', time: now });
       log.info(`Agent discovery: ${msg.agentId} → ${msg.status ?? 'unknown'}`);
       this.protocol.broadcast('agent.discovery', msg);
     });

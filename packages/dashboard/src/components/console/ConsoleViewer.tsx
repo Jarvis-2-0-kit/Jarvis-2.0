@@ -27,7 +27,7 @@ let lineId = 0;
 export function ConsoleViewer() {
   const [lines, setLines] = useState<ConsoleLine[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const maxLines = 500;
+  const maxLines = 200;
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
