@@ -164,6 +164,16 @@ export function ChatPanel() {
     };
   }, []);
 
+  // Auto-clear stale typing indicators (30s timeout)
+  useEffect(() => {
+    const anyTyping = Object.values(isTyping).some(Boolean);
+    if (!anyTyping) return;
+    const timer = setTimeout(() => {
+      setIsTyping({});
+    }, 30_000);
+    return () => clearTimeout(timer);
+  }, [isTyping]);
+
   // Scroll detection
   const handleScroll = useCallback(() => {
     const container = scrollContainerRef.current;

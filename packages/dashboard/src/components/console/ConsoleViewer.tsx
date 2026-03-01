@@ -1,6 +1,12 @@
 import { useRef, useEffect } from 'react';
 import { useGatewayStore } from '../../store/gateway-store.js';
 
+const AGENT_LABEL: Record<string, { label: string; color: string }> = {
+  'agent-smith': { label: 'SMITH', color: 'var(--cyan-muted)' },
+  'agent-johny': { label: 'JOHNY', color: 'var(--purple)' },
+  jarvis: { label: 'JARVIS', color: 'var(--green-bright)' },
+};
+
 export function ConsoleViewer() {
   const consoleLines = useGatewayStore((s) => s.consoleLines);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -33,22 +39,22 @@ export function ConsoleViewer() {
             <span style={{ animation: 'blink 1s ease-in-out infinite', color: 'var(--green-bright)' }}>_</span>
           </div>
         ) : (
-          consoleLines.map((line, i) => (
-            <div key={`line-${i}-${line.line.slice(0, 20)}`} style={{
-              animation: 'slide-in 0.15s ease-out',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-            }}>
-              <span style={{
-                color: line.agentId === 'agent-smith' ? 'var(--cyan-muted)' : 'var(--purple)',
-                fontSize: 10,
+          consoleLines.map((line, i) => {
+            const cfg = AGENT_LABEL[line.agentId] ?? { label: line.agentId.toUpperCase(), color: 'var(--text-muted)' };
+            return (
+              <div key={`line-${i}-${line.line.slice(0, 20)}`} style={{
+                animation: 'slide-in 0.15s ease-out',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-all',
               }}>
-                [{line.agentId === 'agent-smith' ? 'SMITH' : 'JOHNY'}]
-              </span>
-              {' '}
-              <span style={{ color: 'var(--green-secondary)' }}>{line.line}</span>
-            </div>
-          ))
+                <span style={{ color: cfg.color, fontSize: 10 }}>
+                  [{cfg.label}]
+                </span>
+                {' '}
+                <span style={{ color: 'var(--green-secondary)' }}>{line.line}</span>
+              </div>
+            );
+          })
         )}
         <div ref={bottomRef} />
       </div>

@@ -327,6 +327,22 @@ export const useGatewayStore = create<GatewayStore>((set, get) => ({
       }));
     }));
 
+    // Map chat.stream deltas into console lines so the Console panel shows agent activity
+    unsubs.push(gateway.on('chat.stream', (payload) => {
+      const d = payload as { from?: string; phase?: string; text?: string; toolName?: string; timestamp?: number };
+      const agentId = d.from ?? 'jarvis';
+      if (agentId === 'jarvis') return; // only show worker agents
+      let line = '';
+      if (d.phase === 'thinking' && d.text) line = d.text;
+      else if (d.phase === 'text' && d.text) line = d.text;
+      else if (d.phase === 'tool_start') line = `▶ ${d.toolName ?? 'tool'}`;
+      else if (d.phase === 'done') line = '✓ done';
+      if (!line) return;
+      set((prev) => ({
+        consoleLines: [...prev.consoleLines.slice(-1000), { agentId, line, timestamp: d.timestamp ?? Date.now() }],
+      }));
+    }));
+
     // --- OTA Update events ---
     unsubs.push(gateway.on('system.update.available', (payload) => {
       set({ update: payload as UpdateInfo });

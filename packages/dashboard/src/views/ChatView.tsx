@@ -383,6 +383,16 @@ export function ChatView() {
     };
   }, [activeSessionId]);
 
+  // ── Auto-clear stale typing indicators (30s timeout) ──
+  useEffect(() => {
+    if (agentStreams.size === 0) return;
+    const timer = setTimeout(() => {
+      setAgentStreams(new Map());
+      setIsAgentRunning(false);
+    }, 30_000);
+    return () => clearTimeout(timer);
+  }, [agentStreams]);
+
   // ── Reset streaming state on disconnect ──
   useEffect(() => {
     const unsub = gateway.on('_disconnected', () => {
