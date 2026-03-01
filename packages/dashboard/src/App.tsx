@@ -226,6 +226,33 @@ function AppHeader() {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <a
+          href="https://buy.stripe.com/eVqcN7bbA9v397k14c4sE00"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            padding: '4px 12px',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: 1.5,
+            fontFamily: 'var(--font-ui)',
+            color: '#fff',
+            background: 'linear-gradient(135deg, #ff6600, #ff4400)',
+            border: '1px solid #ff6600',
+            borderRadius: 4,
+            textDecoration: 'none',
+            cursor: 'pointer',
+            boxShadow: '0 0 8px rgba(255,102,0,0.3)',
+            transition: 'all 0.2s',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.boxShadow = '0 0 16px rgba(255,102,0,0.6)'; e.currentTarget.style.transform = 'scale(1.05)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.boxShadow = '0 0 8px rgba(255,102,0,0.3)'; e.currentTarget.style.transform = 'scale(1)'; }}
+        >
+          DONATE
+        </a>
         <span style={{
           display: 'flex',
           alignItems: 'center',

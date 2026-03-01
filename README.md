@@ -19,6 +19,7 @@
 [![License](https://img.shields.io/badge/LICENSE-PRIVATE-555555?style=for-the-badge&labelColor=0a0a0a)]()
 [![Website](https://img.shields.io/badge/WEBSITE-LIVE-00ff41?style=for-the-badge&logo=firebase&logoColor=00ff41&labelColor=0a0a0a)](https://jarvis2-website.web.app)
 [![X/Twitter](https://img.shields.io/badge/FOLLOW-@0__jarvis63497-00ff41?style=for-the-badge&logo=x&logoColor=00ff41&labelColor=0a0a0a)](https://x.com/0_jarvis63497)
+[![Donate](https://img.shields.io/badge/DONATE-SUPPORT_JARVIS-ff6600?style=for-the-badge&logo=stripe&logoColor=white&labelColor=0a0a0a)](https://buy.stripe.com/eVqcN7bbA9v397k14c4sE00)
 
 </div>
 
