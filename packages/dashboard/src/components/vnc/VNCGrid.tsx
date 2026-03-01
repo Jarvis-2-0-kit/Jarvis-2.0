@@ -305,6 +305,7 @@ export function VNCGrid() {
                     host={ep.host}
                     port={ep.port}
                     id={ep.id}
+                    target={ep.id}
                     username={ep.username}
                     password={ep.password}
                     viewOnly={viewOnly}

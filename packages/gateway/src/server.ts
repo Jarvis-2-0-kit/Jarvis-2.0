@@ -426,6 +426,169 @@ export class GatewayServer {
       });
     });
 
+    // ── VNC file transfer: upload file → SCP to remote machine ──────────
+    this.app.post('/api/vnc/upload', async (req, res) => {
+      try {
+        const target = req.query['target'] as string; // 'alpha' or 'beta'
+        const filename = req.query['filename'] as string;
+        if (!target || !filename) {
+          res.status(400).json({ error: 'Missing target or filename' });
+          return;
+        }
+
+        // Resolve SSH target
+        const sshKey = resolve(process.env['HOME'] ?? '/Users/kamilpadula', '.ssh/id_ed25519_jarvis');
+        let sshUser: string;
+        let sshHost: string;
+        if (target === 'alpha') {
+          sshHost = process.env['SSH_ALPHA_HOST'] ?? '192.168.1.37';
+          sshUser = process.env['SSH_ALPHA_USER'] ?? 'Agent_Smith';
+        } else if (target === 'beta') {
+          sshHost = process.env['SSH_BETA_HOST'] ?? '192.168.1.32';
+          sshUser = process.env['SSH_BETA_USER'] ?? 'agent_johny';
+        } else {
+          res.status(400).json({ error: 'Invalid target (use alpha or beta)' });
+          return;
+        }
+
+        // Sanitize filename
+        const safeName = filename.replace(/[^a-zA-Z0-9._\- ]/g, '_').slice(0, 255);
+        if (!safeName) {
+          res.status(400).json({ error: 'Invalid filename' });
+          return;
+        }
+
+        // Collect raw body (file bytes)
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+          // 500MB limit
+          const total = chunks.reduce((a, b) => a + b.length, 0);
+          if (total > 500 * 1024 * 1024) {
+            res.status(413).json({ error: 'File too large (max 500MB)' });
+            return;
+          }
+        }
+        const fileBuffer = Buffer.concat(chunks);
+
+        // Write to temp file
+        const tmpDir = '/tmp/jarvis-vnc-upload';
+        if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
+        const tmpPath = join(tmpDir, `${Date.now()}-${safeName}`);
+        writeFileSync(tmpPath, fileBuffer);
+
+        // SCP to remote Desktop
+        const remotePath = `/Users/${sshUser}/Desktop/${safeName}`;
+        await execFileAsync('scp', [
+          '-i', sshKey,
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'ConnectTimeout=10',
+          tmpPath,
+          `${sshUser}@${sshHost}:${remotePath}`,
+        ]);
+
+        // Cleanup temp
+        try { unlinkSync(tmpPath); } catch { /* ignore */ }
+
+        log.info(`VNC file transfer: ${safeName} (${(fileBuffer.length / 1024).toFixed(1)}KB) → ${target} (${sshHost}:${remotePath})`);
+        res.json({ ok: true, path: remotePath, size: fileBuffer.length });
+      } catch (err) {
+        log.error('VNC file transfer failed', { error: String(err) });
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // ── VNC clipboard: push text to remote via pbcopy over SSH ──────────
+    this.app.post('/api/vnc/clipboard', async (req, res) => {
+      try {
+        const target = req.query['target'] as string;
+        if (!target) {
+          res.status(400).json({ error: 'Missing target' });
+          return;
+        }
+
+        const sshKey = resolve(process.env['HOME'] ?? '/Users/kamilpadula', '.ssh/id_ed25519_jarvis');
+        let sshUser: string;
+        let sshHost: string;
+        if (target === 'alpha') {
+          sshHost = process.env['SSH_ALPHA_HOST'] ?? '192.168.1.37';
+          sshUser = process.env['SSH_ALPHA_USER'] ?? 'Agent_Smith';
+        } else if (target === 'beta') {
+          sshHost = process.env['SSH_BETA_HOST'] ?? '192.168.1.32';
+          sshUser = process.env['SSH_BETA_USER'] ?? 'agent_johny';
+        } else {
+          res.status(400).json({ error: 'Invalid target' });
+          return;
+        }
+
+        // Read text body
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+        }
+        const text = Buffer.concat(chunks).toString('utf-8').slice(0, 100_000);
+
+        // Push to remote clipboard via SSH + pbcopy (macOS)
+        const child = spawn('ssh', [
+          '-i', sshKey,
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'ConnectTimeout=5',
+          `${sshUser}@${sshHost}`,
+          'pbcopy',
+        ], { stdio: ['pipe', 'pipe', 'pipe'] });
+        child.stdin.write(text);
+        child.stdin.end();
+
+        await new Promise<void>((ok, fail) => {
+          child.on('close', (code) => code === 0 ? ok() : fail(new Error(`pbcopy exit ${code}`)));
+          child.on('error', fail);
+        });
+
+        res.json({ ok: true });
+      } catch (err) {
+        log.error('VNC clipboard push failed', { error: String(err) });
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    // ── VNC clipboard: read from remote via pbpaste over SSH ──────────
+    this.app.get('/api/vnc/clipboard', async (req, res) => {
+      try {
+        const target = req.query['target'] as string;
+        if (!target) {
+          res.status(400).json({ error: 'Missing target' });
+          return;
+        }
+
+        const sshKey = resolve(process.env['HOME'] ?? '/Users/kamilpadula', '.ssh/id_ed25519_jarvis');
+        let sshUser: string;
+        let sshHost: string;
+        if (target === 'alpha') {
+          sshHost = process.env['SSH_ALPHA_HOST'] ?? '192.168.1.37';
+          sshUser = process.env['SSH_ALPHA_USER'] ?? 'Agent_Smith';
+        } else if (target === 'beta') {
+          sshHost = process.env['SSH_BETA_HOST'] ?? '192.168.1.32';
+          sshUser = process.env['SSH_BETA_USER'] ?? 'agent_johny';
+        } else {
+          res.status(400).json({ error: 'Invalid target' });
+          return;
+        }
+
+        const { stdout } = await execFileAsync('ssh', [
+          '-i', sshKey,
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'ConnectTimeout=5',
+          `${sshUser}@${sshHost}`,
+          'pbpaste',
+        ]);
+
+        res.json({ text: stdout.slice(0, 100_000) });
+      } catch (err) {
+        log.error('VNC clipboard read failed', { error: String(err) });
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     // Network config (read from NAS config/network.json)
     this.app.get('/api/config', (_req, res) => {
       try {
