@@ -1545,7 +1545,6 @@ export class GatewayServer {
       if (result.taskId) {
         void this.store.updateTask(result.taskId, { status: finalStatus }).catch((err: unknown) => {
           log.error(`Failed to update task ${result.taskId} status to ${finalStatus}: ${(err as Error).message}`);
-          throw err;
         });
       }
 
