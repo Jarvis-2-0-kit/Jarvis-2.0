@@ -171,9 +171,6 @@ importers:
 
   packages/shared:
     dependencies:
-      nanoid:
-        specifier: ^5.1.0
-        version: 5.1.6
       zod:
         specifier: ^3.24.0
         version: 3.25.76

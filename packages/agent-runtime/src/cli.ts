@@ -186,6 +186,7 @@ async function main(): Promise<void> {
   const tools = new ToolRegistry({
     enableBrowser: true,
     enableExec: true,
+    execSecurity: { mode: 'full' },
     enableFileOps: true,
     enableWebFetch: true,
     enableWebSearch: true,

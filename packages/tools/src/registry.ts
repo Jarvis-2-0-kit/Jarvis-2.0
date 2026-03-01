@@ -1,7 +1,7 @@
 import { createLogger } from '@jarvis/shared';
 import type { AgentTool, ToolContext, ToolResult } from './base.js';
 import { createErrorResult } from './base.js';
-import { ExecTool } from './exec.js';
+import { ExecTool, type ExecSecurityConfig } from './exec.js';
 import { ReadTool, WriteTool, EditTool, ListTool, SearchTool } from './file-ops.js';
 import { BrowserTool } from './browser.js';
 import { WebFetchTool } from './web-fetch.js';
@@ -24,6 +24,7 @@ const log = createLogger('tools:registry');
 export interface ToolRegistryConfig {
   enableBrowser?: boolean;
   enableExec?: boolean;
+  execSecurity?: Partial<ExecSecurityConfig>;
   enableFileOps?: boolean;
   enableWebFetch?: boolean;
   enableWebSearch?: boolean;
@@ -70,7 +71,7 @@ export class ToolRegistry {
     this.sshHosts = config.sshHosts ?? {};
     // Register core tools based on config
     if (config.enableExec !== false) {
-      this.register(new ExecTool());
+      this.register(new ExecTool(config.execSecurity));
     }
 
     if (config.enableFileOps !== false) {

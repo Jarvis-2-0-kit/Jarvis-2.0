@@ -11,6 +11,7 @@ export { isPrivateUrl } from './ssrf.js';
 
 // Core tools
 export { ExecTool } from './exec.js';
+export type { ExecSecurityConfig, SecurityMode } from './exec.js';
 export { ReadTool, WriteTool, EditTool, ListTool, SearchTool } from './file-ops.js';
 export { BrowserTool } from './browser.js';
 export { WebFetchTool } from './web-fetch.js';
