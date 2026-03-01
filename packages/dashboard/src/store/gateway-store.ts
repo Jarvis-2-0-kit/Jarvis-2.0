@@ -328,10 +328,11 @@ export const useGatewayStore = create<GatewayStore>((set, get) => ({
     }));
 
     // Map chat.stream deltas into console lines so the Console panel shows agent activity
+    console.log('[JARVIS-STORE] Registering chat.stream → consoleLines handler');
     unsubs.push(gateway.on('chat.stream', (payload) => {
       const d = payload as { from?: string; phase?: string; text?: string; toolName?: string; timestamp?: number };
+      console.log('[JARVIS-CONSOLE]', d.from, d.phase, (d.text || '').slice(0, 60));
       const agentId = d.from ?? 'jarvis';
-      if (agentId === 'jarvis') return; // only show worker agents
       let line = '';
       if (d.phase === 'thinking' && d.text) line = d.text;
       else if (d.phase === 'text' && d.text) line = d.text;
