@@ -59,12 +59,73 @@ wait_for_port() {
   echo -e "  ${GREEN}✓${RESET} $name dziala (port $port)"
 }
 
+# ─── Kill stale processes ─────────────────────────────────────────────────────
+kill_stale_processes() {
+  echo -e "${BOLD}▸ Cleaning up stale processes${RESET}"
+  local killed=0
+
+  # Kill old orchestrator/agent-runtime instances on master
+  local old_pids
+  old_pids=$(pgrep -f "tsx.*packages/agent-runtime/src/cli.ts" 2>/dev/null || true)
+  if [[ -n "$old_pids" ]]; then
+    echo "$old_pids" | xargs kill 2>/dev/null || true
+    sleep 1
+    # Force kill survivors
+    old_pids=$(pgrep -f "tsx.*packages/agent-runtime/src/cli.ts" 2>/dev/null || true)
+    if [[ -n "$old_pids" ]]; then
+      echo "$old_pids" | xargs kill -9 2>/dev/null || true
+    fi
+    killed=1
+  fi
+
+  # Kill old gateway instances
+  old_pids=$(pgrep -f "tsx.*packages/gateway/src/index.ts" 2>/dev/null || true)
+  if [[ -n "$old_pids" ]]; then
+    echo "$old_pids" | xargs kill 2>/dev/null || true
+    sleep 1
+    old_pids=$(pgrep -f "tsx.*packages/gateway/src/index.ts" 2>/dev/null || true)
+    if [[ -n "$old_pids" ]]; then
+      echo "$old_pids" | xargs kill -9 2>/dev/null || true
+    fi
+    killed=1
+  fi
+
+  # Kill old nats-server instances
+  old_pids=$(pgrep -x nats-server 2>/dev/null || true)
+  if [[ -n "$old_pids" ]]; then
+    echo "$old_pids" | xargs kill 2>/dev/null || true
+    sleep 1
+    killed=1
+  fi
+
+  # Kill old dashboard vite instances
+  old_pids=$(pgrep -f "vite.*dashboard" 2>/dev/null || true)
+  if [[ -n "$old_pids" ]]; then
+    echo "$old_pids" | xargs kill 2>/dev/null || true
+    sleep 1
+    killed=1
+  fi
+
+  # Clean stale PID files
+  rm -f /tmp/jarvis-nats.pid /tmp/jarvis-gateway.pid /tmp/jarvis-orchestrator.pid
+
+  if [[ $killed -eq 1 ]]; then
+    echo -e "  ${GREEN}✓${RESET} Stale processes killed"
+    sleep 1
+  else
+    echo -e "  ${DIM}  No stale processes found${RESET}"
+  fi
+}
+
 # ─── Komendy ────────────────────────────────────────────────────────────────
 start_services() {
   echo ""
   echo -e "${CYAN}╔═══════════════════════════════════════════════════════════╗${RESET}"
   echo -e "${CYAN}║${RESET}  ${BOLD}JARVIS 2.0${RESET} ${DIM}// STARTING MASTER NODE${RESET}                     ${CYAN}║${RESET}"
   echo -e "${CYAN}╚═══════════════════════════════════════════════════════════╝${RESET}"
+  echo ""
+
+  kill_stale_processes
   echo ""
 
   # --- NATS ---
