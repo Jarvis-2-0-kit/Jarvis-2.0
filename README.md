@@ -5,7 +5,7 @@
 <br>
 
 <a href="https://readme-typing-svg.demolab.com">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=18&duration=3000&pause=1000&color=00FF41&center=true&vCenter=true&width=600&lines=%3E+Autonomous+Multi-Agent+AI+Orchestration;%3E+Self-hosted+on+dedicated+Mac+Mini+hardware;%3E+33%2B+tools+%7C+12+plugins+%7C+31+dashboard+views;%3E+System+online.+All+agents+operational." alt="Typing SVG">
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=18&duration=3000&pause=1000&color=00FF41&center=true&vCenter=true&width=600&lines=%3E+Autonomous+Multi-Agent+AI+Orchestration;%3E+Self-hosted+on+dedicated+Mac+Mini+hardware;%3E+33%2B+tools+%7C+12+plugins+%7C+32+dashboard+views;%3E+System+online.+All+agents+operational." alt="Typing SVG">
 </a>
 
 <br><br>
@@ -20,6 +20,32 @@
 [![Website](https://img.shields.io/badge/WEBSITE-LIVE-00ff41?style=for-the-badge&logo=firebase&logoColor=00ff41&labelColor=0a0a0a)](https://jarvis2-website.web.app)
 [![X/Twitter](https://img.shields.io/badge/FOLLOW-@0__jarvis63497-00ff41?style=for-the-badge&logo=x&logoColor=00ff41&labelColor=0a0a0a)](https://x.com/0_jarvis63497)
 [![Donate](https://img.shields.io/badge/DONATE-SUPPORT_JARVIS-ff6600?style=for-the-badge&logo=stripe&logoColor=white&labelColor=0a0a0a)](https://buy.stripe.com/eVqcN7bbA9v397k14c4sE00)
+[![Download](https://img.shields.io/badge/DOWNLOAD-macOS_App-00ff41?style=for-the-badge&logo=apple&logoColor=00ff41&labelColor=0a0a0a)](https://github.com/Jarvis-2-0-kit/Jarvis-2.0/releases/latest)
+
+</div>
+
+<img src="assets/divider.svg" alt="" width="100%">
+
+## ░ DOWNLOAD
+
+<div align="center">
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║  JARVIS DESKTOP APP  ◆  macOS  ◆  Apple Silicon  ◆  v1.0.0 ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+All-in-one native macOS application — bundles **Gateway**, **Dashboard**, **NATS**, and **Redis**. Zero setup required. Download, open, and go.
+
+| | |
+|:--|:--|
+| **Platform** | macOS 13.0+ (Apple Silicon — M1/M2/M3/M4) |
+| **Size** | ~43 MB |
+| **Includes** | Gateway + Dashboard + NATS + Redis |
+| **Setup** | None — download, open, done |
+
+[**⬇ Download Latest Release**](https://github.com/Jarvis-2-0-kit/Jarvis-2.0/releases/latest)
 
 </div>
 
@@ -51,6 +77,39 @@ One-click over-the-air updates — right from the dashboard. Gateway polls GitHu
 
 </td>
 </tr>
+<tr>
+<td width="60%">
+
+### Agent Setup Wizard
+
+Dashboard-integrated wizard for agent onboarding, deployment, and lifecycle management. No more manual CLI setup — configure and launch agents from the UI.
+
+- **3-step wizard** — Master Status → Add Agent → Verify & Launch
+- Auto-generates NATS tokens and auth credentials
+- One-click `.env` generation for remote agents
+- **Start / Stop / Restart** buttons directly in Agents view
+- Network scan for automatic machine discovery
+- Agent Registry panel with real-time status tracking
+
+> **Where to find it:** Open the Dashboard → **Sidebar** → **Setup Wizard** (under System group). Or manage running agents from **Agents** view with the new lifecycle buttons.
+
+</td>
+<td width="40%">
+
+### macOS Desktop App
+
+Native Swift + WebKit wrapper that bundles the entire Jarvis stack into a single `.app` — no terminal, no brew, no config files.
+
+- **Zero setup** — download, open, done
+- Bundles Gateway, Dashboard, NATS, Redis
+- Apple Silicon optimized (M1/M2/M3/M4)
+- macOS 13.0+ compatible
+- ~43 MB download size
+
+> **Download:** [**GitHub Releases**](https://github.com/Jarvis-2-0-kit/Jarvis-2.0/releases/latest)
+
+</td>
+</tr>
 </table>
 
 <img src="assets/divider.svg" alt="" width="100%">
@@ -61,7 +120,7 @@ One-click over-the-air updates — right from the dashboard. Gateway polls GitHu
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> `33+ TOOLS LOADED` | `12 PLUGINS ACTIVE` | `31 DASHBOARD VIEWS` | `50+ SKILLS AVAILABLE`
+> `33+ TOOLS LOADED` | `12 PLUGINS ACTIVE` | `32 DASHBOARD VIEWS` | `50+ SKILLS AVAILABLE`
 
 A personal AI infrastructure running on dedicated Mac Mini hardware — coordinating multiple autonomous agents through NATS messaging, Redis state, and a cyberpunk-themed real-time dashboard. Unlike cloud-only AI assistants, Jarvis operates on your own hardware with full access to your local environment — files, applications, shell, network, and macOS APIs.
 
@@ -145,7 +204,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 <br>
 
 - Cyberpunk-themed UI with matrix green palette, glow effects, and scanline overlay
-- 31 views — Agents, Chat, Tasks, Sessions, Workflows, Timeline, Orchestrator, and more
+- 32 views — Agents, Chat, Tasks, Sessions, Workflows, Timeline, Orchestrator, Setup Wizard, and more
 - Fullscreen App Launcher — macOS Launchpad-style navigation with 5 categorized groups
 - Live WebSocket updates — agent heartbeats, task progress, chat messages
 - Code-split routing — React.lazy() for all views with Suspense loading
@@ -297,7 +356,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 
 ## ░ DASHBOARD_VIEWS
 
-> `31 VIEWS // REAL-TIME MONITORING & CONTROL`
+> `32 VIEWS // REAL-TIME MONITORING & CONTROL`
 
 | View | Description |
 |:-----|:------------|
@@ -328,6 +387,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 | `Files` | NAS file browser |
 | `Environment` | Environment variable management |
 | `Config` | System configuration |
+| `Setup Wizard` | Agent onboarding wizard — add, deploy, and manage agents |
 | `Debug` | Debug tools and diagnostics |
 
 <img src="assets/divider.svg" alt="" width="100%">
@@ -427,7 +487,7 @@ jarvis/
 │   │   ├── src/
 │   │   │   ├── App.tsx                # Router + lazy loading
 │   │   │   ├── components/nav/        # Sidebar + App Launcher
-│   │   │   ├── views/                # 31 view components
+│   │   │   ├── views/                # 32 view components
 │   │   │   ├── store/                # Zustand state (gateway, toast)
 │   │   │   ├── gateway/client.ts     # WebSocket protocol client
 │   │   │   └── theme/global.css      # Cyberpunk theme
@@ -435,6 +495,10 @@ jarvis/
 │   │
 │   ├── shared/                 # ◆ Shared types & utilities
 │   │   └── src/types/                # Zod schemas (Task, Agent, etc.)
+│   │
+│   ├── desktop/                # ◆ Native macOS app (Swift + WebKit)
+│   │   ├── Jarvis.xcodeproj         # Xcode project
+│   │   └── Jarvis/                  # Swift source + bundled services
 │   │
 │   └── tools/                  # ◆ Agent tool implementations
 │       └── src/integrations/         # iMessage, Spotify, etc.
