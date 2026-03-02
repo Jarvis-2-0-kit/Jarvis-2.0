@@ -37,6 +37,7 @@ import {
   Grid3X3,
   X,
   Share2,
+  Wand2,
 } from 'lucide-react';
 
 // ─── Types ──────────────────────────────────────────
@@ -130,6 +131,7 @@ const MENU_GROUPS: NavGroup[] = [
       { to: '/api-keys', icon: Key, label: 'API Keys' },
       { to: '/files', icon: HardDrive, label: 'Files' },
       { to: '/environment', icon: Variable, label: 'Environment' },
+      { to: '/setup', icon: Wand2, label: 'Setup Wizard' },
       { to: '/config', icon: Settings, label: 'Config' },
       { to: '/debug', icon: Bug, label: 'Debug' },
     ],

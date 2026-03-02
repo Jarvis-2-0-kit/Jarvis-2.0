@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { hostname, cpus, totalmem, freemem, loadavg, networkInterfaces, uptime as osUptime } from 'node:os';
 import { execSync, execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { timingSafeEqual, createHash, createHmac } from 'node:crypto';
+import { timingSafeEqual, createHash, createHmac, randomBytes } from 'node:crypto';
 
 const execFileAsync = promisify(execFile);
 import { z } from 'zod';
@@ -24,6 +24,7 @@ import {
   type AgentId,
   type TaskDefinition,
   type ChatMessage,
+  type AgentRegistryEntry,
   RateLimiter,
   initAuditLogger,
   getAuditLogger,
@@ -92,6 +93,7 @@ export class GatewayServer {
   private updateAvailable: { commitsBehind: number; latestCommit: string; latestMessage: string; localHead: string; remoteHead: string } | null = null;
   private updateInProgress = false;
   private agentStates = new Map<string, { status: string; activeTaskId: string | null }>();
+  private spawnedAgents = new Map<string, import('node:child_process').ChildProcess>();
 
   constructor(private readonly config: GatewayConfig) {
     this.app = express();
@@ -380,6 +382,25 @@ export class GatewayServer {
         return;
       }
       if (!existsSync(resolved)) { res.status(404).json({ error: 'File not found' }); return; }
+      res.sendFile(resolved);
+    });
+
+    // Serve social media files (images, videos) for dashboard thumbnail preview
+    this.app.get('/api/social/media', (req, res) => {
+      const filePath = req.query.path as string;
+      if (!filePath) { res.status(400).json({ error: 'path required' }); return; }
+      const resolved = resolve(filePath);
+      // Security: block path traversal attempts
+      if (resolved.includes('..') || !existsSync(resolved)) {
+        res.status(404).json({ error: 'File not found' });
+        return;
+      }
+      const ext = resolved.slice(resolved.lastIndexOf('.')).toLowerCase();
+      const allowed = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.avi', '.webm', '.heic', '.heif']);
+      if (!allowed.has(ext)) {
+        res.status(403).json({ error: 'File type not allowed' });
+        return;
+      }
       res.sendFile(resolved);
     });
 
@@ -1647,6 +1668,535 @@ export class GatewayServer {
 
     this.protocol.registerMethod('system.update.status', async () => {
       return this.getUpdateStatus();
+    });
+
+    // --- Social Media Methods ---
+
+    this.protocol.registerMethod('social.config', async () => {
+      const envPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env');
+      const env = existsSync(envPath) ? readFileSync(envPath, 'utf-8') : '';
+      const has = (key: string) => env.includes(`${key}=`) && !env.includes(`${key}=\n`) && !env.includes(`${key}=\r`);
+      return {
+        twitter: has('TWITTER_API_KEY') && has('TWITTER_ACCESS_TOKEN'),
+        instagram: has('INSTAGRAM_ACCESS_TOKEN'),
+        facebook: has('FACEBOOK_PAGE_TOKEN'),
+        linkedin: has('LINKEDIN_ACCESS_TOKEN'),
+        tiktok: has('TIKTOK_ACCESS_TOKEN'),
+      };
+    });
+
+    this.protocol.registerMethod('social.config.save', async (params) => {
+      const { platform, keys } = params as { platform: string; keys: Record<string, string> };
+      if (!platform || !keys || typeof keys !== 'object') throw new Error('platform and keys required');
+      const envPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../.env');
+      let envContent = existsSync(envPath) ? readFileSync(envPath, 'utf-8') : '';
+      for (const [key, value] of Object.entries(keys)) {
+        // Sanitize key name - only allow alphanumeric and underscores
+        const safeKey = key.replace(/[^A-Z0-9_]/gi, '');
+        if (!safeKey) continue;
+        const regex = new RegExp(`^${safeKey}=.*$`, 'm');
+        if (regex.test(envContent)) {
+          envContent = envContent.replace(regex, `${safeKey}=${value}`);
+        } else {
+          envContent = envContent.trimEnd() + `\n${safeKey}=${value}`;
+        }
+        // Also set in current process
+        process.env[safeKey] = value;
+      }
+      writeFileSync(envPath, envContent + '\n');
+      log.info(`Social config saved for platform: ${platform}`);
+      return { success: true, platform };
+    });
+
+    this.protocol.registerMethod('social.schedule.list', async () => {
+      const schedulePath = this.nas.resolve('config/social-schedule.json');
+      if (!existsSync(schedulePath)) return [];
+      try {
+        return JSON.parse(readFileSync(schedulePath, 'utf-8'));
+      } catch { return []; }
+    });
+
+    this.protocol.registerMethod('social.schedule', async (params) => {
+      const p = params as Record<string, unknown>;
+      const schedulePath = this.nas.resolve('config/social-schedule.json');
+      const dir = dirname(schedulePath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+      let posts: Record<string, unknown>[] = [];
+      if (existsSync(schedulePath)) {
+        try { posts = JSON.parse(readFileSync(schedulePath, 'utf-8')); } catch { posts = []; }
+      }
+
+      const newPost = {
+        id: shortId(),
+        platform: p.platform ?? 'twitter',
+        action: p.post_type ?? p.action ?? 'post',
+        text: p.text ?? '',
+        mediaUrl: p.media_url ?? '',
+        link: p.link ?? '',
+        title: p.title ?? '',
+        scheduledAt: p.scheduled_at ? new Date(p.scheduled_at as string).getTime() : Date.now() + 3600000,
+        status: 'scheduled',
+        createdAt: Date.now(),
+      };
+      posts.push(newPost);
+      writeFileSync(schedulePath, JSON.stringify(posts, null, 2));
+      log.info(`Social post scheduled: ${newPost.id} for ${newPost.platform}`);
+      return { success: true, post: newPost };
+    });
+
+    this.protocol.registerMethod('social.schedule.cancel', async (params) => {
+      const { post_id } = params as { post_id: string; action?: string };
+      if (!post_id) throw new Error('post_id required');
+      const schedulePath = this.nas.resolve('config/social-schedule.json');
+      if (!existsSync(schedulePath)) throw new Error('No schedule file found');
+
+      const posts = JSON.parse(readFileSync(schedulePath, 'utf-8')) as Record<string, unknown>[];
+      const idx = posts.findIndex((p) => p.id === post_id);
+      if (idx === -1) throw new Error('Post not found');
+      posts[idx].status = 'cancelled';
+      writeFileSync(schedulePath, JSON.stringify(posts, null, 2));
+      log.info(`Social post cancelled: ${post_id}`);
+      return { success: true };
+    });
+
+    this.protocol.registerMethod('social.post', async (params) => {
+      const p = params as { platform: string; action?: string; text: string; media_url?: string; link?: string; title?: string };
+      if (!p.text) throw new Error('text required');
+
+      // Send to agent-johny via NATS DM for execution
+      const task = {
+        from: 'dashboard',
+        type: 'social_post',
+        content: `Use the social_post tool to publish on ${p.platform}: "${p.text}"${p.media_url ? ` with media: ${p.media_url}` : ''}`,
+        params: p,
+        timestamp: Date.now(),
+      };
+
+      try {
+        await this.nats.publish(NatsSubjects.chat('agent-johny'), {
+          id: shortId(),
+          from: 'dashboard',
+          to: 'agent-johny',
+          content: `Execute social media post immediately.\nPlatform: ${p.platform}\nAction: ${p.action ?? 'post'}\nText: ${p.text}${p.media_url ? `\nMedia: ${p.media_url}` : ''}${p.link ? `\nLink: ${p.link}` : ''}`,
+          type: 'task',
+          timestamp: Date.now(),
+        } satisfies ChatMessage);
+        log.info(`Social post sent to agent-johny: ${p.platform}`);
+        return { success: true, message: 'Post sent to Agent Johny for publishing' };
+      } catch (err) {
+        log.error('Failed to send social post to agent', { error: String(err) });
+        throw new Error(`Failed to dispatch post: ${String(err)}`);
+      }
+    });
+
+    this.protocol.registerMethod('social.media.browse', async (params) => {
+      const { path: dirPath } = params as { path: string };
+      if (!dirPath) throw new Error('path required');
+      const resolved = resolve(dirPath);
+      if (!existsSync(resolved)) throw new Error(`Directory not found: ${dirPath}`);
+      const stat = statSync(resolved);
+      if (!stat.isDirectory()) throw new Error('Path is not a directory');
+
+      const mediaExtensions = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.mov', '.avi', '.webm', '.heic', '.heif']);
+      const entries = readdirSync(resolved);
+      const files: { name: string; path: string; size: number; modified: number; type: 'image' | 'video' }[] = [];
+
+      for (const entry of entries) {
+        if (entry.startsWith('.')) continue;
+        const fullPath = join(resolved, entry);
+        try {
+          const s = statSync(fullPath);
+          if (!s.isFile()) continue;
+          const ext = entry.slice(entry.lastIndexOf('.')).toLowerCase();
+          if (!mediaExtensions.has(ext)) continue;
+          const isVideo = ['.mp4', '.mov', '.avi', '.webm'].includes(ext);
+          files.push({
+            name: entry,
+            path: fullPath,
+            size: s.size,
+            modified: s.mtimeMs,
+            type: isVideo ? 'video' : 'image',
+          });
+        } catch { continue; }
+      }
+
+      files.sort((a, b) => b.modified - a.modified);
+      return { directory: resolved, files, total: files.length };
+    });
+
+    this.protocol.registerMethod('social.autopost', async (params) => {
+      const { platform, mediaFolder, prompt: userPrompt } = params as { platform: string; mediaFolder?: string; prompt?: string };
+      if (!platform) throw new Error('platform required');
+
+      const taskContent = [
+        `Autonomous social media posting task:`,
+        `Platform: ${platform}`,
+        mediaFolder ? `Media folder: ${mediaFolder} — browse it, pick the best/most visually appealing content.` : '',
+        userPrompt ? `Additional instructions: ${userPrompt}` : '',
+        `Steps:`,
+        `1. ${mediaFolder ? 'Browse the media folder and select the best image/video' : 'Find or create compelling visual content'}`,
+        `2. Generate viral, engaging post content with trending hashtags and strong hooks`,
+        `3. Publish the post using the social_post tool`,
+        `4. Report the result back`,
+      ].filter(Boolean).join('\n');
+
+      await this.nats.publish(NatsSubjects.chat('agent-johny'), {
+        id: shortId(),
+        from: 'dashboard',
+        to: 'agent-johny',
+        content: taskContent,
+        type: 'task',
+        timestamp: Date.now(),
+      } satisfies ChatMessage);
+
+      log.info(`Auto-post task sent to agent-johny: ${platform}`);
+      return { success: true, message: 'Auto-post task dispatched to Agent Johny' };
+    });
+
+    // --- Setup Wizard Methods ---
+
+    this.protocol.registerMethod('setup.master.info', async () => {
+      const nets = networkInterfaces();
+      let masterIp = '127.0.0.1';
+      for (const ifaces of Object.values(nets)) {
+        if (!ifaces) continue;
+        for (const iface of ifaces) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            masterIp = iface.address;
+            break;
+          }
+        }
+        if (masterIp !== '127.0.0.1') break;
+      }
+
+      return {
+        hostname: hostname(),
+        ip: masterIp,
+        natsPort: parseInt(new URL(this.config.natsUrl).port) || 4222,
+        redisPort: parseInt(new URL(this.config.redisUrl).port) || 6379,
+        gatewayPort: this.config.port,
+        gatewayUrl: `http://${masterIp}:${this.config.port}`,
+        nasPath: this.nas.getBasePath(),
+        nasMounted: this.nas.isMounted(),
+        natsConnected: this.nats.isConnected,
+      };
+    });
+
+    this.protocol.registerMethod('setup.agents.registry', async () => {
+      const registryPath = this.nas.resolve('config', 'agents-registry.json');
+      if (!existsSync(registryPath)) return [];
+      try {
+        return JSON.parse(readFileSync(registryPath, 'utf-8')) as AgentRegistryEntry[];
+      } catch { return []; }
+    });
+
+    this.protocol.registerMethod('setup.agents.add', async (params) => {
+      const { agentId, role, hostname: agentHostname, ip } = params as {
+        agentId: string; role: string; hostname?: string; ip?: string;
+      };
+      if (!agentId || !role) throw new Error('agentId and role are required');
+      if (!/^[a-zA-Z0-9_-]+$/.test(agentId)) throw new Error('agentId must be alphanumeric with dashes/underscores');
+
+      const registryPath = this.nas.resolve('config', 'agents-registry.json');
+      let registry: AgentRegistryEntry[] = [];
+      if (existsSync(registryPath)) {
+        try { registry = JSON.parse(readFileSync(registryPath, 'utf-8')); } catch { registry = []; }
+      }
+
+      if (registry.some((e) => e.agentId === agentId)) {
+        throw new Error(`Agent "${agentId}" already exists in registry`);
+      }
+
+      const natsToken = randomBytes(16).toString('hex');
+      const authToken = randomBytes(32).toString('hex');
+      const localHostname = hostname();
+
+      // Determine local IP
+      const nets = networkInterfaces();
+      let masterIp = '127.0.0.1';
+      for (const ifaces of Object.values(nets)) {
+        if (!ifaces) continue;
+        for (const iface of ifaces) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            masterIp = iface.address;
+            break;
+          }
+        }
+        if (masterIp !== '127.0.0.1') break;
+      }
+
+      const isLocal = !ip || ip === '127.0.0.1' || ip === masterIp || ip === 'localhost';
+
+      const entry: AgentRegistryEntry = {
+        agentId,
+        role: role as AgentRegistryEntry['role'],
+        hostname: agentHostname || localHostname,
+        ip: ip || masterIp,
+        machineId: agentHostname || localHostname,
+        natsToken,
+        authToken,
+        isLocal,
+        deployedAt: Date.now(),
+        lastSeen: null,
+        config: {},
+      };
+
+      registry.push(entry);
+      const dir = dirname(registryPath);
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+
+      // Generate env snippet
+      const envSnippet = [
+        `# Agent: ${agentId} (${role})`,
+        `JARVIS_AGENT_ID=${agentId}`,
+        `JARVIS_AGENT_ROLE=${role}`,
+        `JARVIS_MACHINE_ID=${entry.machineId}`,
+        `NATS_URL=nats://${masterIp}:${parseInt(new URL(this.config.natsUrl).port) || 4222}`,
+        `NATS_TOKEN=${natsToken}`,
+        `REDIS_URL=redis://${masterIp}:${parseInt(new URL(this.config.redisUrl).port) || 6379}`,
+        `GATEWAY_URL=http://${masterIp}:${this.config.port}`,
+        `JARVIS_NAS_MOUNT=${this.nas.getBasePath()}`,
+        `JARVIS_AUTH_TOKEN=${authToken}`,
+      ].join('\n');
+
+      // Append LLM keys from current env
+      const llmKeys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_AI_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_HOST'];
+      const llmSnippet = llmKeys
+        .filter((k) => process.env[k])
+        .map((k) => `${k}=${process.env[k]}`)
+        .join('\n');
+
+      const fullEnv = llmSnippet ? `${envSnippet}\n${llmSnippet}` : envSnippet;
+
+      log.info(`Agent registered: ${agentId} (${role}) isLocal=${isLocal}`);
+      this.protocol.broadcast('setup.agent.added', entry);
+
+      return { agentId, natsToken, authToken, envSnippet: fullEnv, entry };
+    });
+
+    this.protocol.registerMethod('setup.agents.remove', async (params) => {
+      const { agentId } = params as { agentId: string };
+      if (!agentId) throw new Error('agentId is required');
+
+      const registryPath = this.nas.resolve('config', 'agents-registry.json');
+      if (!existsSync(registryPath)) throw new Error('No registry found');
+
+      let registry: AgentRegistryEntry[] = JSON.parse(readFileSync(registryPath, 'utf-8'));
+      const before = registry.length;
+      registry = registry.filter((e) => e.agentId !== agentId);
+      if (registry.length === before) throw new Error(`Agent "${agentId}" not found in registry`);
+
+      writeFileSync(registryPath, JSON.stringify(registry, null, 2));
+
+      // Stop if running locally
+      const proc = this.spawnedAgents.get(agentId);
+      if (proc) {
+        proc.kill('SIGINT');
+        this.spawnedAgents.delete(agentId);
+      }
+
+      log.info(`Agent removed from registry: ${agentId}`);
+      this.protocol.broadcast('setup.agent.removed', { agentId });
+      return { success: true };
+    });
+
+    this.protocol.registerMethod('setup.agents.env', async (params) => {
+      const { agentId } = params as { agentId: string };
+      if (!agentId) throw new Error('agentId is required');
+
+      const registryPath = this.nas.resolve('config', 'agents-registry.json');
+      if (!existsSync(registryPath)) throw new Error('No registry found');
+
+      const registry: AgentRegistryEntry[] = JSON.parse(readFileSync(registryPath, 'utf-8'));
+      const entry = registry.find((e) => e.agentId === agentId);
+      if (!entry) throw new Error(`Agent "${agentId}" not found in registry`);
+
+      const nets = networkInterfaces();
+      let masterIp = '127.0.0.1';
+      for (const ifaces of Object.values(nets)) {
+        if (!ifaces) continue;
+        for (const iface of ifaces) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            masterIp = iface.address;
+            break;
+          }
+        }
+        if (masterIp !== '127.0.0.1') break;
+      }
+
+      const lines = [
+        `# Agent: ${entry.agentId} (${entry.role})`,
+        `# Generated: ${new Date().toISOString()}`,
+        `JARVIS_AGENT_ID=${entry.agentId}`,
+        `JARVIS_AGENT_ROLE=${entry.role}`,
+        `JARVIS_MACHINE_ID=${entry.machineId}`,
+        `NATS_URL=nats://${masterIp}:${parseInt(new URL(this.config.natsUrl).port) || 4222}`,
+        `NATS_TOKEN=${entry.natsToken}`,
+        `REDIS_URL=redis://${masterIp}:${parseInt(new URL(this.config.redisUrl).port) || 6379}`,
+        `GATEWAY_URL=http://${masterIp}:${this.config.port}`,
+        `JARVIS_NAS_MOUNT=${this.nas.getBasePath()}`,
+        `JARVIS_AUTH_TOKEN=${entry.authToken}`,
+      ];
+
+      const llmKeys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_AI_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_HOST'];
+      for (const k of llmKeys) {
+        if (process.env[k]) lines.push(`${k}=${process.env[k]}`);
+      }
+
+      return { agentId, env: lines.join('\n') };
+    });
+
+    this.protocol.registerMethod('setup.network.scan', async () => {
+      try {
+        const { stdout } = await execFileAsync('arp', ['-a'], { timeout: 5000 });
+        const machines: { ip: string; hostname: string }[] = [];
+        for (const line of stdout.split('\n')) {
+          const match = line.match(/^(\S+)\s+\((\d+\.\d+\.\d+\.\d+)\)/);
+          if (match) {
+            machines.push({ hostname: match[1], ip: match[2] });
+          }
+        }
+        return machines;
+      } catch (err) {
+        log.warn('Network scan failed', { error: String(err) });
+        return [];
+      }
+    });
+
+    this.protocol.registerMethod('setup.agents.start', async (params) => {
+      const { agentId } = params as { agentId: string };
+      if (!agentId) throw new Error('agentId is required');
+
+      if (this.spawnedAgents.has(agentId)) {
+        throw new Error(`Agent "${agentId}" is already running`);
+      }
+
+      // Load entry from registry to get env vars
+      const registryPath = this.nas.resolve('config', 'agents-registry.json');
+      if (!existsSync(registryPath)) throw new Error('No registry found');
+      const registry: AgentRegistryEntry[] = JSON.parse(readFileSync(registryPath, 'utf-8'));
+      const entry = registry.find((e) => e.agentId === agentId);
+      if (!entry) throw new Error(`Agent "${agentId}" not found in registry`);
+      if (!entry.isLocal) throw new Error('Can only start local agents');
+
+      const nets = networkInterfaces();
+      let masterIp = '127.0.0.1';
+      for (const ifaces of Object.values(nets)) {
+        if (!ifaces) continue;
+        for (const iface of ifaces) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            masterIp = iface.address;
+            break;
+          }
+        }
+        if (masterIp !== '127.0.0.1') break;
+      }
+
+      const agentEnv: Record<string, string> = {
+        ...process.env as Record<string, string>,
+        JARVIS_AGENT_ID: entry.agentId,
+        JARVIS_AGENT_ROLE: entry.role,
+        JARVIS_MACHINE_ID: entry.machineId,
+        NATS_URL: `nats://${masterIp}:${parseInt(new URL(this.config.natsUrl).port) || 4222}`,
+        NATS_TOKEN: entry.natsToken,
+        REDIS_URL: `redis://${masterIp}:${parseInt(new URL(this.config.redisUrl).port) || 6379}`,
+        GATEWAY_URL: `http://${masterIp}:${this.config.port}`,
+        JARVIS_NAS_MOUNT: this.nas.getBasePath(),
+        JARVIS_AUTH_TOKEN: entry.authToken,
+      };
+
+      // Find the agent-runtime entry point
+      const runtimeDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../agent-runtime');
+      const distEntry = resolve(runtimeDir, 'dist/index.js');
+      const srcEntry = resolve(runtimeDir, 'src/index.ts');
+
+      let cmd: string;
+      let args: string[];
+
+      if (existsSync(distEntry)) {
+        cmd = 'node';
+        args = [distEntry];
+      } else if (existsSync(srcEntry)) {
+        cmd = resolve(dirname(fileURLToPath(import.meta.url)), '../../../node_modules/.bin/tsx');
+        args = [srcEntry];
+        if (!existsSync(cmd)) {
+          // fallback to npx
+          cmd = 'npx';
+          args = ['tsx', srcEntry];
+        }
+      } else {
+        throw new Error('Agent runtime not found — build the agent-runtime package first');
+      }
+
+      const child = spawn(cmd, args, {
+        env: agentEnv,
+        stdio: 'pipe',
+        detached: false,
+      });
+
+      child.on('exit', (code) => {
+        log.info(`Agent ${agentId} process exited with code ${code}`);
+        this.spawnedAgents.delete(agentId);
+        this.protocol.broadcast('setup.agent.stopped', { agentId, code });
+      });
+
+      child.stdout?.on('data', (data: Buffer) => {
+        const line = data.toString().trim();
+        if (line) {
+          this.protocol.broadcast('agent.console', { agentId, line, timestamp: Date.now() });
+        }
+      });
+
+      child.stderr?.on('data', (data: Buffer) => {
+        const line = data.toString().trim();
+        if (line) {
+          this.protocol.broadcast('agent.console', { agentId, line, timestamp: Date.now() });
+        }
+      });
+
+      this.spawnedAgents.set(agentId, child);
+      log.info(`Agent ${agentId} started (pid: ${child.pid})`);
+      this.protocol.broadcast('setup.agent.started', { agentId, pid: child.pid });
+      return { success: true, agentId, pid: child.pid };
+    });
+
+    this.protocol.registerMethod('setup.agents.stop', async (params) => {
+      const { agentId } = params as { agentId: string };
+      if (!agentId) throw new Error('agentId is required');
+
+      const proc = this.spawnedAgents.get(agentId);
+      if (!proc) throw new Error(`Agent "${agentId}" is not running (or was not started by this gateway)`);
+
+      proc.kill('SIGINT');
+      this.spawnedAgents.delete(agentId);
+      log.info(`Agent ${agentId} stopped`);
+      this.protocol.broadcast('setup.agent.stopped', { agentId });
+      return { success: true };
+    });
+
+    this.protocol.registerMethod('setup.agents.test', async (params) => {
+      const { agentId } = params as { agentId: string };
+      if (!agentId) throw new Error('agentId is required');
+
+      const start = Date.now();
+      try {
+        await Promise.race([
+          this.nats.request(`jarvis.agent.${agentId}.dm`, {
+            id: shortId(),
+            from: 'gateway',
+            to: agentId,
+            content: 'ping',
+            type: 'ping',
+            timestamp: Date.now(),
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
+        ]);
+        return { reachable: true, latencyMs: Date.now() - start };
+      } catch {
+        return { reachable: false, latencyMs: Date.now() - start };
+      }
     });
 
   }

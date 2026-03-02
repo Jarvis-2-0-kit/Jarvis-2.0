@@ -153,6 +153,7 @@ export function AgentsView() {
   const [skillCategory, setSkillCategory] = useState('All');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [lifecycleLoading, setLifecycleLoading] = useState<string | null>(null);
 
   const agentList = Array.from(agents.values());
 
@@ -303,6 +304,27 @@ export function AgentsView() {
       setSaveStatus('error');
       setSaveError((err as Error).message);
     }
+  };
+
+  const handleAgentLifecycle = async (action: 'start' | 'stop') => {
+    if (!selectedAgentId) return;
+    setLifecycleLoading(action);
+    try {
+      await gateway.request(`setup.agents.${action}`, { agentId: selectedAgentId });
+    } catch { /* ignore — agent status events will update UI */ }
+    setLifecycleLoading(null);
+  };
+
+  const handleAgentRestart = async () => {
+    if (!selectedAgentId) return;
+    setLifecycleLoading('restart');
+    try {
+      await gateway.request('setup.agents.stop', { agentId: selectedAgentId });
+      // Brief pause to let process exit
+      await new Promise((r) => setTimeout(r, 1000));
+      await gateway.request('setup.agents.start', { agentId: selectedAgentId });
+    } catch { /* ignore */ }
+    setLifecycleLoading(null);
   };
 
   // Filtered tools
@@ -524,6 +546,59 @@ export function AgentsView() {
                     <selectedStatus.Icon size={8} />
                     {selectedStatus.label}
                   </span>
+
+                  {/* Lifecycle buttons */}
+                  {selectedAgent.status === 'offline' && (
+                    <button
+                      onClick={() => void handleAgentLifecycle('start')}
+                      disabled={lifecycleLoading !== null}
+                      title="Start agent"
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 3,
+                        padding: '2px 8px', borderRadius: 3, fontSize: 8,
+                        fontFamily: 'var(--font-display)', letterSpacing: 1,
+                        background: 'rgba(0,255,65,0.1)', border: '1px solid rgba(0,255,65,0.3)',
+                        color: 'var(--green-bright)', cursor: 'pointer',
+                      }}
+                    >
+                      <Play size={8} />
+                      {lifecycleLoading === 'start' ? 'STARTING...' : 'START'}
+                    </button>
+                  )}
+                  {selectedAgent.status !== 'offline' && (
+                    <>
+                      <button
+                        onClick={() => void handleAgentLifecycle('stop')}
+                        disabled={lifecycleLoading !== null}
+                        title="Stop agent"
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 3,
+                          padding: '2px 8px', borderRadius: 3, fontSize: 8,
+                          fontFamily: 'var(--font-display)', letterSpacing: 1,
+                          background: 'rgba(255,51,51,0.1)', border: '1px solid rgba(255,51,51,0.3)',
+                          color: 'var(--red-bright)', cursor: 'pointer',
+                        }}
+                      >
+                        <Pause size={8} />
+                        {lifecycleLoading === 'stop' ? 'STOPPING...' : 'STOP'}
+                      </button>
+                      <button
+                        onClick={() => void handleAgentRestart()}
+                        disabled={lifecycleLoading !== null}
+                        title="Restart agent"
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 3,
+                          padding: '2px 8px', borderRadius: 3, fontSize: 8,
+                          fontFamily: 'var(--font-display)', letterSpacing: 1,
+                          background: 'rgba(255,170,0,0.1)', border: '1px solid rgba(255,170,0,0.3)',
+                          color: 'var(--amber)', cursor: 'pointer',
+                        }}
+                      >
+                        <RefreshCw size={8} />
+                        {lifecycleLoading === 'restart' ? 'RESTARTING...' : 'RESTART'}
+                      </button>
+                    </>
+                  )}
                 </div>
                 <div style={{
                   fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: 3,

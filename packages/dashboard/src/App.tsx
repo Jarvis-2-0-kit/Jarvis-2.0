@@ -41,6 +41,7 @@ const OrchestratorView = lazy(() => import('./views/OrchestratorView.js').then((
 const ConfigView = lazy(() => import('./views/ConfigView.js').then((m) => ({ default: m.ConfigView })));
 const DebugView = lazy(() => import('./views/DebugView.js').then((m) => ({ default: m.DebugView })));
 const SocialMediaView = lazy(() => import('./views/SocialMediaView.js').then((m) => ({ default: m.SocialMediaView })));
+const SetupWizardView = lazy(() => import('./views/SetupWizardView.js').then((m) => ({ default: m.SetupWizardView })));
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -127,6 +128,7 @@ export function App() {
                   <Route path="/orchestrator" element={<OrchestratorView />} />
                   <Route path="/config" element={<ConfigView />} />
                   <Route path="/social" element={<SocialMediaView />} />
+                  <Route path="/setup" element={<SetupWizardView />} />
                   <Route path="/debug" element={<DebugView />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

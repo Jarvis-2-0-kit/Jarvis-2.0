@@ -68,6 +68,24 @@ export const AgentState = z.object({
 });
 export type AgentState = z.infer<typeof AgentState>;
 
+export interface AgentRegistryEntry {
+  agentId: string;
+  role: AgentRole;
+  hostname: string;
+  ip: string;
+  machineId: string;
+  natsToken: string;
+  authToken: string;
+  isLocal: boolean;
+  deployedAt: number;
+  lastSeen: number | null;
+  config: {
+    model?: string;
+    tools?: Record<string, boolean>;
+    skills?: Record<string, boolean>;
+  };
+}
+
 export const AGENT_DEFAULTS: Record<string, { role: AgentRole; capabilities: readonly AgentCapability[] }> = Object.freeze({
   'jarvis': Object.freeze({
     role: 'orchestrator',
