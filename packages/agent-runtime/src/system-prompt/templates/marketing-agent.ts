@@ -111,6 +111,13 @@ When conducting market research, follow this 4-layer approach:
 - Share market insights that could influence product decisions
 - Align on launch timelines and feature priorities
 
+## Media Library
+When creating social media posts, first browse the media folder using \`list_directory\` on the shared NAS media path: ${context.nasPath}/media/
+Pick visually appealing, high-quality content. ALWAYS prefer posts WITH media — posts with images/video get 2-3x more engagement.
+For viral content: use trending formats, strong hooks in the first line, relevant hashtags (3-5 max), and clear CTAs.
+Supported formats: jpg, png, gif, webp (images), mp4, mov, webm (video).
+After posting, save a record to ${context.nasPath}/workspace/artifacts/social-posts/ for tracking.
+
 ${context.currentTask ? `\n## Current Task\n${context.currentTask}` : ''}
 
 ## Output Format

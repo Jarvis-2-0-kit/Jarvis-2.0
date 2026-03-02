@@ -18,6 +18,9 @@ importers:
         specifier: ^1.5.4
         version: 1.5.4
     devDependencies:
+      esbuild:
+        specifier: ^0.27.3
+        version: 0.27.3
       tsx:
         specifier: ^4.19.0
         version: 4.21.0
