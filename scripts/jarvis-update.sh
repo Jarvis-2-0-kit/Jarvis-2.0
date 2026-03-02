@@ -119,14 +119,88 @@ if ! pnpm build 2>&1 | tee -a "$LOG_FILE"; then
   exit 1
 fi
 
+# ─── Sync to Remote Agents ───────────────────────────────────────────────────
+
+SSH_KEY="$HOME/.ssh/id_ed25519_jarvis"
+if [[ -f "$SSH_KEY" ]]; then
+  log "Syncing updated code to remote agents..."
+  write_status "running" "Syncing to remote agents..." "$PREV_HEAD" "$NEW_HEAD"
+
+  # Load env for agent IPs
+  SMITH_IP="${ALPHA_IP:-192.168.1.37}"
+  SMITH_USER="${ALPHA_USER:-agent_smith}"
+  JOHNY_IP="${BETA_IP:-192.168.1.32}"
+  JOHNY_USER="${BETA_USER:-agent_johny}"
+
+  for AGENT_USER_HOST in "${SMITH_USER}@${SMITH_IP}" "${JOHNY_USER}@${JOHNY_IP}"; do
+    AGENT_USER="${AGENT_USER_HOST%%@*}"
+    AGENT_HOST="${AGENT_USER_HOST##*@}"
+    log "Syncing to $AGENT_USER_HOST..."
+
+    SSH_ARGS="-i $SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10"
+
+    for PKG in shared agent-runtime tools; do
+      rsync -avz --delete -e "ssh $SSH_ARGS" \
+        "$JARVIS_DIR/packages/$PKG/" \
+        "$AGENT_USER_HOST:~/jarvis/packages/$PKG/" 2>&1 | tee -a "$LOG_FILE" || true
+    done
+
+    # Sync root config files
+    for F in package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json tsconfig.json force-ipv4.cjs; do
+      [[ -f "$JARVIS_DIR/$F" ]] && rsync -avz -e "ssh $SSH_ARGS" \
+        "$JARVIS_DIR/$F" "$AGENT_USER_HOST:~/jarvis/$F" 2>&1 | tee -a "$LOG_FILE" || true
+    done
+
+    # pnpm install + build on remote
+    ssh $SSH_ARGS "$AGENT_USER_HOST" \
+      "source ~/.zshrc 2>/dev/null; cd ~/jarvis && pnpm install --frozen-lockfile && pnpm build" \
+      2>&1 | tee -a "$LOG_FILE" || log "WARN: Remote build failed on $AGENT_HOST"
+
+    # Restart agent via launchctl
+    AGENT_ID="agent-${AGENT_USER#agent_}"
+    ssh $SSH_ARGS "$AGENT_USER_HOST" \
+      "launchctl bootout gui/\$(id -u)/com.jarvis.$AGENT_ID 2>/dev/null; sleep 1; launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.jarvis.$AGENT_ID.plist 2>/dev/null; true" \
+      2>&1 | tee -a "$LOG_FILE" || true
+
+    log "Agent $AGENT_ID synced and restarted"
+  done
+else
+  log "WARN: SSH key not found, skipping remote agent sync"
+fi
+
+# ─── Rebuild Desktop App ────────────────────────────────────────────────────
+
+DESKTOP_DIR="$JARVIS_DIR/packages/desktop"
+if [[ -f "$DESKTOP_DIR/build-full.sh" ]]; then
+  log "Rebuilding desktop app..."
+  write_status "running" "Rebuilding desktop app..." "$PREV_HEAD" "$NEW_HEAD"
+  if bash "$DESKTOP_DIR/build-full.sh" 2>&1 | tee -a "$LOG_FILE"; then
+    log "Installing updated app to /Applications..."
+    osascript -e 'tell application "Jarvis 2.0" to quit' 2>/dev/null || true
+    sleep 2
+    rm -rf "/Applications/Jarvis 2.0.app"
+    cp -r "$DESKTOP_DIR/Jarvis 2.0.app" /Applications/
+    log "Desktop app updated and installed"
+  else
+    log "WARN: Desktop app rebuild failed, skipping"
+  fi
+fi
+
 # ─── Restart ─────────────────────────────────────────────────────────────────
 
-log "Build successful. Restarting Jarvis..."
+log "Update successful. Restarting Jarvis..."
 write_status "done" "Update complete" "$PREV_HEAD" "$NEW_HEAD"
 
 # Small delay to let gateway read status before dying
 sleep 1
 
-"$SCRIPT_DIR/jarvis.sh" restart >> "$LOG_FILE" 2>&1
+# If desktop app is installed, reopen it (it bundles gateway/NATS/Redis)
+if [[ -d "/Applications/Jarvis 2.0.app" ]]; then
+  log "Reopening desktop app..."
+  open "/Applications/Jarvis 2.0.app" 2>&1 | tee -a "$LOG_FILE" || true
+else
+  # Fallback: standalone mode
+  "$SCRIPT_DIR/jarvis.sh" restart >> "$LOG_FILE" 2>&1 || true
+fi
 
 log "=== JARVIS OTA UPDATE COMPLETED ==="

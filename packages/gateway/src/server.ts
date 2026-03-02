@@ -6108,8 +6108,22 @@ end tell`;
     }, 5 * 60 * 1000);
   }
 
+  /** Resolve the source repo dir — prefer ~/Documents/Jarvis-2.0/jarvis (git repo), fallback to bundle parent */
+  private resolveSourceRepo(): string {
+    const home = process.env['HOME'] ?? '/Users/kamilpadula';
+    const candidates = [
+      resolve(home, 'Documents/Jarvis-2.0/jarvis'),
+      resolve(home, 'jarvis'),
+    ];
+    for (const c of candidates) {
+      if (existsSync(resolve(c, '.git'))) return c;
+    }
+    // Fallback to bundle-relative (won't work for git ops but won't crash)
+    return resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+  }
+
   private async checkForUpdates(): Promise<{ available: boolean; commitsBehind: number; latestCommit: string; latestMessage: string; localHead: string; remoteHead: string }> {
-    const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+    const projectDir = this.resolveSourceRepo();
     try {
       // Fetch latest from origin (non-destructive)
       execSync('git fetch origin', { cwd: projectDir, timeout: 30_000, stdio: 'pipe' });
@@ -6153,7 +6167,7 @@ end tell`;
       return { started: false, error: 'Update already in progress' };
     }
 
-    const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+    const projectDir = this.resolveSourceRepo();
     const updateScript = resolve(projectDir, 'scripts/jarvis-update.sh');
 
     if (!existsSync(updateScript)) {
