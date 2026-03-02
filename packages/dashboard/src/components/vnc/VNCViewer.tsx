@@ -57,6 +57,7 @@ export function VNCViewer({ host, port, username, password, id, target, viewOnly
   const reconnectAttemptsRef = useRef(0);
   const mountedRef = useRef(true);
   const authFailedRef = useRef(false);
+  const rfbCleanupRef = useRef<(() => void) | null>(null);
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
 
@@ -135,47 +136,61 @@ export function VNCViewer({ host, port, username, password, id, target, viewOnly
       rfb.qualityLevel = 6;
       rfb.compressionLevel = 2;
 
-      rfb.addEventListener('connect', () => {
+      const onConnect = () => {
         reconnectAttemptsRef.current = 0;
         updateStatus('connected');
         if (!viewOnly) rfb.focus();
-      });
+      };
 
-      rfb.addEventListener('credentialsrequired', () => {
+      const onCredentials = () => {
         if (username && password) rfb.sendCredentials({ username, password });
         else if (password) rfb.sendCredentials({ password });
         else {
           updateStatus('error');
           setErrorMsg('Credentials required — set VNC username/password in Settings');
         }
-      });
+      };
 
-      rfb.addEventListener('disconnect', (e: unknown) => {
+      const onDisconnect = (e: unknown) => {
         const detail = (e as { detail?: { clean?: boolean } })?.detail;
         updateStatus('disconnected');
         rfbRef.current = null;
         if (!detail?.clean) scheduleReconnect();
-      });
+      };
 
-      rfb.addEventListener('securityfailure', (e: unknown) => {
+      const onSecurityFailure = (e: unknown) => {
         const detail = (e as { detail?: { reason?: string } })?.detail;
         authFailedRef.current = true;
         updateStatus('error');
         setErrorMsg(detail?.reason ?? 'Authentication failed');
-      });
+      };
 
       // Clipboard from remote -> local
-      rfb.addEventListener('clipboard', (e: unknown) => {
+      const onClipboard = (e: unknown) => {
         const detail = (e as { detail?: { text?: string } })?.detail;
         if (detail?.text) {
           setClipboardText(detail.text);
           lastRemoteClipboardRef.current = detail.text;
-          // Auto-copy to browser clipboard
           if (clipboardSyncRef.current) {
             void navigator.clipboard.writeText(detail.text).catch(() => {});
           }
         }
-      });
+      };
+
+      rfb.addEventListener('connect', onConnect);
+      rfb.addEventListener('credentialsrequired', onCredentials);
+      rfb.addEventListener('disconnect', onDisconnect);
+      rfb.addEventListener('securityfailure', onSecurityFailure);
+      rfb.addEventListener('clipboard', onClipboard);
+
+      // Store cleanup function for this RFB instance
+      rfbCleanupRef.current = () => {
+        rfb.removeEventListener('connect', onConnect);
+        rfb.removeEventListener('credentialsrequired', onCredentials);
+        rfb.removeEventListener('disconnect', onDisconnect);
+        rfb.removeEventListener('securityfailure', onSecurityFailure);
+        rfb.removeEventListener('clipboard', onClipboard);
+      };
 
       rfbRef.current = rfb;
     } catch (err) {
@@ -199,6 +214,7 @@ export function VNCViewer({ host, port, username, password, id, target, viewOnly
         reconnectTimerRef.current = null;
       }
       if (rfbRef.current) {
+        if (rfbCleanupRef.current) { rfbCleanupRef.current(); rfbCleanupRef.current = null; }
         try { rfbRef.current.disconnect(); } catch { /* ignore */ }
         rfbRef.current = null;
       }

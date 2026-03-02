@@ -190,11 +190,12 @@ export function OverviewView() {
         </span>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
           <button
-            onClick={() => {
+            onClick={async () => {
               setChecking(true);
-              checkForUpdate();
-              setTimeout(() => setChecking(false), 3000);
+              await checkForUpdate();
+              setChecking(false);
             }}
+            disabled={checking}
             aria-label="Check for updates"
             style={{
               display: 'flex',

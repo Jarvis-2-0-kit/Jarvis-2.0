@@ -109,7 +109,7 @@ interface GatewayStore {
   destroy: () => void;
   sendChat: (to: string, content: string) => void;
   createTask: (task: Partial<TaskDef>) => void;
-  checkForUpdate: () => void;
+  checkForUpdate: () => Promise<void>;
   applyUpdate: () => void;
 }
 
@@ -399,14 +399,15 @@ export const useGatewayStore = create<GatewayStore>((set, get) => ({
     });
   },
 
-  checkForUpdate: () => {
-    void gateway.request<{ available: boolean; commitsBehind: number; latestCommit: string; latestMessage: string; localHead: string; remoteHead: string }>('system.update.check').then((result) => {
+  checkForUpdate: async () => {
+    try {
+      const result = await gateway.request<{ available: boolean; commitsBehind: number; latestCommit: string; latestMessage: string; localHead: string; remoteHead: string }>('system.update.check');
       if (result.available) {
         set({ update: { commitsBehind: result.commitsBehind, latestCommit: result.latestCommit, latestMessage: result.latestMessage, localHead: result.localHead, remoteHead: result.remoteHead } });
       } else {
         set({ update: null });
       }
-    });
+    } catch { /* ignore — gateway may be unreachable */ }
   },
 
   applyUpdate: () => {

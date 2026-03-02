@@ -417,12 +417,12 @@ export class GatewayServer {
     this.app.get('/api/vnc', (_req, res) => {
       // Prefer Thunderbolt IPs for VNC (10 Gbps = smoother stream)
       const tbEnabled = process.env['THUNDERBOLT_ENABLED'] === 'true';
-      const smithHost = (tbEnabled && process.env['VNC_SMITH_HOST_THUNDERBOLT'])
-        ? process.env['VNC_SMITH_HOST_THUNDERBOLT']
-        : process.env['VNC_SMITH_HOST'] ?? process.env['VNC_ALPHA_HOST'] ?? '192.168.1.37';
-      const johnyHost = (tbEnabled && process.env['VNC_JOHNY_HOST_THUNDERBOLT'])
-        ? process.env['VNC_JOHNY_HOST_THUNDERBOLT']
-        : process.env['VNC_JOHNY_HOST'] ?? process.env['VNC_BETA_HOST'] ?? '192.168.1.32';
+      const smithTbHost = process.env['VNC_SMITH_HOST_THUNDERBOLT'] ?? process.env['VNC_ALPHA_HOST_THUNDERBOLT'];
+      const johnyTbHost = process.env['VNC_JOHNY_HOST_THUNDERBOLT'] ?? process.env['VNC_BETA_HOST_THUNDERBOLT'];
+      const smithUsingTb = tbEnabled && !!smithTbHost;
+      const johnyUsingTb = tbEnabled && !!johnyTbHost;
+      const smithHost = smithUsingTb ? smithTbHost! : (process.env['VNC_SMITH_HOST'] ?? process.env['VNC_ALPHA_HOST'] ?? '192.168.1.37');
+      const johnyHost = johnyUsingTb ? johnyTbHost! : (process.env['VNC_JOHNY_HOST'] ?? process.env['VNC_BETA_HOST'] ?? '192.168.1.32');
 
       // Authenticated endpoint — safe to include credentials
       res.json({
@@ -433,7 +433,7 @@ export class GatewayServer {
             username: process.env['VNC_SMITH_USERNAME'] ?? process.env['VNC_ALPHA_USERNAME'] ?? '',
             password: process.env['VNC_SMITH_PASSWORD'] ?? process.env['VNC_ALPHA_PASSWORD'] ?? '',
             label: 'Agent Smith (Dev)',
-            thunderbolt: tbEnabled && !!(process.env['VNC_SMITH_HOST_THUNDERBOLT'] ?? process.env['VNC_ALPHA_HOST_THUNDERBOLT']),
+            thunderbolt: smithUsingTb,
           },
           johny: {
             host: johnyHost,
@@ -441,7 +441,7 @@ export class GatewayServer {
             username: process.env['VNC_JOHNY_USERNAME'] ?? process.env['VNC_BETA_USERNAME'] ?? '',
             password: process.env['VNC_JOHNY_PASSWORD'] ?? process.env['VNC_BETA_PASSWORD'] ?? '',
             label: 'Agent Johny (Marketing)',
-            thunderbolt: tbEnabled && !!(process.env['VNC_JOHNY_HOST_THUNDERBOLT'] ?? process.env['VNC_BETA_HOST_THUNDERBOLT']),
+            thunderbolt: johnyUsingTb,
           },
         },
         thunderboltEnabled: tbEnabled,
@@ -930,22 +930,20 @@ export class GatewayServer {
 
     this.protocol.registerMethod('vnc.info', async () => {
       const tbEnabled = process.env['THUNDERBOLT_ENABLED'] === 'true';
+      const sTb = process.env['VNC_SMITH_HOST_THUNDERBOLT'] ?? process.env['VNC_ALPHA_HOST_THUNDERBOLT'];
+      const jTb = process.env['VNC_JOHNY_HOST_THUNDERBOLT'] ?? process.env['VNC_BETA_HOST_THUNDERBOLT'];
       return {
         smith: {
-          host: (tbEnabled && process.env['VNC_SMITH_HOST_THUNDERBOLT'])
-            ? process.env['VNC_SMITH_HOST_THUNDERBOLT']
-            : process.env['VNC_SMITH_HOST'] ?? process.env['VNC_ALPHA_HOST'] ?? '192.168.1.37',
+          host: (tbEnabled && sTb) ? sTb : (process.env['VNC_SMITH_HOST'] ?? process.env['VNC_ALPHA_HOST'] ?? '192.168.1.37'),
           port: Number(process.env['VNC_SMITH_PORT'] ?? process.env['VNC_ALPHA_PORT'] ?? 6080),
           label: 'Agent Smith (Dev)',
-          thunderbolt: tbEnabled && !!(process.env['VNC_SMITH_HOST_THUNDERBOLT'] ?? process.env['VNC_ALPHA_HOST_THUNDERBOLT']),
+          thunderbolt: tbEnabled && !!sTb,
         },
         johny: {
-          host: (tbEnabled && process.env['VNC_JOHNY_HOST_THUNDERBOLT'])
-            ? process.env['VNC_JOHNY_HOST_THUNDERBOLT']
-            : process.env['VNC_JOHNY_HOST'] ?? process.env['VNC_BETA_HOST'] ?? '192.168.1.32',
+          host: (tbEnabled && jTb) ? jTb : (process.env['VNC_JOHNY_HOST'] ?? process.env['VNC_BETA_HOST'] ?? '192.168.1.32'),
           port: Number(process.env['VNC_JOHNY_PORT'] ?? process.env['VNC_BETA_PORT'] ?? 6081),
           label: 'Agent Johny (Marketing)',
-          thunderbolt: tbEnabled && !!(process.env['VNC_JOHNY_HOST_THUNDERBOLT'] ?? process.env['VNC_BETA_HOST_THUNDERBOLT']),
+          thunderbolt: tbEnabled && !!jTb,
         },
         thunderboltEnabled: tbEnabled,
       };
@@ -2455,23 +2453,21 @@ export class GatewayServer {
       const natsPort = parseInt(new URL(this.config.natsUrl).port) || 4222;
       const redisPort = parseInt(new URL(this.config.redisUrl).port) || 6379;
 
-      // Generate agent tokens
-      const natsToken = randomBytes(16).toString('hex');
-      const authToken = randomBytes(32).toString('hex');
+      // Use master's tokens so agents can auth to gateway and NATS
+      const natsToken = process.env['NATS_TOKEN'] ?? this.config.natsToken ?? randomBytes(16).toString('hex');
+      const authToken = this.config.authToken;
 
       const envLines = [
         `# Agent: ${agentId} (${role}) — auto-deployed by wizard`,
         `# Generated: ${new Date().toISOString()}`,
         `JARVIS_AGENT_ID=${agentId}`,
         `JARVIS_AGENT_ROLE=${role}`,
-        `JARVIS_MACHINE_ID=${sshUser}-${slot}`,
+        `JARVIS_MACHINE_ID=mac-mini-${slot}`,
         `NATS_URL=nats://${masterIp}:${natsPort}`,
         `NATS_TOKEN=${natsToken}`,
-        `REDIS_URL=redis://${masterIp}:${redisPort}`,
         `GATEWAY_URL=http://${masterIp}:${this.config.port}`,
-        `JARVIS_NAS_MOUNT=/Users/${sshUser}/jarvis-nas`,
         `JARVIS_AUTH_TOKEN=${authToken}`,
-        `ANTHROPIC_AUTH_MODE=claude-cli`,
+        `JARVIS_NAS_MOUNT=/Users/${sshUser}/jarvis-nas`,
         `THUNDERBOLT_ENABLED=false`,
       ];
 

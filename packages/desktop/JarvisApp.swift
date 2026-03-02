@@ -8,7 +8,7 @@ class ServiceManager {
     private var redisProcess: Process?
     private var gatewayProcess: Process?
     private var orchestratorProcess: Process?
-    private var sshAgentProcesses: [Process] = []
+    // Legacy: SSH agent processes no longer tracked (using launchctl one-shot commands)
 
     private let bundleBin: String
     private let bundleRes: String
@@ -219,12 +219,6 @@ class ServiceManager {
             runSSHCommand(host: johnyHost, user: johnyUser, command:
                 "launchctl bootout gui/$(id -u)/com.jarvis.agent-johny 2>/dev/null; true")
         }
-
-        // Terminate any leftover persistent SSH sessions
-        for process in sshAgentProcesses where process.isRunning {
-            process.terminate()
-        }
-        sshAgentProcesses.removeAll()
 
         // Terminate orchestrator
         terminateProcess(orchestratorProcess, name: "Orchestrator")
