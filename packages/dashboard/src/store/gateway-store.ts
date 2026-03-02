@@ -102,6 +102,7 @@ interface GatewayStore {
   consoleLines: Array<{ agentId: string; line: string; timestamp: number }>;
   update: UpdateInfo | null;
   updateInProgress: boolean;
+  setupRequired: boolean | null;
 
   // Actions
   init: () => void;
@@ -125,6 +126,7 @@ export const useGatewayStore = create<GatewayStore>((set, get) => ({
   consoleLines: [],
   update: null,
   updateInProgress: false,
+  setupRequired: null,
 
   init: () => {
     if (get().initialized) return;
@@ -147,6 +149,11 @@ export const useGatewayStore = create<GatewayStore>((set, get) => ({
       });
       void gateway.request('tasks.list').then((tasks) => {
         set({ tasks: tasks as TaskDef[] });
+      });
+      void gateway.request<{ setupComplete: boolean }>('setup.wizard.status').then((status) => {
+        set({ setupRequired: !status.setupComplete });
+      }).catch(() => {
+        set({ setupRequired: null });
       });
     }));
 

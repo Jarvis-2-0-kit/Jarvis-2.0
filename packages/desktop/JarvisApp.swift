@@ -7,6 +7,8 @@ class ServiceManager {
     private var natsProcess: Process?
     private var redisProcess: Process?
     private var gatewayProcess: Process?
+    private var orchestratorProcess: Process?
+    private var sshAgentProcesses: [Process] = []
 
     private let bundleBin: String
     private let bundleRes: String
@@ -158,15 +160,182 @@ class ServiceManager {
             DispatchQueue.main.async {
                 onReady(Int(port) ?? 18900)
             }
+
+            // Start agents in background (don't block dashboard load)
+            DispatchQueue.global(qos: .utility).async {
+                self.startAgents()
+            }
         }
     }
 
     func stopAll() {
         NSLog("Stopping services...")
+        stopAgents()
         terminateProcess(gatewayProcess, name: "Gateway")
         terminateProcess(redisProcess, name: "Redis")
         terminateProcess(natsProcess, name: "NATS")
         NSLog("All services stopped.")
+    }
+
+    // ─── Agent Auto-Start ──────────────────────────────────────
+
+    func startAgents() {
+        let envPath = "\(dataDir)/jarvis.env"
+        let envContent = (try? String(contentsOfFile: envPath, encoding: .utf8)) ?? ""
+
+        NSLog("Starting agents...")
+
+        // Start orchestrator locally (from monorepo if available)
+        startOrchestrator(envContent: envContent)
+
+        // Start remote agents via SSH → launchctl (LaunchAgents with KeepAlive=true)
+        let smithHost = envValue("ALPHA_IP", from: envContent)
+        let smithUser = envValue("ALPHA_USER", from: envContent)
+        let johnyHost = envValue("BETA_IP", from: envContent)
+        let johnyUser = envValue("BETA_USER", from: envContent)
+
+        startRemoteAgent(name: "smith", host: smithHost, user: smithUser, agentId: "agent-smith")
+        startRemoteAgent(name: "johny", host: johnyHost, user: johnyUser, agentId: "agent-johny")
+
+        NSLog("Agent startup sequence complete")
+    }
+
+    func stopAgents() {
+        NSLog("Stopping agents...")
+
+        // Stop remote agents via SSH → launchctl bootout
+        let envPath = "\(dataDir)/jarvis.env"
+        let envContent = (try? String(contentsOfFile: envPath, encoding: .utf8)) ?? ""
+        let smithHost = envValue("ALPHA_IP", from: envContent)
+        let smithUser = envValue("ALPHA_USER", from: envContent)
+        let johnyHost = envValue("BETA_IP", from: envContent)
+        let johnyUser = envValue("BETA_USER", from: envContent)
+
+        if !smithHost.isEmpty && !smithUser.isEmpty {
+            runSSHCommand(host: smithHost, user: smithUser, command:
+                "launchctl bootout gui/$(id -u)/com.jarvis.agent-smith 2>/dev/null; true")
+        }
+        if !johnyHost.isEmpty && !johnyUser.isEmpty {
+            runSSHCommand(host: johnyHost, user: johnyUser, command:
+                "launchctl bootout gui/$(id -u)/com.jarvis.agent-johny 2>/dev/null; true")
+        }
+
+        // Terminate any leftover persistent SSH sessions
+        for process in sshAgentProcesses where process.isRunning {
+            process.terminate()
+        }
+        sshAgentProcesses.removeAll()
+
+        // Terminate orchestrator
+        terminateProcess(orchestratorProcess, name: "Orchestrator")
+        orchestratorProcess = nil
+    }
+
+    private func envValue(_ key: String, from envContent: String, fallback: String = "") -> String {
+        for line in envContent.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if trimmed.hasPrefix("\(key)=") {
+                return String(trimmed.dropFirst(key.count + 1))
+            }
+        }
+        return fallback
+    }
+
+    private func startOrchestrator(envContent: String) {
+        let jarvisDir = NSHomeDirectory() + "/Documents/Jarvis-2.0/jarvis"
+        guard FileManager.default.fileExists(atPath: jarvisDir + "/packages/agent-runtime/src/cli.ts") else {
+            NSLog("Orchestrator: agent-runtime not found at \(jarvisDir), skipping")
+            return
+        }
+
+        // Find node binary — check nvm versions first, then common paths
+        let nvmDir = NSHomeDirectory() + "/.nvm/versions/node"
+        var nodeBin = "/usr/local/bin/node"
+        if let versions = try? FileManager.default.contentsOfDirectory(atPath: nvmDir) {
+            let sorted = versions.sorted().reversed()
+            for v in sorted {
+                let candidate = "\(nvmDir)/\(v)/bin/node"
+                if FileManager.default.fileExists(atPath: candidate) {
+                    nodeBin = candidate
+                    break
+                }
+            }
+        } else if FileManager.default.fileExists(atPath: "/opt/homebrew/bin/node") {
+            nodeBin = "/opt/homebrew/bin/node"
+        }
+
+        let nodePath = (nodeBin as NSString).deletingLastPathComponent
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = ["-c", """
+            export PATH="\(nodePath):\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" && \
+            cd "\(jarvisDir)" && \
+            set -a && source .env 2>/dev/null && set +a && \
+            export JARVIS_AGENT_ID=jarvis && \
+            export JARVIS_AGENT_ROLE=orchestrator && \
+            export ANTHROPIC_AUTH_MODE=claude-cli && \
+            exec ./node_modules/.bin/tsx packages/agent-runtime/src/cli.ts
+            """]
+
+        let logFile = "\(dataDir)/logs/orchestrator.log"
+        try? "".write(toFile: logFile, atomically: true, encoding: .utf8)
+        if let fh = FileHandle(forWritingAtPath: logFile) {
+            process.standardOutput = fh
+            process.standardError = fh
+        }
+
+        do {
+            try process.run()
+            orchestratorProcess = process
+            NSLog("Orchestrator started (PID: \(process.processIdentifier))")
+        } catch {
+            NSLog("Failed to start orchestrator: \(error)")
+        }
+    }
+
+    private func startRemoteAgent(name: String, host: String, user: String, agentId: String) {
+        guard !host.isEmpty, !user.isEmpty else {
+            NSLog("\(name): no host/user configured, skipping")
+            return
+        }
+
+        NSLog("Starting remote agent: \(name) (\(user)@\(host))")
+
+        // 1. Bootstrap websockify LaunchAgent (KeepAlive=true, survives SSH disconnect)
+        runSSHCommand(host: host, user: user, command:
+            "launchctl bootout gui/$(id -u)/com.jarvis.websockify 2>/dev/null; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jarvis.websockify.plist 2>/dev/null || true")
+
+        // 2. Bootstrap agent LaunchAgent (KeepAlive=true, runs under launchd)
+        runSSHCommand(host: host, user: user, command:
+            "launchctl bootout gui/$(id -u)/com.jarvis.\(agentId) 2>/dev/null; sleep 1; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jarvis.\(agentId).plist 2>/dev/null || true")
+
+        NSLog("Remote agent \(name) started via launchctl")
+    }
+
+    private func runSSHCommand(host: String, user: String, command: String) {
+        let sshKeyPath = NSHomeDirectory() + "/.ssh/id_ed25519_jarvis"
+        let sshKeyArgs: [String] = FileManager.default.fileExists(atPath: sshKeyPath)
+            ? ["-i", sshKeyPath] : []
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = sshKeyArgs + [
+            "-o", "ConnectTimeout=5",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "\(user)@\(host)",
+            command
+        ]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            NSLog("SSH command failed on \(host): \(error)")
+        }
     }
 
     private func launchProcess(_ path: String, args: [String] = [], env: [String: String]? = nil, cwd: String? = nil) -> Process? {
@@ -323,7 +492,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         webView.customUserAgent = "JarvisDashboard/1.0 Safari/605"
         window.contentView?.addSubview(webView)
 
-        if let url = URL(string: "http://localhost:\(port)") {
+        // First-run detection: if SSH key doesn't exist, load wizard directly
+        let sshKeyExists = FileManager.default.fileExists(atPath: NSHomeDirectory() + "/.ssh/id_ed25519_jarvis")
+        let initialPath = sshKeyExists ? "/" : "/setup"
+
+        if let url = URL(string: "http://localhost:\(port)\(initialPath)") {
             webView.load(URLRequest(url: url))
         }
 

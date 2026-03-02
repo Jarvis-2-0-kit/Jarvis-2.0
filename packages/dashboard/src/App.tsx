@@ -1,5 +1,5 @@
 import React, { useEffect, lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useGatewayStore } from './store/gateway-store.js';
 import { DashboardLayout } from './layouts/DashboardLayout.js';
 import { Sidebar } from './components/nav/Sidebar.js';
@@ -75,6 +75,21 @@ class ErrorBoundary extends React.Component<
   }
 }
 
+/** Redirects to /setup if wizard hasn't been completed yet */
+function SetupRedirectGuard({ children }: { children: React.ReactNode }) {
+  const setupRequired = useGatewayStore((s) => s.setupRequired);
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (setupRequired === true && location.pathname !== '/setup') {
+      navigate('/setup', { replace: true });
+    }
+  }, [setupRequired, location.pathname, navigate]);
+
+  return <>{children}</>;
+}
+
 export function App() {
   const init = useGatewayStore((s) => s.init);
   useGatewayToasts();
@@ -95,6 +110,7 @@ export function App() {
           <div style={{ flex: 1, overflow: 'hidden' }}>
             <ErrorBoundary>
               <Suspense fallback={<ViewLoader />}>
+                <SetupRedirectGuard>
                 <Routes>
                   <Route path="/" element={<DashboardLayout />} />
                   <Route path="/chat" element={<ChatView />} />
@@ -132,6 +148,7 @@ export function App() {
                   <Route path="/debug" element={<DebugView />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
+                </SetupRedirectGuard>
               </Suspense>
             </ErrorBoundary>
           </div>

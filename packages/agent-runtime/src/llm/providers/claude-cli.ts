@@ -30,8 +30,9 @@ function resolveClaudeBin(): string {
     if (bin) return bin;
   } catch { /* ignore */ }
 
-  // Common NVM / Homebrew locations
+  // Common NVM / Homebrew / local locations
   const candidates = [
+    `${process.env['HOME']}/.local/bin/claude`,
     `${process.env['HOME']}/.nvm/versions/node/${process.version}/bin/claude`,
     '/usr/local/bin/claude',
     '/opt/homebrew/bin/claude',

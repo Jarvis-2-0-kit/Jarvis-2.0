@@ -84,6 +84,12 @@ export interface AgentRegistryEntry {
     tools?: Record<string, boolean>;
     skills?: Record<string, boolean>;
   };
+  sshUser?: string;
+  sshKeyDeployed?: boolean;
+  repoInstalled?: boolean;
+  envDeployed?: boolean;
+  websockifyPort?: number;
+  slot?: 'smith' | 'johny';
 }
 
 export const AGENT_DEFAULTS: Record<string, { role: AgentRole; capabilities: readonly AgentCapability[] }> = Object.freeze({

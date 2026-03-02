@@ -2199,6 +2199,356 @@ export class GatewayServer {
       }
     });
 
+    // ── Setup Wizard: automated SSH + remote install ──────────────────
+
+    this.protocol.registerMethod('setup.wizard.status', async () => {
+      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const sshKeyPath = resolve(home, '.ssh/id_ed25519_jarvis');
+      const sshKeyExists = existsSync(sshKeyPath);
+
+      // Check smith/johny agent status from store
+      const allAgents = await this.store.getAllAgentStates();
+      const smithState = allAgents.find((a) => a.identity.agentId === 'agent-smith');
+      const johnyState = allAgents.find((a) => a.identity.agentId === 'agent-johny');
+
+      const smith = {
+        agentId: 'agent-smith',
+        role: 'dev',
+        slot: 'smith' as const,
+        online: smithState ? smithState.status !== 'offline' : false,
+        status: smithState?.status ?? 'offline',
+      };
+      const johny = {
+        agentId: 'agent-johny',
+        role: 'marketing',
+        slot: 'johny' as const,
+        online: johnyState ? johnyState.status !== 'offline' : false,
+        status: johnyState?.status ?? 'offline',
+      };
+
+      const setupComplete = sshKeyExists && smith.online && johny.online;
+
+      return { setupComplete, sshKeyExists, smith, johny };
+    });
+
+    this.protocol.registerMethod('setup.ssh.generateKey', async (_params, clientId) => {
+      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const sshDir = resolve(home, '.ssh');
+      const keyPath = resolve(sshDir, 'id_ed25519_jarvis');
+
+      if (existsSync(keyPath)) {
+        this.protocol.sendEvent(clientId, 'setup.progress', {
+          step: 'ssh.generateKey', status: 'done', message: 'SSH key already exists', slot: null,
+        });
+        return { existed: true, path: keyPath };
+      }
+
+      if (!existsSync(sshDir)) mkdirSync(sshDir, { recursive: true, mode: 0o700 });
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'ssh.generateKey', status: 'running', message: 'Generating ed25519 key...', slot: null,
+      });
+
+      await execFileAsync('ssh-keygen', [
+        '-t', 'ed25519',
+        '-f', keyPath,
+        '-N', '',
+        '-C', 'jarvis-auto-deploy',
+      ]);
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'ssh.generateKey', status: 'done', message: 'SSH key generated', slot: null,
+      });
+
+      return { existed: false, path: keyPath };
+    });
+
+    this.protocol.registerMethod('setup.ssh.deployKey', async (params, clientId) => {
+      const { ip, sshUser, sshPassword, slot } = params as {
+        ip: string; sshUser: string; sshPassword: string; slot: string;
+      };
+      if (!ip || !sshUser || !sshPassword) throw new Error('ip, sshUser, sshPassword are required');
+
+      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const pubKeyPath = resolve(home, '.ssh/id_ed25519_jarvis.pub');
+      if (!existsSync(pubKeyPath)) throw new Error('SSH public key not found — generate key first');
+
+      const pubKey = readFileSync(pubKeyPath, 'utf-8').trim();
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'ssh.deployKey', status: 'running', message: `Deploying key to ${sshUser}@${ip}...`, slot,
+      });
+
+      // Use sshpass to deploy the public key to authorized_keys
+      const deployCmd = `mkdir -p ~/.ssh && chmod 700 ~/.ssh && grep -qF '${pubKey}' ~/.ssh/authorized_keys 2>/dev/null || echo '${pubKey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys`;
+
+      try {
+        await execFileAsync('sshpass', [
+          '-p', sshPassword,
+          'ssh',
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'ConnectTimeout=10',
+          `${sshUser}@${ip}`,
+          deployCmd,
+        ], { timeout: 30000 });
+      } catch (err) {
+        this.protocol.sendEvent(clientId, 'setup.progress', {
+          step: 'ssh.deployKey', status: 'failed', message: `Key deploy failed: ${(err as Error).message}`, slot,
+        });
+        throw new Error(`SSH key deploy failed for ${slot}: ${(err as Error).message}`);
+      }
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'ssh.deployKey', status: 'done', message: 'SSH key deployed', slot,
+      });
+
+      return { success: true };
+    });
+
+    this.protocol.registerMethod('setup.ssh.testPasswordless', async (params, clientId) => {
+      const { ip, sshUser, slot } = params as { ip: string; sshUser: string; slot: string };
+      if (!ip || !sshUser) throw new Error('ip and sshUser are required');
+
+      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const sshKey = resolve(home, '.ssh/id_ed25519_jarvis');
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'ssh.testPasswordless', status: 'running', message: `Testing passwordless SSH to ${sshUser}@${ip}...`, slot,
+      });
+
+      try {
+        await execFileAsync('ssh', [
+          '-i', sshKey,
+          '-o', 'BatchMode=yes',
+          '-o', 'StrictHostKeyChecking=no',
+          '-o', 'ConnectTimeout=10',
+          `${sshUser}@${ip}`,
+          'echo ok',
+        ], { timeout: 15000 });
+
+        this.protocol.sendEvent(clientId, 'setup.progress', {
+          step: 'ssh.testPasswordless', status: 'done', message: 'Passwordless SSH works', slot,
+        });
+        return { success: true };
+      } catch (err) {
+        this.protocol.sendEvent(clientId, 'setup.progress', {
+          step: 'ssh.testPasswordless', status: 'failed', message: `Passwordless SSH failed: ${(err as Error).message}`, slot,
+        });
+        throw new Error(`Passwordless SSH test failed for ${slot}: ${(err as Error).message}`);
+      }
+    });
+
+    this.protocol.registerMethod('setup.remote.install', async (params, clientId) => {
+      const { ip, sshUser, slot } = params as { ip: string; sshUser: string; slot: string };
+      if (!ip || !sshUser) throw new Error('ip and sshUser are required');
+
+      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const sshKey = resolve(home, '.ssh/id_ed25519_jarvis');
+      const sshArgs = ['-i', sshKey, '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=15', `${sshUser}@${ip}`];
+
+      // Check if repo exists
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.install', status: 'running', message: 'Checking if repo exists on remote...', slot,
+      });
+
+      // Sync code from master via rsync (no git needed on agents)
+      const jarvisDir = resolve(home, 'Documents/Jarvis-2.0/jarvis');
+      const rsyncSshArg = `-e ssh -i ${sshKey} -o StrictHostKeyChecking=no`;
+      const rsyncDest = `${sshUser}@${ip}:~/jarvis/`;
+
+      // Ensure remote directory exists
+      try {
+        await execFileAsync('ssh', [...sshArgs, 'mkdir -p ~/jarvis/packages'], { timeout: 10000 });
+      } catch { /* ignore */ }
+
+      // Rsync packages needed by agents: shared, agent-runtime, tools
+      const packagesToSync = ['shared', 'agent-runtime', 'tools'];
+      for (const pkg of packagesToSync) {
+        this.protocol.sendEvent(clientId, 'setup.progress', {
+          step: 'remote.install', status: 'running', message: `Syncing ${pkg} to remote...`, slot,
+        });
+        try {
+          await execFileAsync('rsync', [
+            '-avz', '--delete',
+            '-e', `ssh -i ${sshKey} -o StrictHostKeyChecking=no`,
+            `${jarvisDir}/packages/${pkg}/`,
+            `${sshUser}@${ip}:~/jarvis/packages/${pkg}/`,
+          ], { timeout: 60000 });
+        } catch (err) {
+          this.protocol.sendEvent(clientId, 'setup.progress', {
+            step: 'remote.install', status: 'failed', message: `Rsync ${pkg} failed: ${(err as Error).message}`, slot,
+          });
+          throw new Error(`Rsync ${pkg} failed on ${slot}: ${(err as Error).message}`);
+        }
+      }
+
+      // Sync root config files
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.install', status: 'running', message: 'Syncing config files...', slot,
+      });
+      const rootFiles = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.base.json', 'tsconfig.json', 'force-ipv4.cjs'];
+      for (const f of rootFiles) {
+        const srcFile = resolve(jarvisDir, f);
+        if (require('fs').existsSync(srcFile)) {
+          try {
+            await execFileAsync('rsync', [
+              '-avz',
+              '-e', `ssh -i ${sshKey} -o StrictHostKeyChecking=no`,
+              srcFile,
+              `${sshUser}@${ip}:~/jarvis/${f}`,
+            ], { timeout: 15000 });
+          } catch { /* non-fatal */ }
+        }
+      }
+
+      // pnpm install + build
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.install', status: 'running', message: 'Running pnpm install + build on remote...', slot,
+      });
+
+      try {
+        await execFileAsync('ssh', [...sshArgs,
+          'source ~/.zshrc 2>/dev/null; cd ~/jarvis && pnpm install --frozen-lockfile && pnpm build',
+        ], { timeout: 300000 });
+      } catch (err) {
+        this.protocol.sendEvent(clientId, 'setup.progress', {
+          step: 'remote.install', status: 'failed', message: `pnpm install/build failed: ${(err as Error).message}`, slot,
+        });
+        throw new Error(`pnpm install/build failed on ${slot}: ${(err as Error).message}`);
+      }
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.install', status: 'done', message: 'Repository installed on remote', slot,
+      });
+
+      return { success: true };
+    });
+
+    this.protocol.registerMethod('setup.remote.deployEnv', async (params, clientId) => {
+      const { ip, sshUser, slot, agentId, role } = params as {
+        ip: string; sshUser: string; slot: string; agentId: string; role: string;
+      };
+      if (!ip || !sshUser || !agentId || !role) throw new Error('ip, sshUser, agentId, role are required');
+
+      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const sshKey = resolve(home, '.ssh/id_ed25519_jarvis');
+      const sshArgs = ['-i', sshKey, '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10', `${sshUser}@${ip}`];
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.deployEnv', status: 'running', message: 'Generating and deploying .env...', slot,
+      });
+
+      // Determine master IP
+      const nets = networkInterfaces();
+      let masterIp = '127.0.0.1';
+      for (const ifaces of Object.values(nets)) {
+        if (!ifaces) continue;
+        for (const iface of ifaces) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            masterIp = iface.address;
+            break;
+          }
+        }
+        if (masterIp !== '127.0.0.1') break;
+      }
+
+      const natsPort = parseInt(new URL(this.config.natsUrl).port) || 4222;
+      const redisPort = parseInt(new URL(this.config.redisUrl).port) || 6379;
+
+      // Generate agent tokens
+      const natsToken = randomBytes(16).toString('hex');
+      const authToken = randomBytes(32).toString('hex');
+
+      const envLines = [
+        `# Agent: ${agentId} (${role}) — auto-deployed by wizard`,
+        `# Generated: ${new Date().toISOString()}`,
+        `JARVIS_AGENT_ID=${agentId}`,
+        `JARVIS_AGENT_ROLE=${role}`,
+        `JARVIS_MACHINE_ID=${sshUser}-${slot}`,
+        `NATS_URL=nats://${masterIp}:${natsPort}`,
+        `NATS_TOKEN=${natsToken}`,
+        `REDIS_URL=redis://${masterIp}:${redisPort}`,
+        `GATEWAY_URL=http://${masterIp}:${this.config.port}`,
+        `JARVIS_NAS_MOUNT=/Users/${sshUser}/jarvis-nas`,
+        `JARVIS_AUTH_TOKEN=${authToken}`,
+        `ANTHROPIC_AUTH_MODE=claude-cli`,
+        `THUNDERBOLT_ENABLED=false`,
+      ];
+
+      // Append LLM keys from current env
+      const llmKeys = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_AI_API_KEY', 'OPENROUTER_API_KEY', 'OLLAMA_HOST'];
+      for (const k of llmKeys) {
+        if (process.env[k]) envLines.push(`${k}=${process.env[k]}`);
+      }
+
+      const envContent = envLines.join('\n');
+
+      // Deploy via SSH: write .env to remote jarvis directory
+      try {
+        const escapedContent = envContent.replace(/'/g, "'\\''");
+        await execFileAsync('ssh', [...sshArgs,
+          `cat > ~/jarvis/.env << 'JARVIS_ENV_EOF'\n${escapedContent}\nJARVIS_ENV_EOF`,
+        ], { timeout: 15000 });
+      } catch (err) {
+        this.protocol.sendEvent(clientId, 'setup.progress', {
+          step: 'remote.deployEnv', status: 'failed', message: `Env deploy failed: ${(err as Error).message}`, slot,
+        });
+        throw new Error(`Env deploy failed on ${slot}: ${(err as Error).message}`);
+      }
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.deployEnv', status: 'done', message: '.env deployed to remote', slot,
+      });
+
+      return { success: true, natsToken, authToken };
+    });
+
+    this.protocol.registerMethod('setup.remote.startServices', async (params, clientId) => {
+      const { ip, sshUser, slot, agentId } = params as {
+        ip: string; sshUser: string; slot: string; agentId: string;
+      };
+      if (!ip || !sshUser || !agentId) throw new Error('ip, sshUser, agentId are required');
+
+      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const sshKey = resolve(home, '.ssh/id_ed25519_jarvis');
+      const sshArgs = ['-i', sshKey, '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=15', `${sshUser}@${ip}`];
+
+      // 1. Start websockify via launchctl
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.startServices', status: 'running', message: 'Starting websockify via launchctl...', slot,
+      });
+
+      try {
+        await execFileAsync('ssh', [...sshArgs,
+          'launchctl bootout gui/$(id -u)/com.jarvis.websockify 2>/dev/null; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jarvis.websockify.plist 2>/dev/null; true',
+        ], { timeout: 15000 });
+      } catch (err) {
+        log.warn(`Websockify start warning on ${slot}`, { error: String(err) });
+      }
+
+      // 2. Start agent via launchctl (kill old + bootstrap)
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.startServices', status: 'running', message: 'Starting agent via launchctl...', slot,
+      });
+
+      try {
+        await execFileAsync('ssh', [...sshArgs,
+          `launchctl bootout gui/$(id -u)/com.jarvis.${agentId} 2>/dev/null; sleep 1; launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.jarvis.${agentId}.plist`,
+        ], { timeout: 20000 });
+      } catch (err) {
+        this.protocol.sendEvent(clientId, 'setup.progress', {
+          step: 'remote.startServices', status: 'failed', message: `Agent start failed: ${(err as Error).message}`, slot,
+        });
+        throw new Error(`Agent start failed on ${slot}: ${(err as Error).message}`);
+      }
+
+      this.protocol.sendEvent(clientId, 'setup.progress', {
+        step: 'remote.startServices', status: 'done', message: 'Services started on remote', slot,
+      });
+
+      return { success: true };
+    });
+
   }
 
   // --- NATS Subscriptions ---

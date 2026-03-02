@@ -1,35 +1,32 @@
 /**
- * SetupWizardView — Agent Onboarding & Deployment Wizard
+ * SetupWizardView — Automated SSH + Remote Agent Deployment Wizard
  *
- * 3-step wizard:
- * 1. Master Status — shows master node info and connectivity
- * 2. Add Agent — form to register a new agent with auto-generated tokens
- * 3. Verify & Launch — start local agents or test remote connections
- *
- * Plus a persistent Agent Registry panel at the bottom.
+ * 4-step wizard with 2 slots (Smith/Dev, Johny/Marketing):
+ * 1. Master Check — verify NATS/Redis/Gateway
+ * 2. Configure Agents — form with IP, SSH user, SSH password per slot
+ * 3. Deploy — automated: keygen → deploy key → test SSH → git clone → pnpm install → .env → start
+ * 4. Verify — confirm both agents online + VNC
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGatewayStore } from '../store/gateway-store.js';
 import { gateway } from '../gateway/client.js';
 import {
   Server,
-  Plus,
+  Shield,
   Rocket,
   CheckCircle2,
   XCircle,
-  Copy,
-  Download,
-  Play,
-  Square,
-  Trash2,
-  Wifi,
-  RefreshCw,
   ChevronRight,
   ChevronLeft,
-  Monitor,
-  Globe,
+  Wifi,
+  RefreshCw,
+  Settings,
+  Loader,
+  Eye,
+  EyeOff,
+  Zap,
 } from 'lucide-react';
 
 // --- Types ---
@@ -46,23 +43,44 @@ interface MasterInfo {
   natsConnected: boolean;
 }
 
-interface RegistryEntry {
-  agentId: string;
-  role: string;
-  hostname: string;
+interface WizardStatus {
+  setupComplete: boolean;
+  sshKeyExists: boolean;
+  smith: { agentId: string; role: string; slot: string; online: boolean; status: string };
+  johny: { agentId: string; role: string; slot: string; online: boolean; status: string };
+}
+
+interface SlotConfig {
   ip: string;
-  machineId: string;
-  natsToken: string;
-  authToken: string;
-  isLocal: boolean;
-  deployedAt: number;
-  lastSeen: number | null;
-  config: Record<string, unknown>;
+  sshUser: string;
+  sshPassword: string;
 }
 
 interface NetworkMachine {
   ip: string;
   hostname: string;
+}
+
+type DeployStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
+
+interface DeployStep {
+  id: string;
+  label: string;
+  status: DeployStepStatus;
+  message: string;
+}
+
+const DEPLOY_STEPS: { id: string; label: string }[] = [
+  { id: 'ssh.generateKey', label: 'Generate SSH Key' },
+  { id: 'ssh.deployKey', label: 'Deploy SSH Key' },
+  { id: 'ssh.testPasswordless', label: 'Test Passwordless SSH' },
+  { id: 'remote.install', label: 'Install Repository' },
+  { id: 'remote.deployEnv', label: 'Deploy .env Config' },
+  { id: 'remote.startServices', label: 'Start Services' },
+];
+
+function makeDeploySteps(): DeployStep[] {
+  return DEPLOY_STEPS.map((s) => ({ ...s, status: 'pending' as const, message: '' }));
 }
 
 // --- Main Component ---
@@ -74,36 +92,29 @@ export function SetupWizardView() {
 
   // Step 1 state
   const [masterInfo, setMasterInfo] = useState<MasterInfo | null>(null);
-  const [registry, setRegistry] = useState<RegistryEntry[]>([]);
+  const [wizardStatus, setWizardStatus] = useState<WizardStatus | null>(null);
   const [loadingMaster, setLoadingMaster] = useState(false);
 
   // Step 2 state
-  const [newAgentId, setNewAgentId] = useState('');
-  const [newRole, setNewRole] = useState<'orchestrator' | 'dev' | 'marketing'>('dev');
-  const [machineType, setMachineType] = useState<'local' | 'remote'>('local');
-  const [remoteIp, setRemoteIp] = useState('');
-  const [remoteHostname, setRemoteHostname] = useState('');
-  const [addResult, setAddResult] = useState<{ agentId: string; envSnippet: string } | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [addError, setAddError] = useState('');
-
-  // Step 3 state
-  const [starting, setStarting] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ reachable: boolean; latencyMs: number } | null>(null);
-  const [agentOnline, setAgentOnline] = useState(false);
-
-  // Network scan
+  const [smithConfig, setSmithConfig] = useState<SlotConfig>({ ip: '', sshUser: '', sshPassword: '' });
+  const [johnyConfig, setJohnyConfig] = useState<SlotConfig>({ ip: '', sshUser: '', sshPassword: '' });
   const [networkMachines, setNetworkMachines] = useState<NetworkMachine[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [showSmithPass, setShowSmithPass] = useState(false);
+  const [showJohnyPass, setShowJohnyPass] = useState(false);
 
-  // Registry action states
-  const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
+  // Step 3 state
+  const [deploying, setDeploying] = useState(false);
+  const [deployError, setDeployError] = useState('');
+  const [smithSteps, setSmithSteps] = useState<DeployStep[]>(makeDeploySteps());
+  const [johnySteps, setJohnySteps] = useState<DeployStep[]>(makeDeploySteps());
+  const [keygenStep, setKeygenStep] = useState<DeployStep>({ id: 'ssh.generateKey', label: 'Generate SSH Key (shared)', status: 'pending', message: '' });
+  const deployAbortRef = useRef(false);
 
   const navigate = useNavigate();
 
-  // Fetch master info & registry
-  const fetchMasterInfo = useCallback(async () => {
+  // --- Fetch master info & wizard status ---
+  const fetchStatus = useCallback(async () => {
     if (!connected) return;
     setLoadingMaster(true);
     try {
@@ -111,78 +122,37 @@ export function SetupWizardView() {
       setMasterInfo(info);
     } catch { /* ignore */ }
     try {
-      const reg = await gateway.request<RegistryEntry[]>('setup.agents.registry');
-      setRegistry(reg || []);
+      const status = await gateway.request<WizardStatus>('setup.wizard.status');
+      setWizardStatus(status);
     } catch { /* ignore */ }
     setLoadingMaster(false);
   }, [connected]);
 
   useEffect(() => {
-    void fetchMasterInfo();
-  }, [fetchMasterInfo]);
+    void fetchStatus();
+  }, [fetchStatus]);
 
-  // Watch for agent coming online (step 3)
+  // Listen for progress events
   useEffect(() => {
-    if (addResult && step === 3) {
-      const agentState = agents.get(addResult.agentId);
-      if (agentState && agentState.status !== 'offline') {
-        setAgentOnline(true);
+    const unsub = gateway.on('setup.progress', (payload) => {
+      const p = payload as { step: string; status: DeployStepStatus; message: string; slot: string | null };
+
+      // Shared keygen step
+      if (p.step === 'ssh.generateKey' && !p.slot) {
+        setKeygenStep((prev) => ({ ...prev, status: p.status, message: p.message }));
+        return;
       }
-    }
-  }, [agents, addResult, step]);
 
-  // Listen for setup events
-  useEffect(() => {
-    const unsub1 = gateway.on('setup.agent.added', () => void fetchMasterInfo());
-    const unsub2 = gateway.on('setup.agent.removed', () => void fetchMasterInfo());
-    const unsub3 = gateway.on('setup.agent.started', () => void fetchMasterInfo());
-    const unsub4 = gateway.on('setup.agent.stopped', () => void fetchMasterInfo());
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
-  }, [fetchMasterInfo]);
+      const updateSteps = (prev: DeployStep[]): DeployStep[] =>
+        prev.map((s) => s.id === p.step ? { ...s, status: p.status, message: p.message } : s);
+
+      if (p.slot === 'smith') setSmithSteps(updateSteps);
+      else if (p.slot === 'johny') setJohnySteps(updateSteps);
+    });
+    return () => unsub();
+  }, []);
 
   // --- Handlers ---
-
-  const handleAddAgent = async () => {
-    if (!newAgentId.trim()) { setAddError('Agent ID is required'); return; }
-    setAdding(true);
-    setAddError('');
-    try {
-      const result = await gateway.request<{ agentId: string; envSnippet: string }>('setup.agents.add', {
-        agentId: newAgentId.trim(),
-        role: newRole,
-        hostname: machineType === 'remote' ? remoteHostname : undefined,
-        ip: machineType === 'remote' ? remoteIp : undefined,
-      });
-      setAddResult(result);
-      setAgentOnline(false);
-      setTestResult(null);
-      await fetchMasterInfo();
-      setStep(3);
-    } catch (err) {
-      setAddError((err as Error).message);
-    }
-    setAdding(false);
-  };
-
-  const handleStartAgent = async () => {
-    if (!addResult) return;
-    setStarting(true);
-    try {
-      await gateway.request('setup.agents.start', { agentId: addResult.agentId });
-    } catch { /* ignore — will see status via events */ }
-    setStarting(false);
-  };
-
-  const handleTestAgent = async () => {
-    if (!addResult) return;
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const result = await gateway.request<{ reachable: boolean; latencyMs: number }>('setup.agents.test', { agentId: addResult.agentId });
-      setTestResult(result);
-    } catch { setTestResult({ reachable: false, latencyMs: 0 }); }
-    setTesting(false);
-  };
 
   const handleNetworkScan = async () => {
     setScanning(true);
@@ -193,56 +163,129 @@ export function SetupWizardView() {
     setScanning(false);
   };
 
-  const handleCopyEnv = (text: string) => {
-    void navigator.clipboard.writeText(text);
+  const updateSlotStep = (slot: 'smith' | 'johny', stepId: string, status: DeployStepStatus, message: string) => {
+    const updater = (prev: DeployStep[]): DeployStep[] =>
+      prev.map((s) => s.id === stepId ? { ...s, status, message } : s);
+    if (slot === 'smith') setSmithSteps(updater);
+    else setJohnySteps(updater);
   };
 
-  const handleDownloadEnv = (agentId: string, content: string) => {
-    const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${agentId}.env`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const deploySlot = async (
+    slot: 'smith' | 'johny',
+    config: SlotConfig,
+    agentId: string,
+    role: string,
+  ) => {
+    if (deployAbortRef.current) return;
 
-  // Registry actions
-  const handleRegistryStart = async (agentId: string) => {
-    setActionLoading((p) => ({ ...p, [agentId]: 'starting' }));
-    try { await gateway.request('setup.agents.start', { agentId }); } catch { /* */ }
-    setActionLoading((p) => { const n = { ...p }; delete n[agentId]; return n; });
-  };
-
-  const handleRegistryStop = async (agentId: string) => {
-    setActionLoading((p) => ({ ...p, [agentId]: 'stopping' }));
-    try { await gateway.request('setup.agents.stop', { agentId }); } catch { /* */ }
-    setActionLoading((p) => { const n = { ...p }; delete n[agentId]; return n; });
-  };
-
-  const handleRegistryRemove = async (agentId: string) => {
-    setActionLoading((p) => ({ ...p, [agentId]: 'removing' }));
+    // Step: Deploy SSH Key
+    updateSlotStep(slot, 'ssh.deployKey', 'running', `Deploying key to ${config.sshUser}@${config.ip}...`);
     try {
-      await gateway.request('setup.agents.remove', { agentId });
-      await fetchMasterInfo();
-    } catch { /* */ }
-    setActionLoading((p) => { const n = { ...p }; delete n[agentId]; return n; });
-  };
+      await gateway.request('setup.ssh.deployKey', {
+        ip: config.ip, sshUser: config.sshUser, sshPassword: config.sshPassword, slot,
+      });
+      updateSlotStep(slot, 'ssh.deployKey', 'done', 'SSH key deployed');
+    } catch (err) {
+      updateSlotStep(slot, 'ssh.deployKey', 'failed', (err as Error).message);
+      throw err;
+    }
 
-  const handleRegistryCopyEnv = async (agentId: string) => {
+    if (deployAbortRef.current) return;
+
+    // Step: Test Passwordless SSH
+    updateSlotStep(slot, 'ssh.testPasswordless', 'running', 'Testing passwordless SSH...');
     try {
-      const result = await gateway.request<{ env: string }>('setup.agents.env', { agentId });
-      if (result?.env) void navigator.clipboard.writeText(result.env);
-    } catch { /* */ }
+      await gateway.request('setup.ssh.testPasswordless', {
+        ip: config.ip, sshUser: config.sshUser, slot,
+      });
+      updateSlotStep(slot, 'ssh.testPasswordless', 'done', 'Passwordless SSH works');
+    } catch (err) {
+      updateSlotStep(slot, 'ssh.testPasswordless', 'failed', (err as Error).message);
+      throw err;
+    }
+
+    if (deployAbortRef.current) return;
+
+    // Step: Install Repository
+    updateSlotStep(slot, 'remote.install', 'running', 'Installing repository...');
+    try {
+      await gateway.request('setup.remote.install', {
+        ip: config.ip, sshUser: config.sshUser, slot,
+      });
+      updateSlotStep(slot, 'remote.install', 'done', 'Repository installed');
+    } catch (err) {
+      updateSlotStep(slot, 'remote.install', 'failed', (err as Error).message);
+      throw err;
+    }
+
+    if (deployAbortRef.current) return;
+
+    // Step: Deploy .env
+    updateSlotStep(slot, 'remote.deployEnv', 'running', 'Deploying .env config...');
+    try {
+      await gateway.request('setup.remote.deployEnv', {
+        ip: config.ip, sshUser: config.sshUser, slot, agentId, role,
+      });
+      updateSlotStep(slot, 'remote.deployEnv', 'done', '.env deployed');
+    } catch (err) {
+      updateSlotStep(slot, 'remote.deployEnv', 'failed', (err as Error).message);
+      throw err;
+    }
+
+    if (deployAbortRef.current) return;
+
+    // Step: Start Services
+    updateSlotStep(slot, 'remote.startServices', 'running', 'Starting services...');
+    try {
+      await gateway.request('setup.remote.startServices', {
+        ip: config.ip, sshUser: config.sshUser, slot, agentId,
+      });
+      updateSlotStep(slot, 'remote.startServices', 'done', 'Services started');
+    } catch (err) {
+      updateSlotStep(slot, 'remote.startServices', 'failed', (err as Error).message);
+      throw err;
+    }
   };
 
-  const handleRegistryTest = async (agentId: string) => {
-    setActionLoading((p) => ({ ...p, [agentId]: 'testing' }));
-    try { await gateway.request('setup.agents.test', { agentId }); } catch { /* */ }
-    setActionLoading((p) => { const n = { ...p }; delete n[agentId]; return n; });
+  const handleDeploy = async () => {
+    setDeploying(true);
+    setDeployError('');
+    deployAbortRef.current = false;
+    setSmithSteps(makeDeploySteps());
+    setJohnySteps(makeDeploySteps());
+    setKeygenStep({ id: 'ssh.generateKey', label: 'Generate SSH Key (shared)', status: 'pending', message: '' });
+
+    try {
+      // 1. Shared keygen
+      setKeygenStep((p) => ({ ...p, status: 'running', message: 'Generating SSH key...' }));
+      await gateway.request('setup.ssh.generateKey');
+      setKeygenStep((p) => ({ ...p, status: 'done', message: 'SSH key ready' }));
+
+      // 2. Deploy Smith (agent-smith / dev)
+      if (smithConfig.ip && smithConfig.sshUser && smithConfig.sshPassword) {
+        await deploySlot('smith', smithConfig, 'agent-smith', 'dev');
+      } else {
+        setSmithSteps((prev) => prev.map((s) => s.id === 'ssh.generateKey' ? s : { ...s, status: 'skipped', message: 'No config provided' }));
+      }
+
+      // 3. Deploy Johny (agent-johny / marketing)
+      if (johnyConfig.ip && johnyConfig.sshUser && johnyConfig.sshPassword) {
+        await deploySlot('johny', johnyConfig, 'agent-johny', 'marketing');
+      } else {
+        setJohnySteps((prev) => prev.map((s) => s.id === 'ssh.generateKey' ? s : { ...s, status: 'skipped', message: 'No config provided' }));
+      }
+
+      // Move to verify step
+      setStep(4);
+      // Refresh status
+      void fetchStatus();
+    } catch (err) {
+      setDeployError((err as Error).message);
+    }
+    setDeploying(false);
   };
 
-  // --- Styles ---
+  // --- Styles (reused from original) ---
 
   const panelStyle: React.CSSProperties = {
     background: 'rgba(0,255,65,0.02)',
@@ -314,6 +357,17 @@ export function SetupWizardView() {
     display: 'inline-block',
   });
 
+  const stepIndicatorSteps = [
+    { num: 1, label: 'Master Check', icon: Server },
+    { num: 2, label: 'Configure Agents', icon: Settings },
+    { num: 3, label: 'Deploy', icon: Rocket },
+    { num: 4, label: 'Verify', icon: Shield },
+  ];
+
+  // Can only navigate forward if fields are filled
+  const canProceedToStep3 = (smithConfig.ip && smithConfig.sshUser && smithConfig.sshPassword) ||
+    (johnyConfig.ip && johnyConfig.sshUser && johnyConfig.sshPassword);
+
   // --- Render ---
 
   if (!connected) {
@@ -341,10 +395,10 @@ export function SetupWizardView() {
             SETUP WIZARD
           </h1>
           <p style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', margin: '4px 0 0' }}>
-            Agent onboarding, deployment & lifecycle management
+            Automated SSH configuration &amp; remote agent deployment
           </p>
         </div>
-        <button onClick={() => void fetchMasterInfo()} style={btnSecondary} title="Refresh">
+        <button onClick={() => void fetchStatus()} style={btnSecondary} title="Refresh">
           <RefreshCw size={14} />
           REFRESH
         </button>
@@ -352,14 +406,11 @@ export function SetupWizardView() {
 
       {/* Step Indicator */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 28 }}>
-        {[
-          { num: 1, label: 'Master Status', icon: Server },
-          { num: 2, label: 'Add Agent', icon: Plus },
-          { num: 3, label: 'Verify & Launch', icon: Rocket },
-        ].map(({ num, label, icon: Icon }, i) => (
+        {stepIndicatorSteps.map(({ num, label, icon: Icon }, i) => (
           <div key={num} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <button
-              onClick={() => setStep(num)}
+              onClick={() => { if (!deploying) setStep(num); }}
+              disabled={deploying}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -373,22 +424,22 @@ export function SetupWizardView() {
                 background: step === num ? 'var(--green-bright)' : step > num ? 'rgba(0,255,65,0.08)' : 'rgba(255,255,255,0.03)',
                 border: step === num ? 'none' : step > num ? '1px solid rgba(0,255,65,0.2)' : '1px solid var(--border-primary)',
                 borderRadius: 8,
-                cursor: 'pointer',
+                cursor: deploying ? 'default' : 'pointer',
                 textTransform: 'uppercase',
+                opacity: deploying && step !== num ? 0.5 : 1,
               }}
             >
               <Icon size={14} />
               {label}
             </button>
-            {i < 2 && <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />}
+            {i < stepIndicatorSteps.length - 1 && <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />}
           </div>
         ))}
       </div>
 
-      {/* Step Content */}
+      {/* ========== STEP 1: Master Check ========== */}
       {step === 1 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* Master Info */}
           <div style={panelStyle}>
             <div style={{ ...labelStyle, marginBottom: 16 }}>MASTER NODE</div>
             {loadingMaster && !masterInfo ? (
@@ -414,173 +465,218 @@ export function SetupWizardView() {
             )}
           </div>
 
-          {/* Existing Agents Quick View */}
+          {/* Agents quick view */}
           <div style={panelStyle}>
             <div style={{ ...labelStyle, marginBottom: 12 }}>
-              ACTIVE AGENTS ({agents.size})
+              AGENTS STATUS
             </div>
-            {agents.size === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-ui)' }}>
-                No agents online. Use Step 2 to add and deploy agents.
+            {wizardStatus ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                <AgentStatusCard
+                  label="SMITH"
+                  agentId={wizardStatus.smith.agentId}
+                  role={wizardStatus.smith.role}
+                  online={wizardStatus.smith.online}
+                  status={wizardStatus.smith.status}
+                  color="var(--green-bright)"
+                />
+                <AgentStatusCard
+                  label="JOHNY"
+                  agentId={wizardStatus.johny.agentId}
+                  role={wizardStatus.johny.role}
+                  online={wizardStatus.johny.online}
+                  status={wizardStatus.johny.status}
+                  color="var(--cyan-bright)"
+                />
               </div>
             ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
-                {Array.from(agents.values()).map((agent) => {
-                  const isOnline = agent.status !== 'offline';
-                  return (
-                    <div key={agent.identity.agentId} style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 10,
-                      padding: '10px 16px',
-                      background: 'rgba(0,0,0,0.2)',
-                      border: `1px solid ${isOnline ? 'rgba(0,255,65,0.15)' : 'var(--border-primary)'}`,
-                      borderRadius: 8,
-                    }}>
-                      <span style={statusDot(isOnline)} />
-                      <div>
-                        <div style={{ fontSize: 13, fontWeight: 700, fontFamily: 'var(--font-display)', letterSpacing: 1, color: 'var(--text-white)' }}>
-                          {agent.identity.agentId.toUpperCase()}
-                        </div>
-                        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
-                          {agent.identity.role} / {agent.status}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div style={{ color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-ui)' }}>
+                No agents configured yet.
+              </div>
+            )}
+
+            {wizardStatus && (
+              <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={statusDot(wizardStatus.sshKeyExists)} />
+                <span style={{ fontSize: 12, fontFamily: 'var(--font-ui)', color: wizardStatus.sshKeyExists ? 'var(--green-bright)' : 'var(--text-muted)' }}>
+                  SSH Key: {wizardStatus.sshKeyExists ? 'Exists' : 'Not generated'}
+                </span>
               </div>
             )}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
             <button onClick={() => setStep(2)} style={btnPrimary}>
-              NEXT: ADD AGENT
+              NEXT: CONFIGURE AGENTS
               <ChevronRight size={16} />
             </button>
           </div>
         </div>
       )}
 
+      {/* ========== STEP 2: Configure Agents ========== */}
       {step === 2 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          <div style={panelStyle}>
-            <div style={{ ...labelStyle, marginBottom: 16 }}>NEW AGENT</div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
-              <div>
-                <div style={labelStyle}>AGENT ID</div>
-                <input
-                  value={newAgentId}
-                  onChange={(e) => setNewAgentId(e.target.value)}
-                  placeholder="e.g. agent-alpha"
-                  style={inputStyle}
-                />
+          {/* Two-column layout */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+            {/* Smith slot */}
+            <div style={{
+              ...panelStyle,
+              borderColor: 'rgba(0,255,65,0.25)',
+              background: 'rgba(0,255,65,0.02)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--green-bright)', boxShadow: '0 0 8px rgba(0,255,65,0.5)', display: 'inline-block' }} />
+                <span style={{ ...labelStyle, margin: 0, color: 'var(--green-bright)' }}>SMITH</span>
               </div>
-              <div>
-                <div style={labelStyle}>ROLE</div>
-                <select
-                  value={newRole}
-                  onChange={(e) => setNewRole(e.target.value as typeof newRole)}
-                  style={{ ...inputStyle, cursor: 'pointer' }}
-                >
-                  <option value="orchestrator">Orchestrator</option>
-                  <option value="dev">Developer</option>
-                  <option value="marketing">Marketing</option>
-                </select>
+              <div style={{ marginBottom: 12 }}>
+                <span style={{ fontSize: 11, fontFamily: 'var(--font-ui)', color: 'var(--text-muted)' }}>
+                  Agent: <strong style={{ color: 'var(--text-white)' }}>agent-smith</strong> / Role: <strong style={{ color: 'var(--text-white)' }}>dev</strong>
+                </span>
               </div>
-            </div>
 
-            {/* Machine Type */}
-            <div style={{ marginBottom: 16 }}>
-              <div style={labelStyle}>MACHINE</div>
-              <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
-                <button
-                  onClick={() => setMachineType('local')}
-                  style={{
-                    ...btnSecondary,
-                    color: machineType === 'local' ? 'var(--green-bright)' : 'var(--text-muted)',
-                    borderColor: machineType === 'local' ? 'rgba(0,255,65,0.3)' : 'var(--border-primary)',
-                    background: machineType === 'local' ? 'rgba(0,255,65,0.06)' : 'rgba(255,255,255,0.04)',
-                  }}
-                >
-                  <Monitor size={14} />
-                  LOCAL
-                </button>
-                <button
-                  onClick={() => setMachineType('remote')}
-                  style={{
-                    ...btnSecondary,
-                    color: machineType === 'remote' ? 'var(--cyan-bright)' : 'var(--text-muted)',
-                    borderColor: machineType === 'remote' ? 'rgba(0,200,255,0.3)' : 'var(--border-primary)',
-                    background: machineType === 'remote' ? 'rgba(0,200,255,0.06)' : 'rgba(255,255,255,0.04)',
-                  }}
-                >
-                  <Globe size={14} />
-                  REMOTE
-                </button>
-              </div>
-            </div>
-
-            {/* Remote fields */}
-            {machineType === 'remote' && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div>
                   <div style={labelStyle}>IP ADDRESS</div>
                   <input
-                    value={remoteIp}
-                    onChange={(e) => setRemoteIp(e.target.value)}
-                    placeholder="e.g. 192.168.1.100"
+                    value={smithConfig.ip}
+                    onChange={(e) => setSmithConfig((p) => ({ ...p, ip: e.target.value }))}
+                    placeholder="e.g. 192.168.1.37"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <div style={labelStyle}>SSH USER</div>
+                  <input
+                    value={smithConfig.sshUser}
+                    onChange={(e) => setSmithConfig((p) => ({ ...p, sshUser: e.target.value }))}
+                    placeholder="e.g. agent_smith"
                     style={inputStyle}
                   />
                 </div>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={labelStyle}>HOSTNAME</div>
-                    <button onClick={() => void handleNetworkScan()} style={{ ...btnSecondary, padding: '4px 8px', fontSize: 9 }} disabled={scanning}>
-                      <Wifi size={10} />
-                      {scanning ? 'SCANNING...' : 'SCAN NETWORK'}
+                    <div style={labelStyle}>SSH PASSWORD</div>
+                    <button
+                      onClick={() => setShowSmithPass(!showSmithPass)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2 }}
+                    >
+                      {showSmithPass ? <EyeOff size={12} /> : <Eye size={12} />}
                     </button>
                   </div>
                   <input
-                    value={remoteHostname}
-                    onChange={(e) => setRemoteHostname(e.target.value)}
-                    placeholder="e.g. mac-mini-alpha"
+                    type={showSmithPass ? 'text' : 'password'}
+                    value={smithConfig.sshPassword}
+                    onChange={(e) => setSmithConfig((p) => ({ ...p, sshPassword: e.target.value }))}
+                    placeholder="One-time use for key deploy"
+                    style={inputStyle}
+                  />
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', marginTop: 4 }}>
+                    Used once via sshpass — never stored
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Johny slot */}
+            <div style={{
+              ...panelStyle,
+              borderColor: 'rgba(0,200,255,0.25)',
+              background: 'rgba(0,200,255,0.02)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--cyan-bright)', boxShadow: '0 0 8px rgba(0,200,255,0.5)', display: 'inline-block' }} />
+                <span style={{ ...labelStyle, margin: 0, color: 'var(--cyan-bright)' }}>JOHNY</span>
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <span style={{ fontSize: 11, fontFamily: 'var(--font-ui)', color: 'var(--text-muted)' }}>
+                  Agent: <strong style={{ color: 'var(--text-white)' }}>agent-johny</strong> / Role: <strong style={{ color: 'var(--text-white)' }}>marketing</strong>
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div>
+                  <div style={labelStyle}>IP ADDRESS</div>
+                  <input
+                    value={johnyConfig.ip}
+                    onChange={(e) => setJohnyConfig((p) => ({ ...p, ip: e.target.value }))}
+                    placeholder="e.g. 192.168.1.32"
                     style={inputStyle}
                   />
                 </div>
-                {networkMachines.length > 0 && (
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <div style={labelStyle}>DISCOVERED MACHINES</div>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-                      {networkMachines.map((m) => (
-                        <button
-                          key={m.ip}
-                          onClick={() => { setRemoteIp(m.ip); setRemoteHostname(m.hostname); }}
-                          style={{
-                            ...btnSecondary,
-                            padding: '6px 12px',
-                            fontSize: 11,
-                          }}
-                        >
-                          {m.hostname} ({m.ip})
-                        </button>
-                      ))}
-                    </div>
+                <div>
+                  <div style={labelStyle}>SSH USER</div>
+                  <input
+                    value={johnyConfig.sshUser}
+                    onChange={(e) => setJohnyConfig((p) => ({ ...p, sshUser: e.target.value }))}
+                    placeholder="e.g. agent_johny"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={labelStyle}>SSH PASSWORD</div>
+                    <button
+                      onClick={() => setShowJohnyPass(!showJohnyPass)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 2 }}
+                    >
+                      {showJohnyPass ? <EyeOff size={12} /> : <Eye size={12} />}
+                    </button>
                   </div>
-                )}
+                  <input
+                    type={showJohnyPass ? 'text' : 'password'}
+                    value={johnyConfig.sshPassword}
+                    onChange={(e) => setJohnyConfig((p) => ({ ...p, sshPassword: e.target.value }))}
+                    placeholder="One-time use for key deploy"
+                    style={inputStyle}
+                  />
+                  <div style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)', marginTop: 4 }}>
+                    Used once via sshpass — never stored
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Network scan */}
+          <div style={panelStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={labelStyle}>NETWORK SCAN</div>
+              <button onClick={() => void handleNetworkScan()} style={btnSecondary} disabled={scanning}>
+                <Wifi size={12} />
+                {scanning ? 'SCANNING...' : 'SCAN NETWORK'}
+              </button>
+            </div>
+            {networkMachines.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {networkMachines.map((m) => (
+                  <div key={m.ip} style={{ display: 'flex', gap: 4 }}>
+                    <button
+                      onClick={() => setSmithConfig((p) => ({ ...p, ip: m.ip }))}
+                      style={{ ...btnSecondary, padding: '4px 8px', fontSize: 10 }}
+                      title="Set as Smith IP"
+                    >
+                      S
+                    </button>
+                    <button
+                      onClick={() => setJohnyConfig((p) => ({ ...p, ip: m.ip }))}
+                      style={{ ...btnSecondary, padding: '4px 8px', fontSize: 10 }}
+                      title="Set as Johny IP"
+                    >
+                      J
+                    </button>
+                    <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)', padding: '4px 8px', display: 'flex', alignItems: 'center' }}>
+                      {m.hostname} ({m.ip})
+                    </span>
+                  </div>
+                ))}
               </div>
             )}
-
-            {addError && (
-              <div style={{ color: 'var(--red-bright)', fontSize: 12, fontFamily: 'var(--font-ui)', marginBottom: 12 }}>
-                {addError}
+            {networkMachines.length === 0 && !scanning && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
+                Click "Scan Network" to discover machines on your local network.
               </div>
             )}
-
-            <button onClick={() => void handleAddAgent()} style={btnPrimary} disabled={adding}>
-              {adding ? 'REGISTERING...' : 'REGISTER AGENT'}
-            </button>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -588,286 +684,259 @@ export function SetupWizardView() {
               <ChevronLeft size={14} />
               BACK
             </button>
-          </div>
-        </div>
-      )}
-
-      {step === 3 && addResult && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* Generated .env */}
-          <div style={panelStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={labelStyle}>
-                GENERATED .ENV FOR: {addResult.agentId.toUpperCase()}
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button onClick={() => handleCopyEnv(addResult.envSnippet)} style={btnSecondary}>
-                  <Copy size={12} />
-                  COPY
-                </button>
-                <button onClick={() => handleDownloadEnv(addResult.agentId, addResult.envSnippet)} style={btnSecondary}>
-                  <Download size={12} />
-                  DOWNLOAD .ENV
-                </button>
-              </div>
-            </div>
-            <pre style={{
-              background: 'rgba(0,0,0,0.4)',
-              border: '1px solid var(--border-dim)',
-              borderRadius: 8,
-              padding: 16,
-              fontSize: 11,
-              fontFamily: 'var(--font-mono)',
-              color: 'var(--green-primary)',
-              overflow: 'auto',
-              maxHeight: 300,
-              margin: 0,
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-all',
-            }}>
-              {addResult.envSnippet}
-            </pre>
-          </div>
-
-          {/* Launch / Test */}
-          <div style={panelStyle}>
-            <div style={{ ...labelStyle, marginBottom: 16 }}>VERIFY & LAUNCH</div>
-
-            {/* Status indicator */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-              <span style={statusDot(agentOnline)} />
-              <span style={{
-                fontSize: 13,
-                fontFamily: 'var(--font-display)',
-                fontWeight: 700,
-                letterSpacing: 1,
-                color: agentOnline ? 'var(--green-bright)' : 'var(--text-muted)',
-              }}>
-                {agentOnline ? 'AGENT ONLINE' : 'AGENT OFFLINE'}
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', gap: 12 }}>
-              {/* For local: show start button */}
-              {(machineType === 'local' || registry.find((e) => e.agentId === addResult.agentId)?.isLocal) && (
-                <button
-                  onClick={() => void handleStartAgent()}
-                  disabled={starting || agentOnline}
-                  style={{
-                    ...btnPrimary,
-                    opacity: starting || agentOnline ? 0.5 : 1,
-                  }}
-                >
-                  <Play size={14} />
-                  {starting ? 'STARTING...' : agentOnline ? 'RUNNING' : 'START AGENT'}
-                </button>
-              )}
-
-              {/* Test connection */}
-              <button
-                onClick={() => void handleTestAgent()}
-                disabled={testing}
-                style={btnSecondary}
-              >
-                <Wifi size={14} />
-                {testing ? 'TESTING...' : 'TEST CONNECTION'}
-              </button>
-            </div>
-
-            {/* Test result */}
-            {testResult && (
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                marginTop: 12,
-                padding: '8px 14px',
-                background: testResult.reachable ? 'rgba(0,255,65,0.06)' : 'rgba(255,51,51,0.06)',
-                border: `1px solid ${testResult.reachable ? 'rgba(0,255,65,0.2)' : 'rgba(255,51,51,0.2)'}`,
-                borderRadius: 8,
-                fontSize: 12,
-                fontFamily: 'var(--font-ui)',
-                color: testResult.reachable ? 'var(--green-bright)' : 'var(--red-bright)',
-              }}>
-                {testResult.reachable ? <CheckCircle2 size={14} /> : <XCircle size={14} />}
-                {testResult.reachable
-                  ? `Reachable (${testResult.latencyMs}ms)`
-                  : 'Not reachable — make sure the agent is running'}
-              </div>
-            )}
-
-            {/* Agent online success */}
-            {agentOnline && (
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                marginTop: 12,
-                padding: '10px 14px',
-                background: 'rgba(0,255,65,0.06)',
-                border: '1px solid rgba(0,255,65,0.2)',
-                borderRadius: 8,
-                fontSize: 13,
-                fontFamily: 'var(--font-display)',
-                fontWeight: 700,
-                letterSpacing: 1,
-                color: 'var(--green-bright)',
-              }}>
-                <CheckCircle2 size={16} />
-                Agent is online and connected!
-              </div>
-            )}
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <button onClick={() => { setStep(2); setAddResult(null); setAddError(''); setNewAgentId(''); }} style={btnSecondary}>
-              <ChevronLeft size={14} />
-              ADD ANOTHER
-            </button>
-            <button onClick={() => navigate('/agents')} style={btnPrimary}>
-              DONE — GO TO AGENTS
+            <button
+              onClick={() => setStep(3)}
+              disabled={!canProceedToStep3}
+              style={{
+                ...btnPrimary,
+                opacity: canProceedToStep3 ? 1 : 0.4,
+                cursor: canProceedToStep3 ? 'pointer' : 'not-allowed',
+              }}
+            >
+              NEXT: DEPLOY
               <ChevronRight size={16} />
             </button>
           </div>
         </div>
       )}
 
-      {step === 3 && !addResult && (
-        <div style={{ ...panelStyle, textAlign: 'center', padding: 40 }}>
-          <div style={{ color: 'var(--text-muted)', fontSize: 13, fontFamily: 'var(--font-ui)', marginBottom: 16 }}>
-            No agent was added yet. Go to Step 2 to register an agent first.
+      {/* ========== STEP 3: Deploy ========== */}
+      {step === 3 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* Shared keygen step */}
+          <div style={panelStyle}>
+            <div style={{ ...labelStyle, marginBottom: 12 }}>SSH KEY GENERATION (SHARED)</div>
+            <DeployStepRow step={keygenStep} />
           </div>
-          <button onClick={() => setStep(2)} style={btnSecondary}>
-            <ChevronLeft size={14} />
-            GO TO STEP 2
-          </button>
+
+          {/* Two-column deploy progress */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+            {/* Smith deploy */}
+            <div style={{
+              ...panelStyle,
+              borderColor: 'rgba(0,255,65,0.25)',
+              background: 'rgba(0,255,65,0.02)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--green-bright)', boxShadow: '0 0 8px rgba(0,255,65,0.5)', display: 'inline-block' }} />
+                <span style={{ ...labelStyle, margin: 0, color: 'var(--green-bright)' }}>
+                  SMITH — agent-smith
+                </span>
+                {smithConfig.ip && (
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                    ({smithConfig.sshUser}@{smithConfig.ip})
+                  </span>
+                )}
+              </div>
+              {!smithConfig.ip ? (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
+                  Not configured — will be skipped
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {smithSteps.filter((s) => s.id !== 'ssh.generateKey').map((s) => (
+                    <DeployStepRow key={s.id} step={s} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Johny deploy */}
+            <div style={{
+              ...panelStyle,
+              borderColor: 'rgba(0,200,255,0.25)',
+              background: 'rgba(0,200,255,0.02)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--cyan-bright)', boxShadow: '0 0 8px rgba(0,200,255,0.5)', display: 'inline-block' }} />
+                <span style={{ ...labelStyle, margin: 0, color: 'var(--cyan-bright)' }}>
+                  JOHNY — agent-johny
+                </span>
+                {johnyConfig.ip && (
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                    ({johnyConfig.sshUser}@{johnyConfig.ip})
+                  </span>
+                )}
+              </div>
+              {!johnyConfig.ip ? (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
+                  Not configured — will be skipped
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {johnySteps.filter((s) => s.id !== 'ssh.generateKey').map((s) => (
+                    <DeployStepRow key={s.id} step={s} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {deployError && (
+            <div style={{
+              padding: '12px 16px',
+              background: 'rgba(255,51,51,0.06)',
+              border: '1px solid rgba(255,51,51,0.2)',
+              borderRadius: 8,
+              fontSize: 12,
+              fontFamily: 'var(--font-ui)',
+              color: 'var(--red-bright)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              <XCircle size={14} />
+              {deployError}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <button onClick={() => { if (!deploying) setStep(2); }} style={btnSecondary} disabled={deploying}>
+              <ChevronLeft size={14} />
+              BACK
+            </button>
+            <div style={{ display: 'flex', gap: 12 }}>
+              {deploying && (
+                <button
+                  onClick={() => { deployAbortRef.current = true; }}
+                  style={{ ...btnSecondary, color: 'var(--red-bright)', borderColor: 'rgba(255,51,51,0.3)' }}
+                >
+                  ABORT
+                </button>
+              )}
+              <button
+                onClick={() => void handleDeploy()}
+                disabled={deploying || !canProceedToStep3}
+                style={{
+                  ...btnPrimary,
+                  opacity: deploying ? 0.6 : 1,
+                  cursor: deploying ? 'wait' : 'pointer',
+                }}
+              >
+                {deploying ? (
+                  <>
+                    <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} />
+                    DEPLOYING...
+                  </>
+                ) : (
+                  <>
+                    <Zap size={14} />
+                    START DEPLOY
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
-      {/* Agent Registry Panel */}
-      <div style={{ ...panelStyle, marginTop: 32 }}>
-        <div style={{ ...labelStyle, marginBottom: 16 }}>
-          AGENT REGISTRY ({registry.length})
-        </div>
-        {registry.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-ui)' }}>
-            No agents registered. Use the wizard above to add agents.
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, fontFamily: 'var(--font-ui)' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--border-primary)' }}>
-                  {['Agent ID', 'Role', 'Machine', 'Type', 'Status', 'Actions'].map((h) => (
-                    <th key={h} style={{
-                      textAlign: 'left',
-                      padding: '8px 12px',
-                      fontSize: 9,
-                      fontFamily: 'var(--font-display)',
-                      letterSpacing: 2,
-                      color: 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                      fontWeight: 600,
-                    }}>
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {registry.map((entry) => {
-                  const agentState = agents.get(entry.agentId);
-                  const isOnline = agentState && agentState.status !== 'offline';
-                  const loading = actionLoading[entry.agentId];
+      {/* ========== STEP 4: Verify ========== */}
+      {step === 4 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div style={panelStyle}>
+            <div style={{ ...labelStyle, marginBottom: 16 }}>DEPLOYMENT VERIFICATION</div>
 
-                  return (
-                    <tr key={entry.agentId} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                      <td style={{ padding: '10px 12px', fontWeight: 700, fontFamily: 'var(--font-display)', letterSpacing: 1, color: 'var(--text-white)' }}>
-                        {entry.agentId.toUpperCase()}
-                      </td>
-                      <td style={{ padding: '10px 12px', color: 'var(--text-secondary)' }}>
-                        {entry.role}
-                      </td>
-                      <td style={{ padding: '10px 12px', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)', fontSize: 11 }}>
-                        {entry.hostname} ({entry.ip})
-                      </td>
-                      <td style={{ padding: '10px 12px' }}>
-                        <span style={{
-                          padding: '2px 8px',
-                          fontSize: 9,
-                          fontFamily: 'var(--font-display)',
-                          letterSpacing: 1,
-                          borderRadius: 4,
-                          color: entry.isLocal ? 'var(--cyan-bright)' : 'var(--amber)',
-                          background: entry.isLocal ? 'rgba(0,200,255,0.08)' : 'rgba(255,170,0,0.08)',
-                          border: `1px solid ${entry.isLocal ? 'rgba(0,200,255,0.2)' : 'rgba(255,170,0,0.2)'}`,
-                        }}>
-                          {entry.isLocal ? 'LOCAL' : 'REMOTE'}
-                        </span>
-                      </td>
-                      <td style={{ padding: '10px 12px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={statusDot(!!isOnline)} />
-                          <span style={{ color: isOnline ? 'var(--green-bright)' : 'var(--text-muted)', fontSize: 11 }}>
-                            {agentState?.status?.toUpperCase() || 'UNKNOWN'}
-                          </span>
-                        </div>
-                      </td>
-                      <td style={{ padding: '10px 12px' }}>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          {entry.isLocal && !isOnline && (
-                            <button
-                              onClick={() => void handleRegistryStart(entry.agentId)}
-                              disabled={!!loading}
-                              style={{ ...btnSecondary, padding: '4px 8px', fontSize: 9, color: 'var(--green-bright)' }}
-                              title="Start"
-                            >
-                              <Play size={10} />
-                            </button>
-                          )}
-                          {entry.isLocal && isOnline && (
-                            <button
-                              onClick={() => void handleRegistryStop(entry.agentId)}
-                              disabled={!!loading}
-                              style={{ ...btnSecondary, padding: '4px 8px', fontSize: 9, color: 'var(--red-bright)' }}
-                              title="Stop"
-                            >
-                              <Square size={10} />
-                            </button>
-                          )}
-                          <button
-                            onClick={() => void handleRegistryTest(entry.agentId)}
-                            disabled={!!loading}
-                            style={{ ...btnSecondary, padding: '4px 8px', fontSize: 9 }}
-                            title="Test Connection"
-                          >
-                            <Wifi size={10} />
-                          </button>
-                          <button
-                            onClick={() => void handleRegistryCopyEnv(entry.agentId)}
-                            style={{ ...btnSecondary, padding: '4px 8px', fontSize: 9 }}
-                            title="Copy .env"
-                          >
-                            <Copy size={10} />
-                          </button>
-                          <button
-                            onClick={() => void handleRegistryRemove(entry.agentId)}
-                            disabled={!!loading}
-                            style={{ ...btnSecondary, padding: '4px 8px', fontSize: 9, color: 'var(--red-bright)' }}
-                            title="Remove"
-                          >
-                            <Trash2 size={10} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+              {/* Smith verification */}
+              <VerifyCard
+                label="SMITH"
+                agentId="agent-smith"
+                role="dev"
+                color="var(--green-bright)"
+                agents={agents}
+                wizardStatus={wizardStatus}
+                slotKey="smith"
+              />
+              {/* Johny verification */}
+              <VerifyCard
+                label="JOHNY"
+                agentId="agent-johny"
+                role="marketing"
+                color="var(--cyan-bright)"
+                agents={agents}
+                wizardStatus={wizardStatus}
+                slotKey="johny"
+              />
+            </div>
           </div>
-        )}
-      </div>
+
+          {/* Overall status */}
+          <div style={panelStyle}>
+            <div style={{ ...labelStyle, marginBottom: 12 }}>OVERALL STATUS</div>
+            {(() => {
+              const smithOnline = agents.get('agent-smith')?.status !== 'offline' && agents.has('agent-smith');
+              const johnyOnline = agents.get('agent-johny')?.status !== 'offline' && agents.has('agent-johny');
+              const allOnline = smithOnline && johnyOnline;
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={statusDot(smithOnline)} />
+                    <span style={{ fontSize: 12, fontFamily: 'var(--font-ui)', color: smithOnline ? 'var(--green-bright)' : 'var(--text-muted)' }}>
+                      Smith (agent-smith): {smithOnline ? 'ONLINE' : 'OFFLINE'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={statusDot(johnyOnline)} />
+                    <span style={{ fontSize: 12, fontFamily: 'var(--font-ui)', color: johnyOnline ? 'var(--green-bright)' : 'var(--text-muted)' }}>
+                      Johny (agent-johny): {johnyOnline ? 'ONLINE' : 'OFFLINE'}
+                    </span>
+                  </div>
+
+                  {allOnline && (
+                    <div style={{
+                      marginTop: 8,
+                      padding: '12px 16px',
+                      background: 'rgba(0,255,65,0.06)',
+                      border: '1px solid rgba(0,255,65,0.2)',
+                      borderRadius: 8,
+                      fontSize: 13,
+                      fontFamily: 'var(--font-display)',
+                      fontWeight: 700,
+                      letterSpacing: 1,
+                      color: 'var(--green-bright)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}>
+                      <CheckCircle2 size={16} />
+                      All agents online! Setup complete.
+                    </div>
+                  )}
+
+                  {!allOnline && (
+                    <div style={{
+                      marginTop: 8,
+                      fontSize: 11,
+                      color: 'var(--text-muted)',
+                      fontFamily: 'var(--font-ui)',
+                    }}>
+                      Agents may take 10-30 seconds to come online after deployment. Click Refresh to check status.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <button onClick={() => setStep(3)} style={btnSecondary}>
+              <ChevronLeft size={14} />
+              BACK TO DEPLOY
+            </button>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button onClick={() => void fetchStatus()} style={btnSecondary}>
+                <RefreshCw size={14} />
+                REFRESH STATUS
+              </button>
+              <button onClick={() => navigate('/')} style={btnPrimary}>
+                DONE — GO TO DASHBOARD
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -916,6 +985,159 @@ function StatusLine({ label, ok }: { label: string; ok: boolean }) {
       }}>
         {label}: {ok ? 'Connected' : 'Disconnected'}
       </span>
+    </div>
+  );
+}
+
+function AgentStatusCard({ label, agentId, role, online, status, color }: {
+  label: string; agentId: string; role: string; online: boolean; status: string; color: string;
+}) {
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      padding: '12px 18px',
+      background: 'rgba(0,0,0,0.2)',
+      border: `1px solid ${online ? `${color}33` : 'var(--border-primary)'}`,
+      borderRadius: 8,
+      flex: 1,
+    }}>
+      <span style={{
+        width: 8, height: 8, borderRadius: '50%',
+        background: online ? '#00ff41' : '#ff3333',
+        boxShadow: online ? '0 0 8px rgba(0,255,65,0.5)' : '0 0 8px rgba(255,51,51,0.5)',
+        display: 'inline-block',
+      }} />
+      <div>
+        <div style={{ fontSize: 12, fontWeight: 700, fontFamily: 'var(--font-display)', letterSpacing: 1.5, color }}>
+          {label}
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-white)', fontFamily: 'var(--font-ui)' }}>
+          {agentId} / {role}
+        </div>
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-ui)' }}>
+          {status.toUpperCase()}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeployStepRow({ step }: { step: DeployStep }) {
+  const iconMap: Record<DeployStepStatus, React.ReactNode> = {
+    pending: <span style={{ width: 14, height: 14, borderRadius: '50%', border: '2px solid var(--border-primary)', display: 'inline-block' }} />,
+    running: <Loader size={14} style={{ color: 'var(--cyan-bright)', animation: 'spin 1s linear infinite' }} />,
+    done: <CheckCircle2 size={14} style={{ color: 'var(--green-bright)' }} />,
+    failed: <XCircle size={14} style={{ color: 'var(--red-bright)' }} />,
+    skipped: <span style={{ width: 14, height: 14, borderRadius: '50%', background: 'var(--border-primary)', display: 'inline-block', opacity: 0.5 }} />,
+  };
+
+  const colorMap: Record<DeployStepStatus, string> = {
+    pending: 'var(--text-muted)',
+    running: 'var(--cyan-bright)',
+    done: 'var(--green-bright)',
+    failed: 'var(--red-bright)',
+    skipped: 'var(--text-muted)',
+  };
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '8px 12px',
+      background: step.status === 'running' ? 'rgba(0,200,255,0.04)' : step.status === 'failed' ? 'rgba(255,51,51,0.04)' : 'transparent',
+      borderRadius: 6,
+      transition: 'background 0.2s',
+    }}>
+      {iconMap[step.status]}
+      <div style={{ flex: 1 }}>
+        <div style={{
+          fontSize: 12,
+          fontFamily: 'var(--font-ui)',
+          fontWeight: 600,
+          color: colorMap[step.status],
+        }}>
+          {step.label}
+        </div>
+        {step.message && (
+          <div style={{
+            fontSize: 10,
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--text-muted)',
+            marginTop: 2,
+          }}>
+            {step.message}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function VerifyCard({ label, agentId, role, color, agents, wizardStatus, slotKey }: {
+  label: string;
+  agentId: string;
+  role: string;
+  color: string;
+  agents: Map<string, { identity: { agentId: string; role: string; machineId: string; hostname: string }; status: string }>;
+  wizardStatus: WizardStatus | null;
+  slotKey: 'smith' | 'johny';
+}) {
+  const agentState = agents.get(agentId);
+  const online = agentState ? agentState.status !== 'offline' : false;
+  const statusFromWizard = wizardStatus?.[slotKey];
+
+  return (
+    <div style={{
+      padding: 20,
+      background: 'rgba(0,0,0,0.2)',
+      border: `1px solid ${online ? `${color}33` : 'var(--border-primary)'}`,
+      borderRadius: 8,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <span style={{
+          width: 10, height: 10, borderRadius: '50%',
+          background: color,
+          boxShadow: `0 0 8px ${color}80`,
+          display: 'inline-block',
+        }} />
+        <span style={{
+          fontSize: 12,
+          fontFamily: 'var(--font-display)',
+          fontWeight: 700,
+          letterSpacing: 1.5,
+          color,
+        }}>
+          {label}
+        </span>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontFamily: 'var(--font-ui)' }}>
+          <span style={{ color: 'var(--text-muted)' }}>Agent ID</span>
+          <span style={{ color: 'var(--text-white)', fontFamily: 'var(--font-mono)' }}>{agentId}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontFamily: 'var(--font-ui)' }}>
+          <span style={{ color: 'var(--text-muted)' }}>Role</span>
+          <span style={{ color: 'var(--text-white)' }}>{role}</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontFamily: 'var(--font-ui)' }}>
+          <span style={{ color: 'var(--text-muted)' }}>Status</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: online ? '#00ff41' : '#ff3333',
+              boxShadow: online ? '0 0 6px rgba(0,255,65,0.5)' : 'none',
+              display: 'inline-block',
+            }} />
+            <span style={{ color: online ? 'var(--green-bright)' : 'var(--red-bright)' }}>
+              {agentState?.status?.toUpperCase() ?? statusFromWizard?.status?.toUpperCase() ?? 'UNKNOWN'}
+            </span>
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
