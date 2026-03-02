@@ -25,11 +25,48 @@
 
 <img src="assets/divider.svg" alt="" width="100%">
 
+## ░ DOWNLOAD
+
+<div align="center">
+
+[![Download](https://img.shields.io/badge/DOWNLOAD-macOS_App-00ff41?style=for-the-badge&logo=apple&logoColor=00ff41&labelColor=0a0a0a)](https://github.com/Jarvis-2-0-kit/Jarvis-2.0/releases/latest)
+
+**Jarvis 2.0 Desktop App** — All-in-one macOS application (Apple Silicon)
+
+Bundles Gateway, Dashboard, NATS, Redis — zero setup required. Just download, open, and go.
+
+| Variant | Size | Description |
+|:--------|:-----|:------------|
+| `Jarvis-2.0-v1.0-macOS-arm64.zip` | ~43 MB | Full app (Gateway + Dashboard + NATS + Redis) |
+| `Jarvis-Dashboard-v1.0-macOS.zip` | ~330 KB | Lightweight dashboard client only |
+
+> **Requirements:** macOS 13.0+ (Ventura or later), Apple Silicon (M1/M2/M3/M4)
+
+</div>
+
+<img src="assets/divider.svg" alt="" width="100%">
+
 ## ░ NEW FEATURES
 
 <table>
 <tr>
 <td width="60%">
+
+### Agent Setup Wizard
+
+Visual configurator for agent onboarding, deployment, and discovery — right from the dashboard.
+
+- **3-step wizard:** Master Status → Add Agent → Verify & Launch
+- **Auto-discovery** of machines on local network
+- **Auto-generation** of NATS tokens, auth tokens, and .env configs
+- **One-click deploy** for local agents, copy-paste instructions for remote
+- **Agent Registry** with Start/Stop/Test/Remove actions
+- **Lifecycle buttons** (Start/Stop/Restart) in the Agents view
+
+> **Where to find it:** Dashboard → Apps → System → **Setup Wizard**
+
+</td>
+<td width="40%">
 
 ### Automatic OTA Updates
 
@@ -37,17 +74,7 @@ One-click over-the-air updates — right from the dashboard. Gateway polls GitHu
 
 - **CHECK UPDATES** button in the top-right corner of **System Overview**
 - Cyan banner appears below the page title when updates are available
-- Shows commit count, HEAD range, and latest commit message
 - Automatic rollback if the build fails
-
-> **Where to find it:** Open the Dashboard → **System Overview** (first page) → look for the **CHECK UPDATES** button in the top-right corner next to REFRESH.
-
-</td>
-<td width="40%">
-
-<img src="screenshots/ota-update.png" alt="OTA Update — System Overview" width="100%">
-<br>
-<samp>System Overview with CHECK UPDATES button (top-right)</samp>
 
 </td>
 </tr>
@@ -297,7 +324,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 
 ## ░ DASHBOARD_VIEWS
 
-> `31 VIEWS // REAL-TIME MONITORING & CONTROL`
+> `32 VIEWS // REAL-TIME MONITORING & CONTROL`
 
 | View | Description |
 |:-----|:------------|
@@ -327,6 +354,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 | `API Keys` | Credential management |
 | `Files` | NAS file browser |
 | `Environment` | Environment variable management |
+| `Setup Wizard` | Agent onboarding wizard — register, deploy, manage lifecycle |
 | `Config` | System configuration |
 | `Debug` | Debug tools and diagnostics |
 
@@ -435,6 +463,11 @@ jarvis/
 │   │
 │   ├── shared/                 # ◆ Shared types & utilities
 │   │   └── src/types/                # Zod schemas (Task, Agent, etc.)
+│   │
+│   ├── desktop/                # ◆ macOS native desktop app (Swift + WebKit)
+│   │   ├── JarvisApp.swift           # Service manager (NATS, Redis, Gateway)
+│   │   ├── build-full.sh            # Full app bundle build script
+│   │   └── *.zip                    # Release artifacts
 │   │
 │   └── tools/                  # ◆ Agent tool implementations
 │       └── src/integrations/         # iMessage, Spotify, etc.
