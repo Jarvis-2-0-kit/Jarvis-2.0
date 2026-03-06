@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# NAS data (separate storage)
+../jarvis-nas/
+
+# Temp
+tmp/
+.tmp/
+
+# Redis dump
+dump.rdb
+
+# Local Jarvis data
+.jarvis-data/
+
+# Desktop build artifacts
+packages/desktop/*.zip
+packages/desktop/*.dmg
+packages/desktop/*.app/
+packages/desktop/AppIcon.icns
