@@ -5,7 +5,7 @@
 <br>
 
 <a href="https://readme-typing-svg.demolab.com">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=18&duration=3000&pause=1000&color=00FF41&center=true&vCenter=true&width=600&lines=%3E+Autonomous+Multi-Agent+AI+Orchestration;%3E+Self-hosted+on+dedicated+Mac+Mini+hardware;%3E+33%2B+tools+%7C+12+plugins+%7C+32+dashboard+views;%3E+System+online.+All+agents+operational." alt="Typing SVG">
+  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&size=18&duration=3000&pause=1000&color=00FF41&center=true&vCenter=true&width=600&lines=%3E+Autonomous+Multi-Agent+AI+Orchestration;%3E+Self-hosted+on+dedicated+Mac+hardware;%3E+40%2B+tools+%7C+15+plugins+%7C+6+LLM+providers;%3E+System+online.+All+agents+operational." alt="Typing SVG">
 </a>
 
 <br><br>
@@ -110,6 +110,69 @@ Native Swift + WebKit wrapper that bundles the entire Jarvis stack into a single
 
 </td>
 </tr>
+<tr>
+<td width="60%">
+
+### Marketing Engine v4
+
+Full-stack marketing brain with 12 SQLite tables — viral content detection, competitor tracking, lead scoring, email campaigns, and self-learning performance optimization.
+
+- **Viral Tracker** — monitors trends and detects viral content opportunities
+- **Lead Scoring** — automated outreach pipeline with scoring model
+- **Email Campaigns** — A/B testing, template management, send scheduling
+- **Content Library** — centralized asset management across all platforms
+- **Performance Logger** — self-learning loop that improves results over time
+- Loads custom system prompt from NAS (`config/marketing-hub-prompt.md`)
+
+> **Where to find it:** Dashboard → **Marketing Hub** — full UI for campaign management, analytics, and content scheduling.
+
+</td>
+<td width="40%">
+
+### Website Builder & Deployer
+
+AI-powered website generation with Firebase full-stack deployment — from prompt to production in one command.
+
+- **Tailwind CSS v4** + semantic HTML5 generation
+- **SEO optimization** — meta tags, Open Graph, JSON-LD schema
+- **Dark/light mode** with system preference detection
+- **Firebase deployment** — Hosting, Functions, Firestore, Security Rules
+- Accessibility features (ARIA, skip navigation)
+- Tools: `website_generate`, `website_add_page`, `website_deploy`
+
+</td>
+</tr>
+<tr>
+<td width="60%">
+
+### Advanced Media Generation
+
+Multi-format AI content creation — images, videos, voice, and avatar generation from a single unified tool.
+
+- **Flux Pro** — high-quality image generation (fal.ai)
+- **DALL-E** — OpenAI gpt-image-1 (square, landscape, portrait)
+- **Kling 3.0** — AI video generation (up to 10s)
+- **ElevenLabs** — multilingual voice synthesis (11 voices)
+- **HeyGen** — talking-head avatar videos
+- **Runway** — video generation API
+- Aspect ratios: 1:1, 16:9, 9:16, 4:3
+
+</td>
+<td width="40%">
+
+### Social Media Automation
+
+End-to-end social media management across 6 platforms — content generation, scheduling, cross-posting, and analytics.
+
+- **6 platforms**: Twitter/X, Instagram, Facebook, LinkedIn, TikTok, Reddit
+- **Content Generator** — platform-optimized posts via Claude Haiku
+- **Scheduler** — content calendar with auto-publish every 60s
+- **Analytics** — multi-platform insights and post-level metrics
+- Retry logic with exponential backoff
+- Campaign mode for coordinated multi-platform launches
+
+</td>
+</tr>
 </table>
 
 <img src="assets/divider.svg" alt="" width="100%">
@@ -120,7 +183,7 @@ Native Swift + WebKit wrapper that bundles the entire Jarvis stack into a single
 ╚══════════════════════════════════════════════════════════════════════════════╝
 ```
 
-> `33+ TOOLS LOADED` | `12 PLUGINS ACTIVE` | `32 DASHBOARD VIEWS` | `50+ SKILLS AVAILABLE`
+> `40+ TOOLS LOADED` | `15 PLUGINS ACTIVE` | `34 DASHBOARD VIEWS` | `6 LLM PROVIDERS` | `50+ SKILLS AVAILABLE`
 
 A personal AI infrastructure running on dedicated Mac Mini hardware — coordinating multiple autonomous agents through NATS messaging, Redis state, and a cyberpunk-themed real-time dashboard. Unlike cloud-only AI assistants, Jarvis operates on your own hardware with full access to your local environment — files, applications, shell, network, and macOS APIs.
 
@@ -181,7 +244,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 | `JOHNY` | Marketing agent — research, content, social media (Mac Mini) |
 | `NATS` | High-performance message bus — inter-agent communication |
 | `REDIS` | Task queue, agent state, session storage |
-| `NAS` | Shared network storage for configs, sessions, artifacts, memory |
+| `NAS` | QNAP TP-233 shared storage — configs, sessions, artifacts, knowledge, API keys |
 
 <img src="assets/divider.svg" alt="" width="100%">
 
@@ -238,6 +301,94 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 </details>
 
 <details>
+<summary><b>6 LLM Providers with Auto-Failover</b></summary>
+<br>
+
+- **Anthropic** (Claude Opus 4.6, Sonnet 4.6, Haiku 4.5) — primary provider
+- **OpenAI** (GPT-4, DALL-E) — secondary provider
+- **Google Gemini** — Gemini models for specialized tasks
+- **OpenRouter** — multi-model aggregator (100+ models)
+- **Ollama** — local model support (Llama, Mistral, etc.)
+- **Claude CLI** — use Claude Code's own OAuth token (zero-config)
+- Automatic failover with `chatWithFailover()` — cascading model chains
+
+</details>
+
+<details>
+<summary><b>Task Orchestration & Decomposition</b></summary>
+<br>
+
+- **Task Decomposer** — breaks complex tasks into subtasks with dependencies
+- **Dependency DAG** — directed acyclic graph for task scheduling
+- **Auto-assignment** — routes subtasks to Smith or Johny based on capabilities
+- Pattern-matching rules for common workflows (app building, deployments, campaigns)
+- Complexity estimation and time prediction
+- Per-agent concurrency limits + global throttling
+- File-based delegation polling from NAS
+
+</details>
+
+<details>
+<summary><b>Workflow Engine</b></summary>
+<br>
+
+- GitHub Actions + n8n + Temporal.io inspired workflow system
+- Template-based multi-step workflows with variables
+- Step types: `tool_call`, `set_variable`, `condition`, `log`, `notify`, `wait`, `delegate`, `http`, `script`
+- Conditionals and branching logic
+- Parallel step groups for concurrent execution
+- Error handling per step: retry / skip / abort
+- Tools: `workflow_create`, `workflow_execute`, `workflow_list`, `workflow_pause`, `workflow_resume`
+
+</details>
+
+<details>
+<summary><b>Research Pipeline</b></summary>
+<br>
+
+- 4-layer structured research framework: **Research → Analysis → Strategy → Action**
+- Scope options: quick (5 min), standard (15 min), deep (30+ min)
+- Focus areas: competitors, market size, trends, opportunities, audience
+- Output formats: summary, report, SWOT, competitive analysis, full report
+- Saves framework and brief to NAS for guided execution
+
+</details>
+
+<details>
+<summary><b>Smart Home Integration</b></summary>
+<br>
+
+- **Home Assistant** integration via REST API
+- Control: lights, switches, climate, scenes, automations, locks, media players
+- Entity state monitoring and automation triggers
+- Tools: `home_assistant` with action-based API
+
+</details>
+
+<details>
+<summary><b>Daily Summary & Monitoring</b></summary>
+<br>
+
+- Auto-generated end-of-day Markdown summaries
+- Tracks agent status, LLM costs, infrastructure health
+- Saves to NAS and optionally syncs to Obsidian vault
+- Configurable summary time (hour:minute)
+
+</details>
+
+<details>
+<summary><b>Mobile App Build & Submit</b></summary>
+<br>
+
+- React Native / Expo build pipeline
+- **Fastlane** and **EAS Build** support
+- Local builds for iOS and Android
+- **App Store Connect** and **Google Play** submission via EAS Submit
+- Tools: `mobile_build`, `mobile_submit`
+
+</details>
+
+<details>
 <summary><b>Skills Marketplace</b></summary>
 <br>
 
@@ -252,7 +403,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 
 ## ░ CAPABILITIES
 
-> `AGENT TOOLSET // 33+ INTEGRATED TOOLS`
+> `AGENT TOOLSET // 40+ INTEGRATED TOOLS`
 
 | Tool | Function |
 |:-----|:---------|
@@ -265,27 +416,41 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 | `spotify` | Playback control, search, playlists |
 | `cron` | Schedule recurring tasks |
 | `calendar` | macOS Calendar integration |
+| `home_assistant` | Smart home control (lights, climate, scenes, locks) |
+| `image_generate` | DALL-E image generation (gpt-image-1) |
+| `media_generate` | Flux Pro, Kling 3.0, ElevenLabs, HeyGen, Runway |
+| `social_post` / `social_schedule` | Cross-platform social media management |
+| `social_generate_content` | AI-powered platform-optimized content creation |
+| `research_pipeline` | 4-layer structured research framework |
+| `seo_audit` | Website SEO analysis and auditing |
+| `mobile_build` / `mobile_submit` | React Native builds + App Store / Google Play submission |
+| `deploy` / `monitor` | Vercel/Netlify/git deployment + uptime monitoring |
+| `website_generate` / `website_deploy` | AI website builder with Firebase full-stack deployment |
+| `message_agent` | Inter-agent messaging and task delegation |
 
 <img src="assets/divider.svg" alt="" width="100%">
 
 ## ░ PLUGINS
 
-> `PLUGIN REGISTRY // 12 MODULES LOADED`
+> `PLUGIN REGISTRY // 15 MODULES LOADED`
 
 | Status | Plugin | Description |
 |:------:|:-------|:------------|
 | `[ON]` | `jarvis-memory` | Persistent agent memory with NAS-backed storage |
 | `[ON]` | `jarvis-metrics` | Token usage tracking, cost monitoring, performance stats |
 | `[ON]` | `jarvis-auto-save` | Automatic session saves and artifact management |
-| `[ON]` | `jarvis-task-planner` | Task decomposition, delegation, and tracking |
+| `[ON]` | `jarvis-task-planner` | Task decomposition, delegation, and multi-agent tracking |
 | `[ON]` | `jarvis-notifications` | Push notifications for task completion and alerts |
-| `[ON]` | `jarvis-workflow-engine` | Multi-step workflow definitions and execution |
+| `[ON]` | `jarvis-workflow-engine` | GitHub Actions-style workflows with conditions, retries, parallelization |
 | `[ON]` | `jarvis-system-monitor` | CPU, memory, disk monitoring with alerts |
 | `[ON]` | `activity-timeline` | Agent activity logging and visualization |
 | `[ON]` | `health-check` | Service health monitoring with automatic baselines |
 | `[ON]` | `rate-limiter` | API rate limiting (60/min, 500/session, 500K tokens) |
 | `[ON]` | `voice` | Speech-to-text and text-to-speech interface |
 | `[ON]` | `jarvis-obsidian` | Obsidian vault integration (search, read, write, daily notes) |
+| `[ON]` | `marketing-engine` | Marketing brain v4 — 12 SQLite tables, viral tracking, lead scoring, email campaigns |
+| `[ON]` | `social-scheduler` | Background auto-publisher — checks every 60s, retry with exponential backoff |
+| `[ON]` | `website-builder` | AI website generation + Firebase full-stack deployment |
 
 <img src="assets/divider.svg" alt="" width="100%">
 
@@ -345,7 +510,8 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 ║  Backend           ║  Express, WebSocket (ws)                ║
 ║  Messaging         ║  NATS (Thunderbolt 10Gbps priority)     ║
 ║  Storage           ║  Redis 7, JSONL files, NAS              ║
-║  AI                ║  Claude Opus 4.6, OpenAI (secondary)    ║
+║  AI                ║  6 providers: Claude, OpenAI, Gemini,   ║
+║                    ║  OpenRouter, Ollama, Claude CLI          ║
 ║  Build             ║  tsdown, Vite                           ║
 ║  Icons             ║  lucide-react                           ║
 ║  Platform          ║  macOS (AppleScript, Messages, Contacts)║
@@ -356,7 +522,7 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 
 ## ░ DASHBOARD_VIEWS
 
-> `32 VIEWS // REAL-TIME MONITORING & CONTROL`
+> `34 VIEWS // REAL-TIME MONITORING & CONTROL`
 
 | View | Description |
 |:-----|:------------|
@@ -388,6 +554,8 @@ A personal AI infrastructure running on dedicated Mac Mini hardware — coordina
 | `Environment` | Environment variable management |
 | `Config` | System configuration |
 | `Setup Wizard` | Agent onboarding wizard — add, deploy, and manage agents |
+| `Marketing` | Marketing Hub — campaigns, content library, viral tracking, lead scoring |
+| `Social Media` | Social media posting, scheduling, analytics aggregation |
 | `Debug` | Debug tools and diagnostics |
 
 <img src="assets/divider.svg" alt="" width="100%">
@@ -545,6 +713,9 @@ jarvis/
 | `GATEWAY_PORT` | Dashboard/API port (default: 18900) |
 | `AUTH_TOKEN` | Gateway auth token (auto-generated if not set) |
 | `NATS_USER` / `NATS_PASS` | NATS authentication credentials |
+| `GOOGLE_AI_API_KEY` | Google Gemini API key (optional) |
+| `OPENROUTER_API_KEY` | OpenRouter API key (optional, 100+ models) |
+| `OLLAMA_HOST` | Ollama server URL (optional, local models) |
 | `OBSIDIAN_API_KEY` | Obsidian Local REST API key |
 
 <img src="assets/divider.svg" alt="" width="100%">
@@ -644,13 +815,21 @@ pnpm --filter @jarvis/shared typecheck
 
 > `ROADMAP // PLANNED ENHANCEMENTS`
 
+- [x] Authenticated inter-agent messaging (NATS auth)
+- [x] Multi-LLM routing (6 providers with auto-failover)
+- [x] Marketing automation engine (v4 with 12 SQLite tables)
+- [x] Social media scheduler (6 platforms, auto-publish)
+- [x] Website builder with Firebase deployment
+- [x] Media generation (Flux, Kling, ElevenLabs, HeyGen)
+- [x] Smart home integration (Home Assistant)
+- [x] Research pipeline (4-layer framework)
+- [x] Daily summary reports (NAS + Obsidian sync)
+- [x] Mobile build & App Store submission pipeline
 - [ ] Multi-modal vision (camera + screen capture analysis)
 - [ ] Workflow marketplace (share workflows between agents)
 - [ ] Mobile companion app (React Native)
 - [ ] Voice wake word ("Hey Jarvis")
-- [ ] Multi-LLM routing (auto-select best model per task)
 - [ ] Plugin hot-reload (no agent restart)
-- [x] Authenticated inter-agent messaging (NATS auth)
 - [ ] Kubernetes deployment option
 
 <img src="assets/divider.svg" alt="" width="100%">
