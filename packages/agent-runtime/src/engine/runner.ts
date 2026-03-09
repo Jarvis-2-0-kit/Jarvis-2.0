@@ -743,7 +743,9 @@ export class AgentRunner {
       const expired = this.taskQueue.filter(t => now - t.queuedAt > AgentRunner.TASK_QUEUE_TTL_MS);
       for (const stale of expired) {
         log.warn(`Expiring stale queued task ${stale.taskId} (queued ${Math.round((now - stale.queuedAt) / 1000)}s ago)`);
-        this.nats.publishResult(stale.taskId, { success: false, output: 'Task expired while queued (TTL exceeded)' }).catch(() => {});
+        this.nats.publishResult(stale.taskId, { success: false, output: 'Task expired while queued (TTL exceeded)' }).catch((err) => {
+          log.warn(`Failed to publish expiry result for ${stale.taskId}: ${(err as Error).message}`);
+        });
       }
       this.taskQueue = this.taskQueue.filter(t => now - t.queuedAt <= AgentRunner.TASK_QUEUE_TTL_MS);
 
@@ -1306,7 +1308,13 @@ export class AgentRunner {
       mergeUsage(usage, response.usage);
       await this.sessions.appendUsage(sessionId, response.usage);
 
-      // ─── Hook: llm_output ───
+      // Guard: ensure response.content is always an array
+      if (!response.content || !Array.isArray(response.content)) {
+        log.warn('Response has no content array — treating as empty response');
+        response.content = [];
+      }
+
+      // ─── Hook: llm_output (after content guard) ───
       if (this.hooks) {
         await this.hooks.runLlmOutput(
           {
@@ -1317,12 +1325,6 @@ export class AgentRunner {
           },
           { agentId: this.config.agentId, sessionId },
         );
-      }
-
-      // Guard: ensure response.content is always an array
-      if (!response.content || !Array.isArray(response.content)) {
-        log.warn('Response has no content array — treating as empty response');
-        response.content = [];
       }
 
       // Add assistant response to messages

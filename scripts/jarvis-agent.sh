@@ -39,7 +39,7 @@ if [[ -z "${NATS_URL:-}" ]]; then
     MASTER_RESOLVED=$(getent hosts mac-mini-master.local 2>/dev/null | awk '{print $1; exit}' || true)
   fi
   if [[ -z "$MASTER_RESOLVED" ]]; then
-    MASTER_RESOLVED="${MASTER_IP:-192.168.1.105}"
+    MASTER_RESOLVED="${MASTER_IP:-192.168.1.33}"
   fi
   NATS_URL="nats://${MASTER_RESOLVED}:4222"
   GATEWAY_URL="http://${MASTER_RESOLVED}:18900"

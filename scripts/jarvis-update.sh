@@ -130,7 +130,7 @@ if [[ -f "$SSH_KEY" ]]; then
   [[ -f "$JARVIS_DIR/.env" ]] && set -a && source "$JARVIS_DIR/.env" && set +a
   SMITH_IP="${SMITH_IP:-${ALPHA_IP:-192.168.1.37}}"
   SMITH_USER="${SMITH_USER:-${ALPHA_USER:-agent_smith}}"
-  JOHNY_IP="${JOHNY_IP:-${BETA_IP:-192.168.1.32}}"
+  JOHNY_IP="${JOHNY_IP:-${BETA_IP:-192.168.1.253}}"
   JOHNY_USER="${JOHNY_USER:-${BETA_USER:-agent_johny}}"
 
   for AGENT_USER_HOST in "${SMITH_USER}@${SMITH_IP}" "${JOHNY_USER}@${JOHNY_IP}"; do

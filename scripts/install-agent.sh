@@ -380,14 +380,14 @@ echo -e "  ${YELLOW}Thunderbolt Bridge Detection...${RESET}"
 
 TB_ENABLED=false
 TB_AGENT_IP=""
-TB_MASTER_IP="169.254.100.1"
+TB_MASTER_IP="169.254.157.233"
 TB_NATS_PORT=4223
 
 # Determine expected TB IP based on role
 if [[ "$AGENT_ID" == "agent-smith" ]]; then
-  TB_AGENT_IP="169.254.100.2"
+  TB_AGENT_IP="169.254.61.154"
 else
-  TB_AGENT_IP="169.254.100.3"
+  TB_AGENT_IP="169.254.97.62"
 fi
 
 # Detect Thunderbolt Bridge interface

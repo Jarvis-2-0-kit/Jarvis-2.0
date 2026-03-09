@@ -491,7 +491,7 @@ export class GatewayServer {
       return null;
     };
 
-    const sshKeyPath = resolve(process.env['HOME'] ?? '/Users/jarvis', '.ssh/id_ed25519_jarvis');
+    const sshKeyPath = resolve(process.env['HOME'] ?? '/Users/jarvis', '.ssh/id_ed25519');
 
     // ── VNC: embedded viewer — per-agent WebSocket proxy via Thunderbolt ──
     this.app.get('/api/vnc', (_req, res) => {
@@ -715,8 +715,9 @@ export class GatewayServer {
       return;
     }
 
-    const smithHost = process.env['VNC_ALPHA_HOST_THUNDERBOLT'] ?? process.env['VNC_ALPHA_HOST'] ?? '169.254.102.38';
-    const johnyHost = process.env['VNC_BETA_HOST_THUNDERBOLT'] ?? process.env['VNC_BETA_HOST'] ?? '169.254.97.62';
+    // VNC env aliases: VNC_ALPHA_* = smith, VNC_BETA_* = johny, SMITH_IP/JOHNY_IP = LAN fallbacks
+    const smithHost = process.env['VNC_ALPHA_HOST_THUNDERBOLT'] ?? process.env['VNC_ALPHA_HOST'] ?? process.env['SMITH_IP'] ?? '192.168.1.37';
+    const johnyHost = process.env['VNC_BETA_HOST_THUNDERBOLT'] ?? process.env['VNC_BETA_HOST'] ?? process.env['JOHNY_IP'] ?? '192.168.1.253';
     const vncHost = target === 'smith' ? smithHost : johnyHost;
     const vncPort = 5900;
 
@@ -726,6 +727,12 @@ export class GatewayServer {
       // No localAddress binding — OS routes link-local 169.254.x.x via correct TB interface automatically
       const tcp = createConnection({ port: vncPort, host: vncHost }, () => {
         log.info(`VNC proxy TCP connected: ${target} → ${vncHost}:${vncPort}`);
+      });
+
+      tcp.setTimeout(10_000);
+      tcp.on('timeout', () => {
+        log.warn(`VNC proxy TCP timeout: ${target} → ${vncHost}:${vncPort}`);
+        tcp.destroy(new Error('Connection timeout'));
       });
 
       ws.on('message', (data: Buffer) => {
@@ -1012,7 +1019,7 @@ export class GatewayServer {
         if (existsSync(configPath)) {
           existing = JSON.parse(readFileSync(configPath, 'utf-8'));
         }
-      } catch { /* ignore */ }
+      } catch (err) { log.debug(`Config read failed for ${agentId}: ${(err as Error).message}`); }
 
       const updated = {
         ...existing,
@@ -2710,8 +2717,8 @@ export class GatewayServer {
     // ── Setup Wizard: automated SSH + remote install ──────────────────
 
     this.protocol.registerMethod('setup.wizard.status', async () => {
-      const home = process.env['HOME'] ?? '/Users/kamilpadula';
-      const sshKeyPath = resolve(home, '.ssh/id_ed25519_jarvis');
+      const home = process.env['HOME'] ?? '/Users/jarvis';
+      const sshKeyPath = resolve(home, '.ssh/id_ed25519');
       const sshKeyExists = existsSync(sshKeyPath);
 
       // Check smith/johny agent status from store
@@ -2742,7 +2749,7 @@ export class GatewayServer {
     });
 
     this.protocol.registerMethod('setup.ssh.generateKey', async (_params, clientId) => {
-      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const home = process.env['HOME'] ?? '/Users/jarvis';
       const sshDir = resolve(home, '.ssh');
       const keyPath = resolve(sshDir, 'id_ed25519_jarvis');
 
@@ -2779,7 +2786,7 @@ export class GatewayServer {
       };
       if (!ip || !sshUser || !sshPassword) throw new Error('ip, sshUser, sshPassword are required');
 
-      const home = process.env['HOME'] ?? '/Users/kamilpadula';
+      const home = process.env['HOME'] ?? '/Users/jarvis';
       const pubKeyPath = resolve(home, '.ssh/id_ed25519_jarvis.pub');
       if (!existsSync(pubKeyPath)) throw new Error('SSH public key not found — generate key first');
 
@@ -2819,8 +2826,8 @@ export class GatewayServer {
       const { ip, sshUser, slot } = params as { ip: string; sshUser: string; slot: string };
       if (!ip || !sshUser) throw new Error('ip and sshUser are required');
 
-      const home = process.env['HOME'] ?? '/Users/kamilpadula';
-      const sshKey = resolve(home, '.ssh/id_ed25519_jarvis');
+      const home = process.env['HOME'] ?? '/Users/jarvis';
+      const sshKey = resolve(home, '.ssh/id_ed25519');
 
       this.protocol.sendEvent(clientId, 'setup.progress', {
         step: 'ssh.testPasswordless', status: 'running', message: `Testing passwordless SSH to ${sshUser}@${ip}...`, slot,
@@ -2852,8 +2859,8 @@ export class GatewayServer {
       const { ip, sshUser, slot } = params as { ip: string; sshUser: string; slot: string };
       if (!ip || !sshUser) throw new Error('ip and sshUser are required');
 
-      const home = process.env['HOME'] ?? '/Users/kamilpadula';
-      const sshKey = resolve(home, '.ssh/id_ed25519_jarvis');
+      const home = process.env['HOME'] ?? '/Users/jarvis';
+      const sshKey = resolve(home, '.ssh/id_ed25519');
       const sshArgs = ['-i', sshKey, '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=15', `${sshUser}@${ip}`];
 
       // Check if repo exists
@@ -2940,8 +2947,8 @@ export class GatewayServer {
       };
       if (!ip || !sshUser || !agentId || !role) throw new Error('ip, sshUser, agentId, role are required');
 
-      const home = process.env['HOME'] ?? '/Users/kamilpadula';
-      const sshKey = resolve(home, '.ssh/id_ed25519_jarvis');
+      const home = process.env['HOME'] ?? '/Users/jarvis';
+      const sshKey = resolve(home, '.ssh/id_ed25519');
       const sshArgs = ['-i', sshKey, '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=10', `${sshUser}@${ip}`];
 
       this.protocol.sendEvent(clientId, 'setup.progress', {
@@ -3017,8 +3024,8 @@ export class GatewayServer {
       };
       if (!ip || !sshUser || !agentId) throw new Error('ip, sshUser, agentId are required');
 
-      const home = process.env['HOME'] ?? '/Users/kamilpadula';
-      const sshKey = resolve(home, '.ssh/id_ed25519_jarvis');
+      const home = process.env['HOME'] ?? '/Users/jarvis';
+      const sshKey = resolve(home, '.ssh/id_ed25519');
       const sshArgs = ['-i', sshKey, '-o', 'StrictHostKeyChecking=no', '-o', 'ConnectTimeout=15', `${sshUser}@${ip}`];
 
       // 1. Start websockify via launchctl
@@ -6774,7 +6781,7 @@ end tell`;
 
   /** Resolve the source repo dir — prefer ~/Documents/Jarvis-2.0/jarvis (git repo), fallback to bundle parent */
   private resolveSourceRepo(): string {
-    const home = process.env['HOME'] ?? '/Users/kamilpadula';
+    const home = process.env['HOME'] ?? '/Users/jarvis';
     const candidates = [
       resolve(home, 'Documents/Jarvis-2.0/jarvis'),
       resolve(home, 'jarvis'),

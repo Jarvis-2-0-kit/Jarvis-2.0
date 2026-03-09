@@ -42,7 +42,16 @@ const host = process.env['AGENT_HOSTNAME'] ?? hostname();
 const natsUrl = process.env['NATS_URL'] ?? 'nats://localhost:4222';
 const natsUrlThunderbolt = process.env['NATS_URL_THUNDERBOLT'] ?? undefined;
 const thunderboltEnabled = process.env['THUNDERBOLT_ENABLED'] === 'true';
-const nasMount = process.env['JARVIS_NAS_MOUNT'] ?? '/Volumes/JarvisNAS/jarvis';
+const nasMount = (() => {
+  const envNas = process.env['JARVIS_NAS_MOUNT'];
+  if (envNas && existsSync(envNas)) return envNas;
+  // Primary: QNAP NAS mount
+  const qnapPath = '/Volumes/Public/jarvis-nas';
+  if (existsSync(qnapPath)) return qnapPath;
+  // Fallback: local NAS cache
+  const localNas = join(process.env['HOME'] ?? '/Users/jarvis', '.jarvis', 'nas');
+  return localNas;
+})();
 const workspace = process.env['WORKSPACE_PATH'] ?? `${nasMount}/workspace/projects`;
 const defaultModel = process.env['DEFAULT_MODEL'] ?? 'claude-opus-4-6';
 let anthropicAuthMode = (process.env['ANTHROPIC_AUTH_MODE'] ?? 'api-key') as 'api-key' | 'claude-cli';
@@ -121,6 +130,15 @@ const CAPABILITIES: Record<string, string[]> = {
 };
 
 async function main(): Promise<void> {
+  // Validate critical env vars
+  if (!process.env['ANTHROPIC_API_KEY'] && anthropicAuthMode === 'api-key') {
+    log.error('ANTHROPIC_API_KEY is not set and auth mode is api-key — agent cannot call LLM');
+    process.exit(1);
+  }
+  if (!natsUrl || natsUrl === 'nats://localhost:4222') {
+    log.warn('NATS_URL not explicitly set — using default localhost. Agent may not reach the gateway.');
+  }
+
   log.info(`=== Jarvis 2.0 Agent Runtime ===`);
   log.info(`Agent: ${agentId} (${role})`);
   log.info(`Machine: ${machineId} / ${host}`);

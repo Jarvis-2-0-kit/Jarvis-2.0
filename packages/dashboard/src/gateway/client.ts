@@ -61,7 +61,15 @@ export class GatewayClient {
     const wsUrl = this.token ? `${this.url}?token=${this.token}` : this.url;
     this.ws = new WebSocket(wsUrl);
 
+    // Connection timeout — if no open event within 15s, close and trigger reconnect
+    const connectTimeout = setTimeout(() => {
+      if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
+        this.ws.close();
+      }
+    }, 15_000);
+
     this.ws.onopen = () => {
+      clearTimeout(connectTimeout);
       this._connected = true;
       this.reconnectDelay = 1000;
       this.connectTime = Date.now();

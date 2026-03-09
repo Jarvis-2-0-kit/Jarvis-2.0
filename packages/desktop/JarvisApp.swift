@@ -49,7 +49,18 @@ class ServiceManager {
         proc.standardError = FileHandle.nullDevice
         do {
             try proc.run()
-            proc.waitUntilExit()
+            // Wait for mount with 10s timeout
+            let mountDone = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                proc.waitUntilExit()
+                mountDone.signal()
+            }
+            let timedOut = mountDone.wait(timeout: .now() + 10) == .timedOut
+            if timedOut {
+                proc.terminate()
+                NSLog("QNAP NAS mount timed out after 10s — falling back to local NAS")
+                return
+            }
             // Verify mount
             Thread.sleep(forTimeInterval: 1.0)
             if FileManager.default.fileExists(atPath: qnapMountPath) {

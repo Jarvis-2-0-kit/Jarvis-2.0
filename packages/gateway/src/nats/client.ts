@@ -47,8 +47,12 @@ export class NatsClient {
       // Monitor connection status
       void (async () => {
         if (!this.connection) return;
-        for await (const status of this.connection.status()) {
-          log.info(`NATS status: ${status.type}`, { data: String(status.data) });
+        try {
+          for await (const status of this.connection.status()) {
+            log.info(`NATS status: ${status.type}`, { data: String(status.data) });
+          }
+        } catch (err) {
+          log.warn(`NATS status monitor error: ${(err as Error).message}`);
         }
       })();
     } catch (err) {

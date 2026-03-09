@@ -254,6 +254,7 @@ export class NatsHandler {
       this.heartbeatInterval = null;
     }
 
+    const MAX_RECONNECT_CYCLES = 30; // ~5 minutes of retrying (30 * 10s)
     const doReconnect = async () => {
       for (let i = 1; this.running; i++) {
         try {
@@ -268,7 +269,12 @@ export class NatsHandler {
           this.setupAfterConnect();
           return; // Success
         } catch (err) {
-          log.warn(`Reconnect cycle ${i} failed: ${(err as Error).message}. Waiting 10s...`);
+          if (i >= MAX_RECONNECT_CYCLES) {
+            log.error(`NATS reconnect failed after ${i} attempts — setting agent status to error`);
+            this.currentStatus = 'error';
+            return;
+          }
+          log.warn(`Reconnect cycle ${i}/${MAX_RECONNECT_CYCLES} failed: ${(err as Error).message}. Waiting 10s...`);
           await new Promise(r => setTimeout(r, 10_000));
         }
       }
