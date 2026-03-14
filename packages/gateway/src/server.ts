@@ -762,51 +762,70 @@ export class GatewayServer {
 
     // VNC env aliases: VNC_ALPHA_* = smith, VNC_BETA_* = johny, SMITH_IP/JOHNY_IP = LAN fallbacks
     const tbEnabled = process.env['THUNDERBOLT_ENABLED'] === 'true';
-    const smithHost = (tbEnabled && process.env['VNC_ALPHA_HOST_THUNDERBOLT']) ? process.env['VNC_ALPHA_HOST_THUNDERBOLT'] : (process.env['VNC_ALPHA_HOST'] ?? process.env['SMITH_IP'] ?? '192.168.1.37');
-    const johnyHost = (tbEnabled && process.env['VNC_BETA_HOST_THUNDERBOLT']) ? process.env['VNC_BETA_HOST_THUNDERBOLT'] : (process.env['VNC_BETA_HOST'] ?? process.env['JOHNY_IP'] ?? '192.168.1.253');
-    const vncHost = target === 'smith' ? smithHost : johnyHost;
+    const smithTb = (tbEnabled && process.env['VNC_ALPHA_HOST_THUNDERBOLT']) ? process.env['VNC_ALPHA_HOST_THUNDERBOLT'] : null;
+    const johnyTb = (tbEnabled && process.env['VNC_BETA_HOST_THUNDERBOLT']) ? process.env['VNC_BETA_HOST_THUNDERBOLT'] : null;
+    const smithLan = process.env['VNC_ALPHA_HOST'] ?? process.env['SMITH_IP'] ?? '192.168.1.37';
+    const johnyLan = process.env['VNC_BETA_HOST'] ?? process.env['JOHNY_IP'] ?? '192.168.1.253';
+    const tbHost = target === 'smith' ? smithTb : johnyTb;
+    const lanHost = target === 'smith' ? smithLan : johnyLan;
     const vncPort = 5900;
 
     this.vncWss.handleUpgrade(request, socket, head, (ws) => {
-      log.info(`VNC proxy: ${target} → ${vncHost}:${vncPort}`);
+      const primaryHost = tbHost ?? lanHost;
+      log.info(`VNC proxy: ${target} → ${primaryHost}:${vncPort} (fallback: ${lanHost})`);
 
-      // No localAddress binding — OS routes link-local 169.254.x.x via correct TB interface automatically
-      const tcp = createConnection({ port: vncPort, host: vncHost }, () => {
-        log.info(`VNC proxy TCP connected: ${target} → ${vncHost}:${vncPort}`);
-      });
+      const connectToHost = (host: string, isFallback: boolean) => {
+        const tcp = createConnection({ port: vncPort, host }, () => {
+          log.info(`VNC proxy TCP connected${isFallback ? ' (LAN fallback)' : ''}: ${target} → ${host}:${vncPort}`);
+        });
 
-      tcp.setTimeout(10_000);
-      tcp.on('timeout', () => {
-        log.warn(`VNC proxy TCP timeout: ${target} → ${vncHost}:${vncPort}`);
-        tcp.destroy(new Error('Connection timeout'));
-      });
+        // Shorter timeout for TB (3s) to quickly fallback to LAN
+        tcp.setTimeout(isFallback ? 10_000 : 3_000);
+        tcp.on('timeout', () => {
+          tcp.destroy();
+          if (!isFallback && lanHost !== host) {
+            log.warn(`VNC proxy TB timeout: ${target} → ${host}, falling back to LAN ${lanHost}`);
+            connectToHost(lanHost, true);
+            return;
+          }
+          log.warn(`VNC proxy TCP timeout: ${target} → ${host}:${vncPort}`);
+          if (ws.readyState === 1) ws.close();
+        });
 
-      ws.on('message', (data: Buffer) => {
-        if (tcp.writable) tcp.write(data);
-      });
+        ws.on('message', (data: Buffer) => {
+          if (tcp.writable) tcp.write(data);
+        });
 
-      tcp.on('data', (data: Buffer) => {
-        if (ws.readyState === 1) ws.send(data);
-      });
+        tcp.on('data', (data: Buffer) => {
+          if (ws.readyState === 1) ws.send(data);
+        });
 
-      ws.on('close', () => {
-        tcp.destroy();
-        log.info(`VNC proxy closed: ${target}`);
-      });
+        ws.on('close', () => {
+          tcp.destroy();
+          log.info(`VNC proxy closed: ${target}`);
+        });
 
-      tcp.on('close', () => {
-        if (ws.readyState === 1) ws.close();
-      });
+        tcp.on('close', () => {
+          if (ws.readyState === 1) ws.close();
+        });
 
-      tcp.on('error', (err) => {
-        log.error(`VNC proxy TCP error: ${target}`, { error: err.message });
-        if (ws.readyState === 1) ws.close();
-      });
+        tcp.on('error', (err) => {
+          if (!isFallback && lanHost !== host) {
+            log.warn(`VNC proxy TB error: ${target} → ${host} (${err.message}), falling back to LAN ${lanHost}`);
+            connectToHost(lanHost, true);
+            return;
+          }
+          log.error(`VNC proxy TCP error: ${target}`, { error: err.message });
+          if (ws.readyState === 1) ws.close();
+        });
 
-      ws.on('error', (err) => {
-        log.error(`VNC proxy WS error: ${target}`, { error: (err as Error).message });
-        tcp.destroy();
-      });
+        ws.on('error', (err) => {
+          log.error(`VNC proxy WS error: ${target}`, { error: (err as Error).message });
+          tcp.destroy();
+        });
+      };
+
+      connectToHost(primaryHost, !tbHost);
     });
   }
 
